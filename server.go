@@ -91,6 +91,15 @@ func (a *App) GetServerList() ([]ServerConfig, error) {
 
 // CreateServer 创建服务器
 func (a *App) CreateServer(name, version string, port, maxMem, minMem int, onlineMode bool, customDir string) error {
+	if port < 1 || port > 65535 {
+		return fmt.Errorf("端口号必须在 1-65535 之间")
+	}
+	if maxMem <= 0 || minMem <= 0 {
+		return fmt.Errorf("内存大小必须大于 0")
+	}
+	if minMem > maxMem {
+		return fmt.Errorf("最小内存不能大于最大内存")
+	}
 	serverDir := a.GetServerDir()
 	var dir string
 	if customDir != "" {
@@ -121,7 +130,7 @@ func (a *App) CreateServer(name, version string, port, maxMem, minMem int, onlin
 	}
 
 	cfgData, _ := json.MarshalIndent(cfg, "", "  ")
-	if err := os.WriteFile(filepath.Join(qglDir, "config.json"), cfgData, 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(qglDir, "config.json"), cfgData, 0600); err != nil {
 		return fmt.Errorf("保存配置失败: %v", err)
 	}
 
@@ -131,13 +140,13 @@ func (a *App) CreateServer(name, version string, port, maxMem, minMem int, onlin
 	}
 
 	// 预创建 eula.txt
-	if err := os.WriteFile(filepath.Join(dir, "eula.txt"), []byte("# By changing the setting below to TRUE you are indicating your agreement to our EULA (https://aka.ms/MinecraftEULA).\neula=true\n"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "eula.txt"), []byte("# By changing the setting below to TRUE you are indicating your agreement to our EULA (https://aka.ms/MinecraftEULA).\neula=true\n"), 0600); err != nil {
 		return fmt.Errorf("创建 eula.txt 失败: %v", err)
 	}
 
 	// 预创建 server.properties
 	properties := fmt.Sprintf("server-port=%d\nonline-mode=%v\nmotd=%s\n", port, onlineMode, name)
-	if err := os.WriteFile(filepath.Join(dir, "server.properties"), []byte(properties), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "server.properties"), []byte(properties), 0600); err != nil {
 		return fmt.Errorf("创建 server.properties 失败: %v", err)
 	}
 
@@ -180,8 +189,11 @@ func (a *App) downloadServerJar(version string, targetDir string) error {
 	if err != nil {
 		return fmt.Errorf("下载版本 JSON 失败: %v", err)
 	}
-	body, _ := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
 	resp.Body.Close()
+	if err != nil {
+		return fmt.Errorf("读取版本 JSON 响应失败: %v", err)
+	}
 
 	var versionJSON map[string]interface{}
 	if err := json.Unmarshal(body, &versionJSON); err != nil {
@@ -539,7 +551,7 @@ func (a *App) SetServerOnlineMode(name string, onlineMode bool) error {
 		lines = append(lines, "online-mode="+strconv.FormatBool(onlineMode))
 	}
 
-	if err := os.WriteFile(propPath, []byte(strings.Join(lines, "\n")), 0644); err != nil {
+	if err := os.WriteFile(propPath, []byte(strings.Join(lines, "\n")), 0600); err != nil {
 		return fmt.Errorf("修改 server.properties 失败: %v", err)
 	}
 
@@ -547,7 +559,7 @@ func (a *App) SetServerOnlineMode(name string, onlineMode bool) error {
 	cfg.OnlineMode = onlineMode
 	qglDir := filepath.Join(cfg.ServerDir, "QGL")
 	cfgData, _ := json.MarshalIndent(cfg, "", "  ")
-	os.WriteFile(filepath.Join(qglDir, "config.json"), cfgData, 0644)
+	os.WriteFile(filepath.Join(qglDir, "config.json"), cfgData, 0600)
 
 	return nil
 }
