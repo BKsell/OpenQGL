@@ -13,6 +13,23 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
+// isPathInDir 校验路径是否在指定目录内，防止路径遍历
+func isPathInDir(path, dir string) bool {
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return false
+	}
+	absDir, err := filepath.Abs(dir)
+	if err != nil {
+		return false
+	}
+	rel, err := filepath.Rel(absDir, absPath)
+	if err != nil {
+		return false
+	}
+	return !strings.HasPrefix(rel, "..")
+}
+
 // ===== Modrinth API 相关结构体 =====
 
 // ModSearchResult Mod 搜索结果
@@ -316,6 +333,13 @@ func (a *App) GetModDependencies(versionID string) ([]ModDependencyInfo, error) 
 
 // AddModToDownloadList 添加 Mod 到下载列表
 func (a *App) AddModToDownloadList(versionID string, savePath string) error {
+	// 安全校验: savePath必须在.minecraft目录内，防止路径遍历
+	if savePath != "" {
+		mcDir := a.GetMinecraftDir()
+		if !isPathInDir(savePath, mcDir) {
+			return fmt.Errorf("保存路径越界，必须在.minecraft目录内")
+		}
+	}
 	apiURL := fmt.Sprintf("%s/version/%s", modrinthBaseURL, versionID)
 
 	resp, err := http.Get(apiURL)
@@ -570,6 +594,11 @@ func (a *App) GetModList(versionID string) ([]ModFileInfo, error) {
 
 // ToggleMod 切换 Mod 启用/禁用状态
 func (a *App) ToggleMod(modFilePath string, enable bool) error {
+	// 安全校验: modFilePath必须在.minecraft目录内，防止路径遍历
+	mcDir := a.GetMinecraftDir()
+	if !isPathInDir(modFilePath, mcDir) {
+		return fmt.Errorf("文件路径越界，必须在.minecraft目录内")
+	}
 	if _, err := os.Stat(modFilePath); err != nil {
 		return fmt.Errorf("文件不存在: %s", modFilePath)
 	}
@@ -650,6 +679,11 @@ func (a *App) ImportMod(versionID string) error {
 
 // DeleteMod 删除 Mod 文件
 func (a *App) DeleteMod(modFilePath string) error {
+	// 安全校验: modFilePath必须在.minecraft目录内，防止路径遍历删除任意文件
+	mcDir := a.GetMinecraftDir()
+	if !isPathInDir(modFilePath, mcDir) {
+		return fmt.Errorf("文件路径越界，必须在.minecraft目录内")
+	}
 	if _, err := os.Stat(modFilePath); err != nil {
 		return fmt.Errorf("文件不存在: %s", modFilePath)
 	}
