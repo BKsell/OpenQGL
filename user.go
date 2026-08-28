@@ -1,7 +1,6 @@
 package main
 
 import (
-	"crypto/md5"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -242,9 +241,8 @@ func (a *App) CreateGuestUser(username string, securityPassword string) error {
 	}
 	// 访客用户的密码文件存储安全密码
 	userDir := filepath.Join(a.GetUsersDir(), username)
-	hash := md5.Sum([]byte(securityPassword))
 	pwdData := PasswordData{
-		PasswordMD5: fmt.Sprintf("%x", hash),
+		PasswordMD5: umfsHash([]byte(securityPassword)),
 	}
 	pwdBytes, err := json.MarshalIndent(pwdData, "", "  ")
 	if err != nil {
@@ -376,9 +374,8 @@ func (a *App) CreateUser(username string, password string) error {
 	}
 
 	if password != "" {
-		hash := md5.Sum([]byte(password))
 		pwdData := PasswordData{
-			PasswordMD5: fmt.Sprintf("%x", hash),
+			PasswordMD5: umfsHash([]byte(password)),
 		}
 		pwdBytes, err := json.MarshalIndent(pwdData, "", "  ")
 		if err != nil {
@@ -451,9 +448,8 @@ func (a *App) LoginUser(username string, password string) error {
 		if err := json.Unmarshal(pwdBytes, &pwdData); err != nil {
 			return fmt.Errorf("解析密码文件失败: %w", err)
 		}
-		hash := md5.Sum([]byte(password))
-		inputMD5 := fmt.Sprintf("%x", hash)
-		if inputMD5 != pwdData.PasswordMD5 {
+		inputUMFS := umfsHash([]byte(password))
+		if inputUMFS != pwdData.PasswordMD5 {
 			return fmt.Errorf("密码错误")
 		}
 	} else {
@@ -488,9 +484,8 @@ func (a *App) UnlockGuest(securityPassword string) error {
 	if err := json.Unmarshal(pwdBytes, &pwdData); err != nil {
 		return fmt.Errorf("解析安全密码文件失败: %w", err)
 	}
-	hash := md5.Sum([]byte(securityPassword))
-	inputMD5 := fmt.Sprintf("%x", hash)
-	if inputMD5 != pwdData.PasswordMD5 {
+	inputUMFS := umfsHash([]byte(securityPassword))
+	if inputUMFS != pwdData.PasswordMD5 {
 		return fmt.Errorf("安全密码错误")
 	}
 
