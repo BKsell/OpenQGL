@@ -363,7 +363,17 @@ func (a *App) installModpack(item *DownloadItem) error {
 	totalFiles := len(manifest.Files)
 	for i, mf := range manifest.Files {
 		// 跳过非 mods 目录的文件（如 resourcepacks、shaderpacks 等也一并处理）
+		// 安全校验: 防止Zip Slip路径遍历
+		if strings.Contains(mf.Path, "..") || filepath.IsAbs(mf.Path) {
+			fmt.Printf("跳过非法路径(Zip Slip防护): %s\n", mf.Path)
+			continue
+		}
 		destPath := filepath.Join(versionDir, mf.Path)
+		// 二次校验: 确保最终路径在versionDir内
+		if !strings.HasPrefix(filepath.Clean(destPath)+string(filepath.Separator), filepath.Clean(versionDir)+string(filepath.Separator)) {
+			fmt.Printf("跳过越界路径(Zip Slip防护): %s\n", mf.Path)
+			continue
+		}
 		destDir := filepath.Dir(destPath)
 		if err := os.MkdirAll(destDir, 0755); err != nil {
 			continue
@@ -412,7 +422,15 @@ func (a *App) installModpack(item *DownloadItem) error {
 			continue
 		}
 
+		// 安全校验: 防止Zip Slip路径遍历
+		if strings.Contains(relPath, "..") || filepath.IsAbs(relPath) {
+			continue
+		}
 		destPath := filepath.Join(versionDir, relPath)
+		// 二次校验: 确保最终路径在versionDir内
+		if !strings.HasPrefix(filepath.Clean(destPath)+string(filepath.Separator), filepath.Clean(versionDir)+string(filepath.Separator)) {
+			continue
+		}
 		if f.FileInfo().IsDir() {
 			os.MkdirAll(destPath, 0755)
 			continue
