@@ -126,6 +126,25 @@ func (a *App) GetMinecraftDir() string {
 	return filepath.Join(a.GetQGLDir(), ".minecraft")
 }
 
+
+// isValidUsername 验证用户名是否合法（防止路径遍历）
+func isValidUsername(username string) bool {
+	if username == "" || len(username) > 64 {
+		return false
+	}
+	// 禁止路径遍历字符
+	if strings.Contains(username, "..") || strings.Contains(username, "/") || strings.Contains(username, "\\") {
+		return false
+	}
+	// 只允许字母、数字、下划线、中文、点、减号
+	for _, r := range username {
+		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '.' || r == '-' || r > 127) {
+			return false
+		}
+	}
+	return true
+}
+
 func (a *App) CheckFirstRun() bool {
 	usersDir := a.GetUsersDir()
 	entries, err := os.ReadDir(usersDir)
@@ -170,7 +189,7 @@ func (a *App) saveUserType(username string, userType UserType) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(userDir, "type.json"), data, 0644)
+	return os.WriteFile(filepath.Join(userDir, "type.json"), data, 0600)
 }
 
 func (a *App) GetUsers() ([]UserInfo, error) {
@@ -232,7 +251,7 @@ func (a *App) CreateGuestUser(username string, securityPassword string) error {
 		return fmt.Errorf("序列化密码数据失败: %w", err)
 	}
 	pwdPath := filepath.Join(userDir, "password.json")
-	if err := os.WriteFile(pwdPath, pwdBytes, 0644); err != nil {
+	if err := os.WriteFile(pwdPath, pwdBytes, 0600); err != nil {
 		return fmt.Errorf("写入密码文件失败: %w", err)
 	}
 	// 保存用户类型为访客
@@ -348,6 +367,9 @@ func (a *App) GetExternalAuthData(username string) (*ExternalAuthData, error) {
 
 // CreateUser 创建用户基础方法
 func (a *App) CreateUser(username string, password string) error {
+	if !isValidUsername(username) {
+		return fmt.Errorf("用户名不合法")
+	}
 	userDir := filepath.Join(a.GetUsersDir(), username)
 	if err := os.MkdirAll(userDir, 0755); err != nil {
 		return fmt.Errorf("创建用户目录失败: %w", err)
@@ -363,7 +385,7 @@ func (a *App) CreateUser(username string, password string) error {
 			return fmt.Errorf("序列化密码数据失败: %w", err)
 		}
 		pwdPath := filepath.Join(userDir, "password.json")
-		if err := os.WriteFile(pwdPath, pwdBytes, 0644); err != nil {
+		if err := os.WriteFile(pwdPath, pwdBytes, 0600); err != nil {
 			return fmt.Errorf("写入密码文件失败: %w", err)
 		}
 	}
