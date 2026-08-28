@@ -22,6 +22,9 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
+// v2 安全加固: 统一超时 HTTP 客户端，替代裸 http.Get / http.DefaultClient
+var minecraftHTTPClient = &http.Client{Timeout: 30 * time.Second}
+
 // ===== Win32 API 用于窗口检测 =====
 
 var (
@@ -222,7 +225,8 @@ func (a *App) downloadFile(url string, destPath string, reportProgress bool) err
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.7680.216 CosyBrowser/146.3.1")
 
-	resp, err := http.DefaultClient.Do(req)
+	// v2 安全加固: 使用带超时的统一客户端替代 http.DefaultClient（无超时可被慢速服务器挂死）
+	resp, err := minecraftHTTPClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("下载失败 %s: %v", url, err)
 	}
@@ -280,7 +284,8 @@ func (a *App) GetVersionManifest() ([]MCVersion, error) {
 	var lastErr error
 
 	for _, u := range urls {
-		resp, err := http.Get(u)
+		// v2 安全加固: 替换裸 http.Get（无超时）为统一超时客户端
+		resp, err := minecraftHTTPClient.Get(u)
 		if err != nil {
 			lastErr = err
 			continue
@@ -802,7 +807,8 @@ func (a *App) downloadJavaItem(majorVer int, url string) error {
 	// 下载文件
 	a.emitProgress("downloading", target.FileName, 0, 0)
 
-	resp, err := http.Get(url)
+	// v2 安全加固: 替换裸 http.Get（无超时）为统一超时客户端
+	resp, err := minecraftHTTPClient.Get(url)
 	if err != nil {
 		return fmt.Errorf("下载失败: %v", err)
 	}
@@ -1408,6 +1414,12 @@ func extractNatives(jarPath string, destDir string) (int, error) {
 
 		fileName := filepath.Base(f.Name)
 		destPath := filepath.Join(destDir, fileName)
+		// v2 安全加固: zip slip 路径遍历防护——校验解压路径必须在目标目录内
+		if !strings.HasPrefix(filepath.Clean(destPath)+string(os.PathSeparator), filepath.Clean(destDir)+string(os.PathSeparator)) {
+			fmt.Printf("安全拦截: zip slip 路径遍历: %s\n", f.Name)
+			rc.Close()
+			continue
+		}
 		extractedFiles = append(extractedFiles, destPath)
 
 		// 如果文件已存在且大小相同，跳过（参考PCL）
