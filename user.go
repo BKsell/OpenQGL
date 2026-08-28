@@ -160,6 +160,10 @@ func (a *App) CheckFirstRun() bool {
 
 // GetUserType 获取用户类型
 func (a *App) GetUserType(username string) UserType {
+	// 安全校验: 防止用户名路径遍历
+	if err := validateUsername(username); err != nil {
+		return UserTypeOffline
+	}
 	userDir := filepath.Join(a.GetUsersDir(), username)
 	typePath := filepath.Join(userDir, "type.json")
 	data, err := os.ReadFile(typePath)
@@ -177,6 +181,10 @@ func (a *App) GetUserType(username string) UserType {
 
 // saveUserType 保存用户类型
 func (a *App) saveUserType(username string, userType UserType) error {
+	// 安全校验: 防止用户名路径遍历
+	if err := validateUsername(username); err != nil {
+		return err
+	}
 	userDir := filepath.Join(a.GetUsersDir(), username)
 	if err := os.MkdirAll(userDir, 0755); err != nil {
 		return err
@@ -291,6 +299,10 @@ func (a *App) CreateExternalUser(username string, authData ExternalAuthData) err
 
 // SaveExternalAuthData 保存外置登录认证数据（加密存储，和正版账号一样）
 func (a *App) SaveExternalAuthData(username string, authData *ExternalAuthData) error {
+	// 安全校验: 防止用户名路径遍历
+	if err := validateUsername(username); err != nil {
+		return err
+	}
 	userDir := filepath.Join(a.GetUsersDir(), username)
 	if err := os.MkdirAll(userDir, 0755); err != nil {
 		return fmt.Errorf("创建用户目录失败: %w", err)
@@ -332,6 +344,10 @@ func (a *App) SaveExternalAuthData(username string, authData *ExternalAuthData) 
 
 // GetExternalAuthData 获取外置登录认证数据（解密读取）
 func (a *App) GetExternalAuthData(username string) (*ExternalAuthData, error) {
+	// 安全校验: 防止用户名路径遍历
+	if err := validateUsername(username); err != nil {
+		return nil, err
+	}
 	userDir := filepath.Join(a.GetUsersDir(), username)
 	data, err := os.ReadFile(filepath.Join(userDir, "external_auth.json"))
 	if err != nil {
@@ -545,6 +561,10 @@ func (a *App) GetCurrentUser() (UserInfo, error) {
 }
 
 func (a *App) UserHasPassword(username string) (bool, error) {
+	// 安全校验: 防止用户名路径遍历
+	if err := validateUsername(username); err != nil {
+		return false, err
+	}
 	userDir := filepath.Join(a.GetUsersDir(), username)
 	pwdPath := filepath.Join(userDir, "password.json")
 	info, err := os.Stat(pwdPath)
@@ -601,6 +621,10 @@ func (a *App) SaveGlobalConfig(config *GlobalConfig) error {
 }
 
 func (a *App) GetUserConfig(username string) (*UserConfig, error) {
+	// 安全校验: 防止用户名路径遍历
+	if err := validateUsername(username); err != nil {
+		return nil, err
+	}
 	configPath := filepath.Join(a.GetUsersDir(), username, "config.json")
 	data, err := os.ReadFile(configPath)
 	if err != nil {
@@ -617,6 +641,10 @@ func (a *App) GetUserConfig(username string) (*UserConfig, error) {
 }
 
 func (a *App) SaveUserConfig(username string, config *UserConfig) error {
+	// 安全校验: 防止用户名路径遍历
+	if err := validateUsername(username); err != nil {
+		return err
+	}
 	userDir := filepath.Join(a.GetUsersDir(), username)
 	if err := os.MkdirAll(userDir, 0755); err != nil {
 		return fmt.Errorf("创建用户目录失败: %w", err)
