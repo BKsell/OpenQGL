@@ -243,7 +243,7 @@ func (a *App) StartMicrosoftLogin() (string, error) {
 	}
 
 	// 自动打开验证链接
-	openCmd := exec.Command("cmd", "/c", "start", dcResp.VerificationURL)
+	openCmd := exec.Command("rundll32", "url.dll,FileProtocolHandler", dcResp.VerificationURL)
 	openCmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	openCmd.Start()
 
