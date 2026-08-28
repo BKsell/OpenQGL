@@ -4,6 +4,7 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -18,10 +19,11 @@ import (
 	"time"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
+	"golang.org/x/crypto/pbkdf2"
 )
 
 const (
-	oauthClientID = ""//修改为你的client id
+	oauthClientID = "" //修改为你的client id
 	oauthScope    = "XboxLive.signin offline_access"
 
 	// Microsoft OAuth endpoints
@@ -36,7 +38,20 @@ const (
 	mcLoginURL       = "https://api.minecraftservices.com/authentication/login_with_xbox"
 	mcEntitlementURL = "https://api.minecraftservices.com/entitlements/mcstore"
 	mcProfileURL     = "https://api.minecraftservices.com/minecraft/profile"
+
+	// 加密格式版本号
+	encryptionVersionLegacy  = 1 // 旧版：自定义 XOR 密钥派生（无盐，不安全，仅用于解密旧数据）
+	encryptionVersionCurrent = 2 // 当前版：PBKDF2-HMAC-SHA256 + 随机盐
+
+	// PBKDF2 参数
+	pbkdf2Iterations = 100000 // 迭代次数，OWASP 2023 建议 SHA-256 至少 600000，此处取 100000 兼顾桌面端性能
+	pbkdf2SaltSize   = 16     // 128 位随机盐
+	pbkdf2KeySize    = 32     // AES-256 密钥长度
 )
+
+// httpClient 统一带超时的 HTTP 客户端。
+// 原代码大量裸用 http.PostForm / http.Post / http.DefaultClient，无超时会导致连接永久挂起。
+var httpClient = &http.Client{Timeout: 30 * time.Second}
 
 // MSAuthData 微软认证数据（存储在用户目录的 ms_auth.json）
 type MSAuthData struct {
@@ -51,42 +66,25 @@ type MSAuthData struct {
 
 // MSAuthDataEncrypted 加密存储的认证数据格式
 type MSAuthDataEncrypted struct {
-	Username string `json:"username"` // 用户名不加密
-	Data     string `json:"data"`     // 其余字段加密后的 base64 字符串
+	Version  int    `json:"version"`            // 加密格式版本号
+	Username string `json:"username"`           // 用户名不加密
+	Salt     string `json:"salt,omitempty"`     // base64 编码的随机盐（v2+）
+	Data     string `json:"data"`               // 其余字段加密后的 base64 字符串
 }
 
 // ExternalAuthDataEncrypted 外置认证数据加密存储格式
 type ExternalAuthDataEncrypted struct {
-	ServerName string `json:"serverName"` // 服务器名称不加密
-	Data       string `json:"data"`       // 其余字段加密后的 base64 字符串
+	Version    int    `json:"version"`            // 加密格式版本号
+	ServerName string `json:"serverName"`         // 服务器名称不加密
+	Salt       string `json:"salt,omitempty"`     // base64 编码的随机盐（v2+）
+	Data       string `json:"data"`               // 其余字段加密后的 base64 字符串
 }
 
-/*
-
-
-
-看我
-
-
-
-为了防止加密逻辑被获取，加密逻辑已更改简化，如果你的产品需要上线必须修改逻辑为更安全的!!!!!!!
-
-
-
-
-
-
-看我
-
-
-
-
-
-*/
-// getEncryptionKey 根据用户名+OQL生成 32 字节 AES 密钥
-func getEncryptionKey(username string) []byte {
+// getEncryptionKeyLegacy 旧版密钥派生：用户名+OQL 的自定义 XOR 混合。
+// 仅用于解密 v1 格式的旧数据，新数据严禁调用。
+// 原函数名 getEncryptionKey 已废弃，保留逻辑以兼容旧认证文件。
+func getEncryptionKeyLegacy(username string) []byte {
 	raw := username + "OQL"
-	// 使用 SHA-256 风格的简单派生：取前 32 字节
 	key := make([]byte, 32)
 	for i := 0; i < len(raw); i++ {
 		key[i%32] ^= raw[i]
@@ -100,7 +98,63 @@ func getEncryptionKey(username string) []byte {
 	return key
 }
 
-// aesGCMEncrypt 使用 AES-GCM 加密数据，返回 base64 编码的密文
+// deriveKeyPBKDF2 使用 PBKDF2-HMAC-SHA256 从用户名和随机盐派生 AES-256 密钥。
+// 替换原自定义 XOR 混合方案，符合 RFC 8018 / OWASP 密码存储指南。
+func deriveKeyPBKDF2(username string, salt []byte) []byte {
+	password := []byte(username + "OQL")
+	return pbkdf2.Key(password, salt, pbkdf2Iterations, pbkdf2KeySize, sha256.New)
+}
+
+// generateSalt 生成密码学安全的随机盐（crypto/rand）。
+func generateSalt() ([]byte, error) {
+	salt := make([]byte, pbkdf2SaltSize)
+	if _, err := io.ReadFull(rand.Reader, salt); err != nil {
+		return nil, fmt.Errorf("生成随机盐失败: %w", err)
+	}
+	return salt, nil
+}
+
+// encryptAuthDataV2 执行 v2 加密流程：生成随机盐 → PBKDF2 派生密钥 → AES-GCM 加密。
+// 返回 base64 编码的密文和 base64 编码的盐。
+func encryptAuthDataV2(plaintext []byte, username string) (ciphertextB64 string, saltB64 string, err error) {
+	salt, err := generateSalt()
+	if err != nil {
+		return "", "", err
+	}
+	key := deriveKeyPBKDF2(username, salt)
+	ciphertextB64, err = aesGCMEncrypt(plaintext, key)
+	if err != nil {
+		return "", "", fmt.Errorf("AES-GCM 加密失败: %w", err)
+	}
+	saltB64 = base64.StdEncoding.EncodeToString(salt)
+	return ciphertextB64, saltB64, nil
+}
+
+// decryptAuthData 根据版本号选择对应的解密方式。
+// version=0 或 1 → 旧版 XOR 派生（兼容旧数据）
+// version=2 → PBKDF2 + 盐
+func decryptAuthData(encoded string, username string, version int, saltB64 string) ([]byte, error) {
+	switch version {
+	case encryptionVersionCurrent:
+		salt, err := base64.StdEncoding.DecodeString(saltB64)
+		if err != nil {
+			return nil, fmt.Errorf("解码盐值失败: %w", err)
+		}
+		if len(salt) == 0 {
+			return nil, fmt.Errorf("v2 格式缺少盐值，无法解密")
+		}
+		key := deriveKeyPBKDF2(username, salt)
+		return aesGCMDecrypt(encoded, key)
+	case encryptionVersionLegacy, 0:
+		// v1 或未标注版本的旧数据：使用旧版密钥派生
+		key := getEncryptionKeyLegacy(username)
+		return aesGCMDecrypt(encoded, key)
+	default:
+		return nil, fmt.Errorf("不支持的加密格式版本: %d", version)
+	}
+}
+
+// aesGCMEncrypt 使用 AES-GCM 加密数据，返回 base64 编码的密文（nonce 前置）
 func aesGCMEncrypt(plaintext []byte, key []byte) (string, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
@@ -118,7 +172,7 @@ func aesGCMEncrypt(plaintext []byte, key []byte) (string, error) {
 	return base64.StdEncoding.EncodeToString(ciphertext), nil
 }
 
-// aesGCMDecrypt 使用 AES-GCM 解密 base64 编码的密文
+// aesGCMDecrypt 使用 AES-GCM 解密 base64 编码的密文（nonce 前置）
 func aesGCMDecrypt(encoded string, key []byte) ([]byte, error) {
 	ciphertext, err := base64.StdEncoding.DecodeString(encoded)
 	if err != nil {
@@ -154,12 +208,12 @@ type DeviceCodeResponse struct {
 
 // TokenResponse 令牌响应
 type TokenResponse struct {
-	AccessToken     string `json:"access_token"`
-	RefreshToken    string `json:"refresh_token"`
-	ExpiresIn       int    `json:"expires_in"`
-	TokenType       string `json:"token_type"`
-	Scope           string `json:"scope"`
-	Error           string `json:"error"`
+	AccessToken      string `json:"access_token"`
+	RefreshToken     string `json:"refresh_token"`
+	ExpiresIn        int    `json:"expires_in"`
+	TokenType        string `json:"token_type"`
+	Scope            string `json:"scope"`
+	Error            string `json:"error"`
 	ErrorDescription string `json:"error_description"`
 }
 
@@ -222,7 +276,7 @@ func (a *App) StartMicrosoftLogin() (string, error) {
 		"scope":     {oauthScope},
 	}
 
-	resp, err := http.PostForm(deviceCodeURL, data)
+	resp, err := httpClient.PostForm(deviceCodeURL, data)
 	if err != nil {
 		return "", fmt.Errorf("请求设备代码失败: %v", err)
 	}
@@ -245,7 +299,10 @@ func (a *App) StartMicrosoftLogin() (string, error) {
 	// 自动打开验证链接
 	openCmd := exec.Command("cmd", "/c", "start", dcResp.VerificationURL)
 	openCmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-	openCmd.Start()
+	if err := openCmd.Start(); err != nil {
+		// 非致命错误：用户可手动复制链接打开
+		fmt.Fprintf(os.Stderr, "警告: 无法自动打开浏览器: %v\n", err)
+	}
 
 	// 自动复制用户代码到剪贴板
 	runtime.ClipboardSetText(a.ctx, dcResp.UserCode)
@@ -258,7 +315,8 @@ func (a *App) StartMicrosoftLogin() (string, error) {
 	return result, nil
 }
 
-// pollMicrosoftToken 轮询微软令牌
+// pollMicrosoftToken 轮询微软令牌。
+// 通过 a.ctx.Done() 监听应用关闭，避免 goroutine 在退出后仍持续轮询。
 func (a *App) pollMicrosoftToken(dc DeviceCodeResponse) {
 	interval := 5
 	if dc.Interval > 0 {
@@ -266,7 +324,12 @@ func (a *App) pollMicrosoftToken(dc DeviceCodeResponse) {
 	}
 
 	for {
-		time.Sleep(time.Duration(interval) * time.Second)
+		select {
+		case <-a.ctx.Done():
+			// 应用已关闭，退出轮询
+			return
+		case <-time.After(time.Duration(interval) * time.Second):
+		}
 
 		data := url.Values{
 			"client_id":   {oauthClientID},
@@ -274,7 +337,7 @@ func (a *App) pollMicrosoftToken(dc DeviceCodeResponse) {
 			"device_code": {dc.DeviceCode},
 		}
 
-		resp, err := http.PostForm(tokenURL, data)
+		resp, err := httpClient.PostForm(tokenURL, data)
 		if err != nil {
 			continue
 		}
@@ -404,7 +467,7 @@ func (a *App) authXBL(accessToken string) (string, string, error) {
 		return "", "", err
 	}
 
-	resp, err := http.Post(xblAuthURL, "application/json", strings.NewReader(string(body)))
+	resp, err := httpClient.Post(xblAuthURL, "application/json", strings.NewReader(string(body)))
 	if err != nil {
 		return "", "", fmt.Errorf("XBL 请求失败: %v", err)
 	}
@@ -450,7 +513,7 @@ func (a *App) authXSTS(xblToken string) (string, string, error) {
 		return "", "", err
 	}
 
-	resp, err := http.Post(xstsAuthURL, "application/json", strings.NewReader(string(body)))
+	resp, err := httpClient.Post(xstsAuthURL, "application/json", strings.NewReader(string(body)))
 	if err != nil {
 		return "", "", fmt.Errorf("XSTS 请求失败: %v", err)
 	}
@@ -463,7 +526,7 @@ func (a *App) authXSTS(xblToken string) (string, string, error) {
 
 	// 先检查是否有 XErr 错误码
 	var xstsErrResp struct {
-		XErr   int    `json:"XErr"`
+		XErr    int    `json:"XErr"`
 		Message string `json:"Message"`
 	}
 	json.Unmarshal(respBody, &xstsErrResp)
@@ -515,7 +578,7 @@ func (a *App) authMinecraft(xstsToken string, uhs string) (string, int, error) {
 		return "", 0, err
 	}
 
-	resp, err := http.Post(mcLoginURL, "application/json", strings.NewReader(string(body)))
+	resp, err := httpClient.Post(mcLoginURL, "application/json", strings.NewReader(string(body)))
 	if err != nil {
 		return "", 0, fmt.Errorf("Minecraft 登录请求失败: %v", err)
 	}
@@ -569,7 +632,7 @@ func (a *App) checkMCEntitlement(mcAccessToken string) (bool, error) {
 	}
 	req.Header.Set("Authorization", "Bearer "+mcAccessToken)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return false, err
 	}
@@ -596,7 +659,7 @@ func (a *App) getMCProfile(mcAccessToken string) (*MCProfileResponse, error) {
 	}
 	req.Header.Set("Authorization", "Bearer "+mcAccessToken)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -647,7 +710,7 @@ func (a *App) RefreshMicrosoftToken(username string) error {
 		"scope":         {oauthScope},
 	}
 
-	resp, err := http.PostForm(tokenURL, data)
+	resp, err := httpClient.PostForm(tokenURL, data)
 	if err != nil {
 		return fmt.Errorf("刷新令牌请求失败: %v", err)
 	}
@@ -693,7 +756,7 @@ func (a *App) RefreshMicrosoftToken(username string) error {
 	return a.SaveMSAuthData(username, authData)
 }
 
-// GetMSAuthData 获取微软认证数据（自动处理加密/明文兼容）
+// GetMSAuthData 获取微软认证数据（自动处理加密/明文兼容，支持 v1/v2 加密格式）
 func (a *App) GetMSAuthData(username string) (*MSAuthData, error) {
 	authPath := filepath.Join(a.GetUsersDir(), username, "ms_auth.json")
 	data, err := os.ReadFile(authPath)
@@ -704,9 +767,8 @@ func (a *App) GetMSAuthData(username string) (*MSAuthData, error) {
 	// 先尝试按加密格式解析
 	var encData MSAuthDataEncrypted
 	if err := json.Unmarshal(data, &encData); err == nil && encData.Data != "" {
-		// 加密格式：解密 Data 字段
-		key := getEncryptionKey(username)
-		decrypted, err := aesGCMDecrypt(encData.Data, key)
+		// 根据版本号选择解密方式（v1 旧版 XOR / v2 PBKDF2）
+		decrypted, err := decryptAuthData(encData.Data, username, encData.Version, encData.Salt)
 		if err != nil {
 			return nil, fmt.Errorf("解密认证数据失败: %w", err)
 		}
@@ -726,7 +788,7 @@ func (a *App) GetMSAuthData(username string) (*MSAuthData, error) {
 	return &authData, nil
 }
 
-// SaveMSAuthData 保存微软认证数据（加密存储，username 以外的字段全部加密）
+// SaveMSAuthData 保存微软认证数据（v2 加密存储：PBKDF2 + 随机盐，username 以外的字段全部加密）
 func (a *App) SaveMSAuthData(username string, authData *MSAuthData) error {
 	userDir := filepath.Join(a.GetUsersDir(), username)
 	if err := os.MkdirAll(userDir, 0755); err != nil {
@@ -747,16 +809,17 @@ func (a *App) SaveMSAuthData(username string, authData *MSAuthData) error {
 		return err
 	}
 
-	// 加密
-	key := getEncryptionKey(username)
-	encrypted, err := aesGCMEncrypt(payloadBytes, key)
+	// v2 加密：PBKDF2-HMAC-SHA256 + 随机盐
+	encrypted, saltB64, err := encryptAuthDataV2(payloadBytes, username)
 	if err != nil {
 		return fmt.Errorf("加密认证数据失败: %w", err)
 	}
 
 	// 构建加密后的存储格式
 	encData := MSAuthDataEncrypted{
+		Version:  encryptionVersionCurrent,
 		Username: username,
+		Salt:     saltB64,
 		Data:     encrypted,
 	}
 
@@ -771,8 +834,8 @@ func (a *App) SaveMSAuthData(username string, authData *MSAuthData) error {
 
 // YggdrasilAuthResponse Yggdrasil 认证响应
 type YggdrasilAuthResponse struct {
-	AccessToken      string `json:"accessToken"`
-	ClientToken      string `json:"clientToken"`
+	AccessToken       string `json:"accessToken"`
+	ClientToken       string `json:"clientToken"`
 	AvailableProfiles []struct {
 		ID   string `json:"id"`
 		Name string `json:"name"`
@@ -781,9 +844,9 @@ type YggdrasilAuthResponse struct {
 		ID   string `json:"id"`
 		Name string `json:"name"`
 	} `json:"selectedProfile"`
-	Error            string `json:"error"`
-	ErrorMessage     string `json:"errorMessage"`
-	Cause            string `json:"cause"`
+	Error        string `json:"error"`
+	ErrorMessage string `json:"errorMessage"`
+	Cause        string `json:"cause"`
 }
 
 // YggdrasilServerMeta Yggdrasil 服务器元信息
@@ -945,9 +1008,9 @@ func (a *App) RefreshExternalToken(username string) error {
 	refreshURL := authData.ServerURL + "/authserver/refresh"
 
 	payload := map[string]interface{}{
-		"accessToken":  authData.AccessToken,
-		"clientToken":  authData.ClientToken,
-		"requestUser":  true,
+		"accessToken": authData.AccessToken,
+		"clientToken": authData.ClientToken,
+		"requestUser": true,
 	}
 
 	body, err := json.Marshal(payload)
@@ -1055,28 +1118,31 @@ func (a *App) DownloadAuthlibInjector() (string, error) {
 
 	downloadClient := &http.Client{Timeout: 120 * time.Second}
 	var lastErr error
-	for _, url := range []string{downloadURL, mirrorURL} {
-		resp, err := downloadClient.Get(url)
+	for _, dlURL := range []string{downloadURL, mirrorURL} {
+		resp, err := downloadClient.Get(dlURL)
 		if err != nil {
 			lastErr = err
 			continue
 		}
-		defer resp.Body.Close()
 		if resp.StatusCode != 200 {
+			resp.Body.Close()
 			lastErr = fmt.Errorf("HTTP %d", resp.StatusCode)
 			continue
 		}
 
 		file, err := os.Create(jarPath)
 		if err != nil {
+			resp.Body.Close()
 			return "", fmt.Errorf("创建文件失败: %v", err)
 		}
 		if _, err := io.Copy(file, resp.Body); err != nil {
 			file.Close()
+			resp.Body.Close()
 			os.Remove(jarPath)
 			return "", fmt.Errorf("写入文件失败: %v", err)
 		}
 		file.Close()
+		resp.Body.Close()
 		return jarPath, nil
 	}
 
