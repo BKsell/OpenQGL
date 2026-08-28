@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
@@ -51,21 +52,21 @@ type PasswordData struct {
 
 // UserConfig 用户配置（每个用户独立）
 type UserConfig struct {
-	VersionIsolation         bool   `json:"versionIsolation"`
-	SelectedVersion          string `json:"selectedVersion"`
-	ThemeColor               string `json:"themeColor"`               // 主题色: blue, cyan, pink, purple, orange, yellow, green
-	BackgroundImage          string `json:"backgroundImage"`           // 自定义背景图片路径，留空则使用默认
-	ShowExportLaunchCommand  bool   `json:"showExportLaunchCommand"`   // 显示导出启动命令按钮
+	VersionIsolation        bool   `json:"versionIsolation"`
+	SelectedVersion         string `json:"selectedVersion"`
+	ThemeColor              string `json:"themeColor"`              // 主题色: blue, cyan, pink, purple, orange, yellow, green
+	BackgroundImage         string `json:"backgroundImage"`         // 自定义背景图片路径，留空则使用默认
+	ShowExportLaunchCommand bool   `json:"showExportLaunchCommand"` // 显示导出启动命令按钮
 }
 
 // GlobalConfig 全局配置
 type GlobalConfig struct {
-	CurrentUser      string `json:"currentUser"`
-	JavaPath         string `json:"javaPath"`
-	MaxMemory        int    `json:"maxMemory"`
-	MinMemory        int    `json:"minMemory"`
-	MinecraftDir     string `json:"minecraftDir"`     // 自定义 .minecraft 目录，留空则使用默认路径
-	PortableMode     bool   `json:"portableMode"`     // 便携版模式：优先使用 QGL\pe\java\bin\java.exe
+	CurrentUser  string `json:"currentUser"`
+	JavaPath     string `json:"javaPath"`
+	MaxMemory    int    `json:"maxMemory"`
+	MinMemory    int    `json:"minMemory"`
+	MinecraftDir string `json:"minecraftDir"` // 自定义 .minecraft 目录，留空则使用默认路径
+	PortableMode bool   `json:"portableMode"` // 便携版模式：优先使用 QGL\pe\java\bin\java.exe
 }
 
 func (a *App) GetAppDir() string {
@@ -272,7 +273,7 @@ func (a *App) CreateExternalUser(username string, authData ExternalAuthData) err
 	return a.SaveExternalAuthData(username, &authData)
 }
 
-// SaveExternalAuthData 保存外置登录认证数据（加密存储，和正版账号一样）
+// SaveExternalAuthData 保存外置登录认证数据（v2 加密存储：PBKDF2 + 随机盐，和正版账号一致）
 func (a *App) SaveExternalAuthData(username string, authData *ExternalAuthData) error {
 	userDir := filepath.Join(a.GetUsersDir(), username)
 	if err := os.MkdirAll(userDir, 0755); err != nil {
@@ -293,16 +294,17 @@ func (a *App) SaveExternalAuthData(username string, authData *ExternalAuthData) 
 		return fmt.Errorf("序列化外置认证数据失败: %w", err)
 	}
 
-	// 加密
-	key := getEncryptionKey(username)
-	encrypted, err := aesGCMEncrypt(payloadBytes, key)
+	// v2 加密：PBKDF2-HMAC-SHA256 + 随机盐
+	encrypted, saltB64, err := encryptAuthDataV2(payloadBytes, username)
 	if err != nil {
 		return fmt.Errorf("加密外置认证数据失败: %w", err)
 	}
 
 	// 构建加密后的存储格式
 	encData := ExternalAuthDataEncrypted{
+		Version:    encryptionVersionCurrent,
 		ServerName: authData.ServerName,
+		Salt:       saltB64,
 		Data:       encrypted,
 	}
 
@@ -313,7 +315,7 @@ func (a *App) SaveExternalAuthData(username string, authData *ExternalAuthData) 
 	return os.WriteFile(filepath.Join(userDir, "external_auth.json"), data, 0644)
 }
 
-// GetExternalAuthData 获取外置登录认证数据（解密读取）
+// GetExternalAuthData 获取外置登录认证数据（解密读取，支持 v1/v2 加密格式）
 func (a *App) GetExternalAuthData(username string) (*ExternalAuthData, error) {
 	userDir := filepath.Join(a.GetUsersDir(), username)
 	data, err := os.ReadFile(filepath.Join(userDir, "external_auth.json"))
@@ -324,9 +326,8 @@ func (a *App) GetExternalAuthData(username string) (*ExternalAuthData, error) {
 	// 先尝试按加密格式解析
 	var encData ExternalAuthDataEncrypted
 	if err := json.Unmarshal(data, &encData); err == nil && encData.Data != "" {
-		// 加密格式：解密 Data 字段
-		key := getEncryptionKey(username)
-		decrypted, err := aesGCMDecrypt(encData.Data, key)
+		// 根据版本号选择解密方式（v1 旧版 XOR / v2 PBKDF2）
+		decrypted, err := decryptAuthData(encData.Data, username, encData.Version, encData.Salt)
 		if err != nil {
 			return nil, fmt.Errorf("解密外置认证数据失败: %w", err)
 		}
@@ -610,7 +611,7 @@ func (a *App) SaveUserConfig(username string, config *UserConfig) error {
 	}
 	configPath := filepath.Join(userDir, "config.json")
 	if err := os.WriteFile(configPath, data, 0644); err != nil {
-		return fmt.Errorf("写入用户配置失败: %w", err)
+		return fmt.Errorf("写入用户配置文件失败: %w", err)
 	}
 	return nil
 }
@@ -801,6 +802,7 @@ func (a *App) GetBingDailyImage() (string, error) {
 
 	// 请求 Bing API（会重定向到图片 URL）
 	client := &http.Client{
+		Timeout: 15 * time.Second,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			// 不自动跟随重定向，我们需要获取最终的图片 URL
 			return http.ErrUseLastResponse
@@ -833,8 +835,9 @@ func (a *App) GetBingDailyImage() (string, error) {
 		return "", fmt.Errorf("未获取到图片地址，状态码: %d", resp.StatusCode)
 	}
 
-	// 下载实际图片
-	imgResp, err := http.Get(imageURL)
+	// 下载实际图片（使用带超时的客户端，原代码裸用 http.Get 无超时）
+	imgClient := &http.Client{Timeout: 30 * time.Second}
+	imgResp, err := imgClient.Get(imageURL)
 	if err != nil {
 		return "", fmt.Errorf("下载图片失败: %w", err)
 	}
