@@ -18,6 +18,10 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
+// v2 安全加固：统一带超时的 HTTP 客户端
+// 原实现全文件 12+ 处直接 http.Get，网络异常时永久挂起阻塞 UI 线程
+var loaderHTTPClient = &http.Client{Timeout: 30 * time.Second}
+
 // ===== 日志功能 =====
 
 // writeLog 将信息写入日志文件（用户可随时查看和复制）
@@ -111,7 +115,7 @@ type FabricLoaderVersion struct {
 func (a *App) GetForgeVersions(mcVersion string) ([]LoaderInfo, error) {
 	apiURL := fmt.Sprintf("https://bmclapi2.bangbang93.com/forge/minecraft/%s", mcVersion)
 
-	resp, err := http.Get(apiURL)
+	resp, err := loaderHTTPClient.Get(apiURL)
 	if err != nil {
 		return nil, fmt.Errorf("获取 Forge 版本失败: %v", err)
 	}
@@ -128,7 +132,7 @@ func (a *App) GetForgeVersions(mcVersion string) ([]LoaderInfo, error) {
 
 	// 获取推荐版本
 	recommendedVersion := ""
-	promosResp, err := http.Get("https://bmclapi2.bangbang93.com/forge/promos")
+	promosResp, err := loaderHTTPClient.Get("https://bmclapi2.bangbang93.com/forge/promos")
 	if err == nil && promosResp.StatusCode == http.StatusOK {
 		var promos map[string]string
 		if json.NewDecoder(promosResp.Body).Decode(&promos) == nil {
@@ -208,13 +212,13 @@ func (a *App) GetFabricVersions(mcVersion string) ([]LoaderInfo, error) {
 	// 优先使用 BMCLAPI 镜像，失败回退官方源
 	fabricMetaURL := "https://bmclapi2.bangbang93.com/fabric-meta/v2/versions"
 
-	resp, err := http.Get(fabricMetaURL)
+	resp, err := loaderHTTPClient.Get(fabricMetaURL)
 	if err != nil || resp.StatusCode != http.StatusOK {
 		if resp != nil {
 			resp.Body.Close()
 		}
 		// 回退到官方源
-		resp, err = http.Get("https://meta.fabricmc.net/v2/versions")
+		resp, err = loaderHTTPClient.Get("https://meta.fabricmc.net/v2/versions")
 		if err != nil {
 			return nil, fmt.Errorf("获取 Fabric 版本失败: %v", err)
 		}
@@ -387,7 +391,7 @@ func (a *App) GetNeoForgeVersions(mcVersion string) ([]LoaderInfo, error) {
 
 // fetchNeoForgeVersionList 从 API 获取版本列表（仅返回版本名数组）
 func fetchNeoForgeVersionList(apiURL string) ([]string, error) {
-	resp, err := http.Get(apiURL)
+	resp, err := loaderHTTPClient.Get(apiURL)
 	if err != nil {
 		return nil, err
 	}
@@ -429,7 +433,7 @@ func fetchNeoForgeVersionList(apiURL string) ([]string, error) {
 func (a *App) GetOptiFineVersions(mcVersion string) ([]LoaderInfo, error) {
 	apiURL := "https://bmclapi2.bangbang93.com/optifine/versionList"
 
-	resp, err := http.Get(apiURL)
+	resp, err := loaderHTTPClient.Get(apiURL)
 	if err != nil {
 		return nil, fmt.Errorf("获取 OptiFine 版本失败: %v", err)
 	}
@@ -721,6 +725,13 @@ func (a *App) installOldForge(installerPath string, mcDir string, mcVersion stri
 		// 提取 Jar 文件到 libraries
 		if pathStr != "" && filePath != "" {
 			libPath := filepath.Join(mcDir, "libraries", strings.ReplaceAll(pathStr, "/", string(os.PathSeparator)))
+
+			// v2 安全加固：防止 install_profile.json 中恶意 pathStr 含 ../ 逃逸
+			libsRootClean := filepath.Clean(filepath.Join(mcDir, "libraries")) + string(os.PathSeparator)
+			if !strings.HasPrefix(filepath.Clean(libPath), libsRootClean) {
+				return fmt.Errorf("路径遍历防护：install_profile.json pathStr 逃逸: %s", pathStr)
+			}
+
 			os.MkdirAll(filepath.Dir(libPath), 0755)
 
 			for _, f := range r.File {
@@ -780,6 +791,14 @@ func (a *App) extractMavenFiles(installerPath string, mcDir string) error {
 		if strings.HasPrefix(f.Name, "maven/") && !f.FileInfo().IsDir() {
 			relPath := strings.TrimPrefix(f.Name, "maven/")
 			destPath := filepath.Join(libsDir, relPath)
+
+			// v2 安全加固：防止 zip slip 路径遍历
+			// 恶意 zip 内文件名含 ../ 可逃逸到 libsDir 之外写入任意文件
+			libsDirClean := filepath.Clean(libsDir) + string(os.PathSeparator)
+			if !strings.HasPrefix(filepath.Clean(destPath), libsDirClean) {
+				a.writeLog("zip slip 防护：跳过逃逸路径 %s", f.Name)
+				continue
+			}
 
 			os.MkdirAll(filepath.Dir(destPath), 0755)
 
@@ -896,7 +915,8 @@ func (a *App) downloadForgeLibraries(installerPath string, mcDir string, mcVersi
 }
 
 // ensureForgeMappings 确保 Forge 新版需要的 Mappings 文件存在
-// 使用 CMD 命令（Invoke-WebRequest）下载文件
+// v2 安全加固：原实现用 PowerShell Invoke-WebRequest + fmt.Sprintf 拼接命令，存在命令注入
+// 现改用 Go 原生 http.Client 下载，带 User-Agent 避免被 BMCLAPI 拦截
 func (a *App) ensureForgeMappings(installerPath string, mcDir string) {
 	a.writeLog("===== 开始检查 Forge Mappings 文件 =====")
 
@@ -1020,23 +1040,42 @@ func (a *App) ensureForgeMappings(installerPath string, mcDir string) {
 	mappingsURL = strings.Replace(mappingsURL, "https://piston-data.mojang.com/", "https://bmclapi2.bangbang93.com/", 1)
 	mappingsURL = strings.Replace(mappingsURL, "https://launcher.mojang.com/", "https://bmclapi2.bangbang93.com/", 1)
 
-	a.writeLog("使用 CMD 命令下载 Mappings 文件...")
 	a.writeLog("下载 URL: %s", mappingsURL)
 	a.writeLog("保存到: %s", targetPath)
 
 	// 4. 创建目标目录
 	os.MkdirAll(filepath.Dir(targetPath), 0755)
 
-	// 5. 使用 PowerShell Invoke-WebRequest 下载文件（带 User-Agent 避免被拦截）
-	a.writeLog("执行下载命令...")
-	downloadCmd := exec.Command("powershell", "-Command",
-		fmt.Sprintf("[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; $headers = @{'User-Agent'='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.7680.216 CosyBrowser/146.3.1'}; Invoke-WebRequest -Uri '%s' -OutFile '%s' -UseBasicParsing -Headers $headers",
-			mappingsURL, targetPath))
-	downloadCmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-	output, err := downloadCmd.CombinedOutput()
-
-	if err != nil {
-		a.writeLog("CMD 下载失败: %v, 输出: %s", err, string(output))
+	// 5. v2 安全加固：原实现用 fmt.Sprintf 把 URL/路径拼进 PowerShell 命令字符串，
+	// 单引号未转义，存在命令注入风险（恶意 URL 或路径含单引号即可注入任意 PS 命令）。
+	// 改用 Go 原生 http.Client 下载，带 User-Agent 避免被 BMCLAPI 拦截。
+	a.writeLog("执行下载（Go 原生 HTTP，已修复命令注入）...")
+	req, reqErr := http.NewRequest("GET", mappingsURL, nil)
+	if reqErr != nil {
+		a.writeLog("创建下载请求失败: %v", reqErr)
+		return
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.7680.216 CosyBrowser/146.3.1")
+	dlResp, dlErr := loaderHTTPClient.Do(req)
+	if dlErr != nil {
+		a.writeLog("HTTP 下载失败: %v", dlErr)
+		return
+	}
+	defer dlResp.Body.Close()
+	if dlResp.StatusCode != http.StatusOK {
+		a.writeLog("HTTP 下载失败: 状态码 %d", dlResp.StatusCode)
+		return
+	}
+	outFile, createErr := os.Create(targetPath)
+	if createErr != nil {
+		a.writeLog("创建目标文件失败: %v", createErr)
+		return
+	}
+	_, copyErr := io.Copy(outFile, dlResp.Body)
+	outFile.Close()
+	if copyErr != nil {
+		a.writeLog("写入文件失败: %v", copyErr)
+		os.Remove(targetPath)
 		return
 	}
 
@@ -1363,7 +1402,7 @@ func (a *App) InstallFabric(mcVersion string, loaderVersion string) error {
 
 	a.emitProgress("downloading", "获取 Fabric profile", 0, 0)
 
-	resp, err := http.Get(profileURL)
+	resp, err := loaderHTTPClient.Get(profileURL)
 	if err != nil {
 		return fmt.Errorf("获取 Fabric profile 失败: %v", err)
 	}
