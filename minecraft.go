@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -778,7 +779,12 @@ func (a *App) downloadJavaItem(majorVer int, url string) error {
 
 	// 如果是网页链接，打开浏览器
 	if target.IsWebPage {
-		cmd := exec.Command("cmd", "/c", "start", url)
+		// v2 安全加固: 校验URL协议仅允许http/https，使用rundll32绕过cmd shell避免命令注入
+		parsedURL, parseErr := url.Parse(url)
+		if parseErr != nil || (parsedURL.Scheme != "http" && parsedURL.Scheme != "https") {
+			return fmt.Errorf("invalid URL protocol: %s", url)
+		}
+		cmd := exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
 		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 		return cmd.Run()
 	}
@@ -851,7 +857,8 @@ func runInstaller(filePath string, isMSI bool) error {
 		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 		return cmd.Start()
 	}
-	cmd := exec.Command("cmd", "/c", "start", "", filePath)
+	// v2 安全加固: 使用explorer直接打开文件，绕过cmd shell避免命令注入
+	cmd := exec.Command("explorer", filePath)
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	return cmd.Start()
 }
