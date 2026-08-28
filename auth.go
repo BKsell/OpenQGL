@@ -61,28 +61,6 @@ type ExternalAuthDataEncrypted struct {
 	Data       string `json:"data"`       // 其余字段加密后的 base64 字符串
 }
 
-/*
-
-
-
-看我
-
-
-
-为了防止加密逻辑被获取，加密逻辑已更改简化，如果你的产品需要上线必须修改逻辑为更安全的!!!!!!!
-
-
-
-
-
-
-看我
-
-
-
-
-
-*/
 // getEncryptionKey 根据用户名+OQL生成 32 字节 AES 密钥
 func getEncryptionKey(username string) []byte {
 	raw := username + "OQL"
@@ -222,7 +200,8 @@ func (a *App) StartMicrosoftLogin() (string, error) {
 		"scope":     {oauthScope},
 	}
 
-	resp, err := http.PostForm(deviceCodeURL, data)
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.PostForm(deviceCodeURL, data)
 	if err != nil {
 		return "", fmt.Errorf("请求设备代码失败: %v", err)
 	}
@@ -274,7 +253,8 @@ func (a *App) pollMicrosoftToken(dc DeviceCodeResponse) {
 			"device_code": {dc.DeviceCode},
 		}
 
-		resp, err := http.PostForm(tokenURL, data)
+		client := &http.Client{Timeout: 15 * time.Second}
+		resp, err := client.PostForm(tokenURL, data)
 		if err != nil {
 			continue
 		}
@@ -404,7 +384,8 @@ func (a *App) authXBL(accessToken string) (string, string, error) {
 		return "", "", err
 	}
 
-	resp, err := http.Post(xblAuthURL, "application/json", strings.NewReader(string(body)))
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Post(xblAuthURL, "application/json", strings.NewReader(string(body)))
 	if err != nil {
 		return "", "", fmt.Errorf("XBL 请求失败: %v", err)
 	}
@@ -450,7 +431,8 @@ func (a *App) authXSTS(xblToken string) (string, string, error) {
 		return "", "", err
 	}
 
-	resp, err := http.Post(xstsAuthURL, "application/json", strings.NewReader(string(body)))
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Post(xstsAuthURL, "application/json", strings.NewReader(string(body)))
 	if err != nil {
 		return "", "", fmt.Errorf("XSTS 请求失败: %v", err)
 	}
@@ -515,7 +497,8 @@ func (a *App) authMinecraft(xstsToken string, uhs string) (string, int, error) {
 		return "", 0, err
 	}
 
-	resp, err := http.Post(mcLoginURL, "application/json", strings.NewReader(string(body)))
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Post(mcLoginURL, "application/json", strings.NewReader(string(body)))
 	if err != nil {
 		return "", 0, fmt.Errorf("Minecraft 登录请求失败: %v", err)
 	}
@@ -647,7 +630,8 @@ func (a *App) RefreshMicrosoftToken(username string) error {
 		"scope":         {oauthScope},
 	}
 
-	resp, err := http.PostForm(tokenURL, data)
+	client := &http.Client{Timeout: 15 * time.Second}
+		resp, err := client.PostForm(tokenURL, data)
 	if err != nil {
 		return fmt.Errorf("刷新令牌请求失败: %v", err)
 	}
@@ -764,7 +748,7 @@ func (a *App) SaveMSAuthData(username string, authData *MSAuthData) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(userDir, "ms_auth.json"), data, 0644)
+	return os.WriteFile(filepath.Join(userDir, "ms_auth.json"), data, 0600)
 }
 
 // ===== Yggdrasil 外置登录 =====
