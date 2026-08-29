@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -11,15 +12,16 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 )
 
 // JavaEntry 表示一个已安装的 Java 运行时
 type JavaEntry struct {
-	Path       string `json:"path"`       // javaw.exe 完整路径
-	Version    string `json:"version"`    // 版本号字符串，如 "1.8.0_321"
-	MajorVer   int    `json:"majorVer"`   // 主版本号，如 8, 17, 21
-	Is64Bit    bool   `json:"is64Bit"`    // 是否64位
-	IsJDK      bool   `json:"isJDK"`      // 是否JDK
+	Path     string `json:"path"`     // javaw.exe 完整路径
+	Version  string `json:"version"`  // 版本号字符串，如 "1.8.0_321"
+	MajorVer int    `json:"majorVer"` // 主版本号，如 8, 17, 21
+	Is64Bit  bool   `json:"is64Bit"`  // 是否64位
+	IsJDK    bool   `json:"isJDK"`    // 是否JDK
 }
 
 // JavaVersionReq 表示 MC 版本对 Java 的版本需求
@@ -46,7 +48,6 @@ func (a *App) SearchJava() []JavaEntry {
 		"C:\\Program Files\\Amazon Corretto",
 		"C:\\Program Files\\Semeru",
 	}
-
 	for _, baseDir := range commonPaths {
 		entries, err := os.ReadDir(baseDir)
 		if err != nil {
@@ -112,7 +113,7 @@ func (a *App) SearchJava() []JavaEntry {
 	searchDirForJava(appDir, &results, seen, 3)
 
 	// 5. 搜索 .minecraft 目录
-	mcDir := a.getMinecraftDir()
+	mcDir := a.GetMinecraftDir()
 	searchDirForJava(mcDir, &results, seen, 3)
 
 	// 6. 搜索 AppData 下的 Java
@@ -160,21 +161,18 @@ func searchDriveForJava(drivePath string, results *[]JavaEntry, seen map[string]
 	if err != nil {
 		return
 	}
-
 	// 需要进入搜索的根目录关键字（参考PCL的JavaSearchFolder关键字列表）
 	rootKeywords := []string{
 		"java", "jdk", "jre", "program", "software", "soft", "app",
 		"develop", "dev", "tools", "runtime", "env", "游戏", "game",
 		"mc", "minecraft", "launch", "启动", "运行", "应用",
 	}
-
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
 		}
 		name := entry.Name()
 		lowerName := strings.ToLower(name)
-
 		// 直接检查该目录下是否有 bin/javaw.exe
 		javawPath := filepath.Join(drivePath, name, "bin", "javaw.exe")
 		if _, err := os.Stat(javawPath); err == nil && !seen[javawPath] {
@@ -184,7 +182,6 @@ func searchDriveForJava(drivePath string, results *[]JavaEntry, seen map[string]
 				*results = append(*results, *javaEntry)
 			}
 		}
-
 		// 判断是否需要进入该目录搜索
 		shouldEnter := false
 		for _, kw := range rootKeywords {
@@ -193,7 +190,6 @@ func searchDriveForJava(drivePath string, results *[]JavaEntry, seen map[string]
 				break
 			}
 		}
-
 		if shouldEnter {
 			searchDirForJava(filepath.Join(drivePath, name), results, seen, 4)
 		}
@@ -205,12 +201,10 @@ func searchDirForJava(dir string, results *[]JavaEntry, seen map[string]bool, ma
 	if maxDepth <= 0 {
 		return
 	}
-
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return
 	}
-
 	// 关键字列表（参考PCL）
 	keywords := []string{
 		"java", "jdk", "jre", "runtime", "env", "run", "soft",
@@ -219,14 +213,12 @@ func searchDirForJava(dir string, results *[]JavaEntry, seen map[string]bool, ma
 		"program", "game", "mc", "minecraft", "version",
 		"x64", "x86", "bin", "users",
 	}
-
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
 		}
 		name := entry.Name()
 		lowerName := strings.ToLower(name)
-
 		// 检查 bin 目录下是否有 javaw.exe
 		javawPath := filepath.Join(dir, name, "bin", "javaw.exe")
 		if _, err := os.Stat(javawPath); err == nil && !seen[javawPath] {
@@ -236,7 +228,6 @@ func searchDirForJava(dir string, results *[]JavaEntry, seen map[string]bool, ma
 				*results = append(*results, *javaEntry)
 			}
 		}
-
 		// 决定是否进入子目录
 		shouldEnter := false
 		// 数字开头的目录（版本号）
@@ -260,7 +251,6 @@ func searchDirForJava(dir string, results *[]JavaEntry, seen map[string]bool, ma
 				}
 			}
 		}
-
 		if shouldEnter {
 			searchDirForJava(filepath.Join(dir, name), results, seen, maxDepth-1)
 		}
@@ -268,46 +258,46 @@ func searchDirForJava(dir string, results *[]JavaEntry, seen map[string]bool, ma
 }
 
 // validateJava 验证 Java 路径并获取版本信息（参考PCL的JavaEntry.Check）
+// 安全加固: 添加 10 秒超时，防止 Java 进程挂起导致应用卡住
 func validateJava(javawPath string) *JavaEntry {
 	// 检查 javaw.exe 是否存在
 	if _, err := os.Stat(javawPath); err != nil {
 		return nil
 	}
-
 	// 检查 java.exe 是否存在（同目录下）
 	dir := filepath.Dir(javawPath)
 	javaExePath := filepath.Join(dir, "java.exe")
 	if _, err := os.Stat(javaExePath); err != nil {
 		return nil
 	}
-
 	// 判断是否为 JDK（检查 javac.exe）
 	javacPath := filepath.Join(dir, "javac.exe")
 	isJDK := false
 	if _, err := os.Stat(javacPath); err == nil {
 		isJDK = true
 	}
-
-	// 运行 java -version 获取版本信息
-	cmd := exec.Command(javaExePath, "-version")
+	// 运行 java -version 获取版本信息（带超时）
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, javaExePath, "-version")
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		// 某些 Java 即使成功也会返回非零退出码
 		// 尝试解析输出
+		if ctx.Err() != nil {
+			// 超时，跳过这个 Java
+			return nil
+		}
 	}
-
 	outputStr := string(output)
-
 	// 解析版本号（参考PCL的正则匹配逻辑）
 	version, majorVer := parseJavaVersion(outputStr)
 	if majorVer <= 0 {
 		return nil
 	}
-
 	// 检测是否为64位
 	is64Bit := strings.Contains(outputStr, "64-Bit") || strings.Contains(outputStr, "64-bit")
-
 	return &JavaEntry{
 		Path:     javawPath,
 		Version:  version,
@@ -326,7 +316,6 @@ func parseJavaVersion(output string) (string, int) {
 		rawVersion := matches[1]
 		return normalizeJavaVersion(rawVersion)
 	}
-
 	// 匹配 openjdk 格式
 	re2 := regexp.MustCompile(`openjdk (\d[\d._]*)`)
 	matches = re2.FindStringSubmatch(output)
@@ -334,7 +323,6 @@ func parseJavaVersion(output string) (string, int) {
 		rawVersion := matches[1]
 		return normalizeJavaVersion(rawVersion)
 	}
-
 	return "", 0
 }
 
@@ -346,11 +334,9 @@ func normalizeJavaVersion(raw string) (string, int) {
 	if idx := strings.Index(raw, "-"); idx > 0 {
 		raw = raw[:idx]
 	}
-
 	// 解析版本号段
 	parts := strings.Split(raw, ".")
 	majorVer := 0
-
 	if len(parts) >= 1 {
 		// 如果以 "1." 开头（旧版本格式，如 1.8.0）
 		if parts[0] == "1" && len(parts) >= 2 {
@@ -361,11 +347,9 @@ func normalizeJavaVersion(raw string) (string, int) {
 			majorVer, _ = strconv.Atoi(parts[0])
 		}
 	}
-
 	if majorVer <= 0 || majorVer >= 100 {
 		return "", 0
 	}
-
 	return raw, majorVer
 }
 
@@ -413,21 +397,18 @@ func (a *App) GetJavaRequirement(versionID string) JavaVersionReq {
 		MinMajor: 0,
 		MaxMajor: 0, // 0 表示无上限
 	}
-
 	// 读取版本 JSON 获取发布时间
-	mcDir := a.getMinecraftDir()
+	mcDir := a.GetMinecraftDir()
 	jsonPath := filepath.Join(mcDir, "versions", versionID, versionID+".json")
 	jsonData, err := os.ReadFile(jsonPath)
 	if err != nil {
 		// 无法读取，使用默认需求
 		return req
 	}
-
 	var versionJSON VersionJSON
 	if err := json.Unmarshal(jsonData, &versionJSON); err != nil {
 		return req
 	}
-
 	// 解析发布时间
 	releaseTime := versionJSON.ReleaseTime
 	releaseYear := 0
@@ -438,13 +419,10 @@ func (a *App) GetJavaRequirement(versionID string) JavaVersionReq {
 	if len(releaseTime) >= 7 {
 		releaseMonth, _ = strconv.Atoi(releaseTime[5:7])
 	}
-
 	// 解析 MC 版本号
 	mcMajor, mcMinor, mcPatch := parseMCVersion(versionID)
-
 	// 根据版本号和发布时间确定 Java 需求（参考PCL的McLaunchJava）
 	_ = mcPatch
-
 	// MC 1.20.5+ (24w14a+) -> Java 21+
 	if mcMajor > 1 || (mcMajor == 1 && mcMinor >= 21) || (mcMajor == 1 && mcMinor == 20 && mcPatch >= 5) {
 		req.MinMajor = 21
@@ -458,7 +436,6 @@ func (a *App) GetJavaRequirement(versionID string) JavaVersionReq {
 		// MC 1.12+ -> Java 8+
 		req.MinMajor = 8
 	}
-
 	// MC 1.16.5 及更早版本：Java 17+ 不兼容（内部 API 变更导致崩溃）
 	if mcMajor == 1 && mcMinor <= 16 {
 		req.MaxMajor = 16
@@ -467,7 +444,6 @@ func (a *App) GetJavaRequirement(versionID string) JavaVersionReq {
 	if releaseYear < 2013 || (releaseYear == 2013 && releaseMonth <= 5) {
 		req.MaxMajor = 12
 	}
-
 	// ===== 低版本 Forge 与高版本 Java 不兼容检测 =====
 	// 参考 PCL：CrashReason.低版本Forge与高版本Java不兼容
 	// securejarhandler 0.9.x 在 Java 17+ 中会崩溃（NoSuchMethodError: ManifestEntryVerifier）
@@ -486,11 +462,9 @@ func (a *App) GetJavaRequirement(versionID string) JavaVersionReq {
 			}
 		}
 	}
-
 	// 检查版本 JSON 中的 java_version 字段（新版 MC 可能包含）
 	// 这在 version.json 的根级别或 jar 内的 version.json 中
 	// 暂时不从 jar 中读取，只检查外部 JSON
-
 	return req
 }
 
@@ -514,7 +488,6 @@ func parseMCVersion(versionID string) (int, int, int) {
 	// 去除可能的快照后缀
 	versionID = strings.Split(versionID, "-")[0]
 	versionID = strings.Split(versionID, " ")[0]
-
 	parts := strings.Split(versionID, ".")
 	major, _ := strconv.Atoi(parts[0])
 	minor := 0
@@ -531,7 +504,6 @@ func parseMCVersion(versionID string) (int, int, int) {
 // SelectJavaForVersion 为指定 MC 版本选择合适的 Java
 func (a *App) SelectJavaForVersion(versionID string) (*JavaEntry, error) {
 	req := a.GetJavaRequirement(versionID)
-
 	// 1. 便携版模式：优先使用 QGL\pe\java\bin\java.exe
 	config, _ := a.GetGlobalConfig()
 	if config != nil && config.PortableMode {
@@ -543,7 +515,6 @@ func (a *App) SelectJavaForVersion(versionID string) (*JavaEntry, error) {
 			// 便携版 Java 不兼容，继续搜索其他 Java
 		}
 	}
-
 	// 2. 检查用户手动设置的 Java
 	if config != nil && config.JavaPath != "" {
 		javaEntry := validateJava(config.JavaPath)
@@ -560,10 +531,8 @@ func (a *App) SelectJavaForVersion(versionID string) (*JavaEntry, error) {
 				javaEntry.Version, javaEntry.MajorVer, versionID, displayMin, formatMaxVer(req.MaxMajor))
 		}
 	}
-
 	// 3. 搜索系统中所有 Java
 	javaList := a.SearchJava()
-
 	// 3. 过滤出兼容的 Java
 	var compatible []JavaEntry
 	for _, j := range javaList {
@@ -571,11 +540,9 @@ func (a *App) SelectJavaForVersion(versionID string) (*JavaEntry, error) {
 			compatible = append(compatible, j)
 		}
 	}
-
 	if len(compatible) > 0 {
 		return &compatible[0], nil
 	}
-
 	// 4. 没有找到兼容的 Java
 	displayMin := req.MinMajor
 	if displayMin <= 0 {
@@ -584,7 +551,6 @@ func (a *App) SelectJavaForVersion(versionID string) (*JavaEntry, error) {
 	if len(javaList) == 0 {
 		return nil, fmt.Errorf("未找到任何已安装的 Java，请安装 Java %d 或更高版本", displayMin)
 	}
-
 	// 有 Java 但不兼容
 	best := javaList[0]
 	return nil, fmt.Errorf("未找到适用于 MC %s 的 Java (需要 Java %d-%s)，当前最接近的 Java 为 %s (Java %d)，请安装合适的 Java 版本",
@@ -668,21 +634,18 @@ func (a *App) GetJavaDownloadList() []JavaDownloadInfo {
 // selectJavaForInstaller 选择适合运行加载器安装器的 Java（需要 Java 17+）
 func (a *App) selectJavaForInstaller() (*JavaEntry, error) {
 	javaList := a.SearchJava()
-
 	// 优先选择 Java 17+（ForgeInstaller 需要）
 	for _, j := range javaList {
 		if j.MajorVer >= 17 {
 			return &j, nil
 		}
 	}
-
 	// 回退到 Java 8+（某些旧版安装器可能兼容）
 	for _, j := range javaList {
 		if j.MajorVer >= 8 {
 			return &j, nil
 		}
 	}
-
 	return nil, fmt.Errorf("未找到合适的 Java（需要 Java 17+，最低 Java 8）")
 }
 
