@@ -534,7 +534,8 @@ func (a *App) SelectModSaveDir() (string, error) {
 // GetDefaultModDir 获取默认 Mod 目录
 func (a *App) GetDefaultModDir(versionID string) string {
 	mcDir := a.GetMinecraftDir()
-	if versionID != "" {
+	// 安全校验: versionID禁止路径遍历
+	if versionID != "" && !strings.Contains(versionID, "..") && !strings.Contains(versionID, "/") && !strings.Contains(versionID, "\\") {
 		return filepath.Join(mcDir, "versions", versionID, "mods")
 	}
 	return filepath.Join(mcDir, "mods")
@@ -542,6 +543,12 @@ func (a *App) GetDefaultModDir(versionID string) string {
 
 // GetModList 获取指定版本的 Mod 列表
 func (a *App) GetModList(versionID string) ([]ModFileInfo, error) {
+	// 安全校验: versionID禁止路径遍历
+	if versionID != "" {
+		if strings.Contains(versionID, "..") || strings.Contains(versionID, "/") || strings.Contains(versionID, "\\") {
+			return nil, fmt.Errorf("版本ID包含非法字符")
+		}
+	}
 	mcDir := a.GetMinecraftDir()
 	var modsDir string
 
@@ -627,6 +634,12 @@ func (a *App) ToggleMod(modFilePath string, enable bool) error {
 
 // ImportMod 导入 Mod 文件
 func (a *App) ImportMod(versionID string) error {
+	// 安全校验: versionID禁止路径遍历
+	if versionID != "" {
+		if strings.Contains(versionID, "..") || strings.Contains(versionID, "/") || strings.Contains(versionID, "\\") {
+			return fmt.Errorf("版本ID包含非法字符")
+		}
+	}
 	path, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
 		Title: "选择 Mod 文件",
 		Filters: []runtime.FileFilter{
