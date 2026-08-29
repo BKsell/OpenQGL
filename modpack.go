@@ -38,6 +38,32 @@ type ModrinthModpackFile struct {
 	FileSize  int64             `json:"fileSize"`
 }
 
+// isPathTraversal 检查路径是否包含路径遍历字符
+func isPathTraversal(path string) bool {
+	return strings.Contains(path, "..") || strings.Contains(path, "\x00")
+}
+
+// safeJoin 安全地拼接路径，防止路径遍历
+func safeJoin(baseDir, relPath string) (string, error) {
+	if isPathTraversal(relPath) {
+		return "", fmt.Errorf("路径遍历检测: %s", relPath)
+	}
+	destPath := filepath.Join(baseDir, relPath)
+	// 验证最终路径是否在 baseDir 内
+	absBase, err := filepath.Abs(baseDir)
+	if err != nil {
+		return "", err
+	}
+	absDest, err := filepath.Abs(destPath)
+	if err != nil {
+		return "", err
+	}
+	if !strings.HasPrefix(absDest, absBase+string(os.PathSeparator)) && absDest != absBase {
+		return "", fmt.Errorf("路径越界: %s", relPath)
+	}
+	return destPath, nil
+}
+
 // SearchModpacks 搜索 Modrinth 整合包
 func (a *App) SearchModpacks(query string, gameVersion string, page int, pageSize int) (*ModpackSearchResponse, error) {
 	if pageSize <= 0 {
@@ -46,7 +72,6 @@ func (a *App) SearchModpacks(query string, gameVersion string, page int, pageSiz
 	if page < 0 {
 		page = 0
 	}
-
 	params := url.Values{}
 	params.Set("query", query)
 	params.Set("limit", fmt.Sprintf("%d", pageSize))
@@ -55,18 +80,15 @@ func (a *App) SearchModpacks(query string, gameVersion string, page int, pageSiz
 
 	var facets []string
 	facets = append(facets, `["project_type:modpack"]`)
-
 	if gameVersion != "" {
 		facets = append(facets, fmt.Sprintf(`["versions:%s"]`, gameVersion))
 	}
-
 	if len(facets) > 0 {
 		facetsJSON := fmt.Sprintf("[%s]", strings.Join(facets, ","))
 		params.Set("facets", facetsJSON)
 	}
 
 	apiURL := fmt.Sprintf("%s/search?%s", modrinthBaseURL, params.Encode())
-
 	resp, err := http.Get(apiURL)
 	if err != nil {
 		return nil, fmt.Errorf("搜索整合包失败: %v", err)
@@ -104,7 +126,6 @@ func (a *App) SearchModpacks(query string, gameVersion string, page int, pageSiz
 // GetModpackVersions 获取整合包的版本列表
 func (a *App) GetModpackVersions(projectID string) ([]ModVersion, error) {
 	apiURL := fmt.Sprintf("%s/project/%s/version", modrinthBaseURL, projectID)
-
 	resp, err := http.Get(apiURL)
 	if err != nil {
 		return nil, fmt.Errorf("获取整合包版本失败: %v", err)
@@ -123,7 +144,6 @@ func (a *App) GetModpackVersions(projectID string) ([]ModVersion, error) {
 	if versions == nil {
 		versions = []ModVersion{}
 	}
-
 	return versions, nil
 }
 
@@ -131,7 +151,6 @@ func (a *App) GetModpackVersions(projectID string) ([]ModVersion, error) {
 func (a *App) AddModpackToDownloadList(versionID string, customName string) error {
 	// 获取版本详情以拿到下载链接
 	apiURL := fmt.Sprintf("%s/version/%s", modrinthBaseURL, versionID)
-
 	resp, err := http.Get(apiURL)
 	if err != nil {
 		return fmt.Errorf("获取整合包版本详情失败: %v", err)
@@ -199,7 +218,7 @@ func (a *App) installModpack(item *DownloadItem) error {
 
 	// 1. 下载整合包文件到临时目录
 	tmpDir := filepath.Join(os.TempDir(), "qgl-modpack")
-	if err := os.MkdirAll(tmpDir, 0755); err != nil {
+	if err := os.MkdirAll(tmpDir, 0700); err != nil {
 		return fmt.Errorf("创建临时目录失败: %v", err)
 	}
 	defer os.RemoveAll(tmpDir)
@@ -297,7 +316,6 @@ func (a *App) installModpack(item *DownloadItem) error {
 	}
 
 	// 4. 下载游戏版本（使用现有 DownloadVersion 逻辑 + 进度）
-	// 注意：传 mcVersion 作为 customName，因为 Install* 函数期望第一个参数是 MC 版本号
 	a.emitProgress("downloading", "下载游戏 "+mcVersion, 0, 0)
 	versionURL := ""
 	mcManifest, err2 := a.GetVersionManifest()
@@ -316,8 +334,7 @@ func (a *App) installModpack(item *DownloadItem) error {
 		return fmt.Errorf("下载游戏版本失败: %v", err)
 	}
 
-	// 5. 安装 loader（传 mcVersion，不是 versionName）
-	// 安装前记录 versions 目录，安装后找到 loader 创建的新版本文件夹
+	// 5. 安装 loader
 	versionsDir := filepath.Join(mcDir, "versions")
 	oldFolders := listVersionFolders(versionsDir)
 
@@ -340,7 +357,7 @@ func (a *App) installModpack(item *DownloadItem) error {
 		return fmt.Errorf("Quilt 加载器暂不支持，请手动安装")
 	}
 
-	// 找到 loader 创建的新版本文件夹（不重命名，直接使用）
+	// 找到 loader 创建的新版本文件夹
 	newFolders := listVersionFolders(versionsDir)
 	versionDir := ""
 	for _, f := range newFolders {
@@ -349,33 +366,27 @@ func (a *App) installModpack(item *DownloadItem) error {
 			break
 		}
 	}
-	// 如果没找到新文件夹，回退到 mcVersion 目录
 	if versionDir == "" {
 		versionDir = filepath.Join(versionsDir, mcVersion)
 	}
 
-	// 6. 下载所有 mod 文件（使用现有 downloadFile 逻辑 + 进度）
+	// 6. 下载所有 mod 文件
 	modsDir := filepath.Join(versionDir, "mods")
-	if err := os.MkdirAll(modsDir, 0755); err != nil {
+	if err := os.MkdirAll(modsDir, 0700); err != nil {
 		return fmt.Errorf("创建 mods 目录失败: %v", err)
 	}
 
 	totalFiles := len(manifest.Files)
 	for i, mf := range manifest.Files {
-		// 跳过非 mods 目录的文件（如 resourcepacks、shaderpacks 等也一并处理）
-		// 安全校验: 防止Zip Slip路径遍历
-		if strings.Contains(mf.Path, "..") || filepath.IsAbs(mf.Path) {
-			fmt.Printf("跳过非法路径(Zip Slip防护): %s\n", mf.Path)
+		// 安全检查：防止路径遍历
+		destPath, err := safeJoin(versionDir, mf.Path)
+		if err != nil {
+			fmt.Printf("跳过不安全的文件路径(Zip Slip防护): %s, 错误: %v\n", mf.Path, err)
 			continue
 		}
-		destPath := filepath.Join(versionDir, mf.Path)
-		// 二次校验: 确保最终路径在versionDir内
-		if !strings.HasPrefix(filepath.Clean(destPath)+string(filepath.Separator), filepath.Clean(versionDir)+string(filepath.Separator)) {
-			fmt.Printf("跳过越界路径(Zip Slip防护): %s\n", mf.Path)
-			continue
-		}
+
 		destDir := filepath.Dir(destPath)
-		if err := os.MkdirAll(destDir, 0755); err != nil {
+		if err := os.MkdirAll(destDir, 0700); err != nil {
 			continue
 		}
 
@@ -406,7 +417,7 @@ func (a *App) installModpack(item *DownloadItem) error {
 		}
 	}
 
-	// 7. 解压 overrides 目录到版本目录
+	// 7. 解压 overrides 目录到版本目录（Zip Slip 防护）
 	a.emitProgress("downloading", "解压覆写文件", 0, 0)
 	for _, f := range r.File {
 		// 处理 overrides/ 和 client-overrides/
@@ -418,25 +429,24 @@ func (a *App) installModpack(item *DownloadItem) error {
 		} else {
 			continue
 		}
+
 		if relPath == "" {
 			continue
 		}
 
-		// 安全校验: 防止Zip Slip路径遍历
-		if strings.Contains(relPath, "..") || filepath.IsAbs(relPath) {
+		// 安全检查：防止 Zip Slip 路径遍历
+		destPath, err := safeJoin(versionDir, relPath)
+		if err != nil {
+			fmt.Printf("跳过不安全的解压路径(Zip Slip防护): %s, 错误: %v\n", f.Name, err)
 			continue
 		}
-		destPath := filepath.Join(versionDir, relPath)
-		// 二次校验: 确保最终路径在versionDir内
-		if !strings.HasPrefix(filepath.Clean(destPath)+string(filepath.Separator), filepath.Clean(versionDir)+string(filepath.Separator)) {
-			continue
-		}
-		if f.FileInfo().IsDir() {
-			os.MkdirAll(destPath, 0755)
-			continue
-		}
-		os.MkdirAll(filepath.Dir(destPath), 0755)
 
+		if f.FileInfo().IsDir() {
+			os.MkdirAll(destPath, 0700)
+			continue
+		}
+
+		os.MkdirAll(filepath.Dir(destPath), 0700)
 		rc, err := f.Open()
 		if err != nil {
 			continue
@@ -453,7 +463,7 @@ func (a *App) installModpack(item *DownloadItem) error {
 
 	// 8. 写入 QGL/config.json 标记为整合包
 	configDir := filepath.Join(versionDir, "QGL")
-	if err := os.MkdirAll(configDir, 0755); err == nil {
+	if err := os.MkdirAll(configDir, 0700); err == nil {
 		loaderType := ""
 		if fabricVersion != "" {
 			loaderType = "fabric"
@@ -469,7 +479,7 @@ func (a *App) installModpack(item *DownloadItem) error {
 			"loader":  loaderType,
 		}
 		configData, _ := json.MarshalIndent(config, "", "  ")
-		os.WriteFile(filepath.Join(configDir, "config.json"), configData, 0644)
+		os.WriteFile(filepath.Join(configDir, "config.json"), configData, 0600)
 	}
 
 	return nil
