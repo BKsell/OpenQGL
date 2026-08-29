@@ -223,7 +223,8 @@ func (a *App) downloadFile(url string, destPath string, reportProgress bool) err
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.7680.216 CosyBrowser/146.3.1")
 
-	resp, err := http.DefaultClient.Do(req)
+	client := &http.Client{Timeout: 120 * time.Second}
+	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("下载失败 %s: %v", url, err)
 	}
@@ -280,8 +281,9 @@ func (a *App) GetVersionManifest() ([]MCVersion, error) {
 	var body []byte
 	var lastErr error
 
+	httpClient := &http.Client{Timeout: 30 * time.Second}
 	for _, u := range urls {
-		resp, err := http.Get(u)
+		resp, err := httpClient.Get(u)
 		if err != nil {
 			lastErr = err
 			continue
