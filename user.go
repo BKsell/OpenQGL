@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
+	"golang.org/x/crypto/bcrypt"
 )
 
 // UserType 用户类型
@@ -23,6 +24,9 @@ const (
 	UserTypeExternal UserType = "external" // 外置用户（Yggdrasil）
 )
 
+// 安全加固: bcrypt 成本因子
+const bcryptCost = 12
+
 // UserInfo 用户信息
 type UserInfo struct {
 	Username    string   `json:"username"`
@@ -34,37 +38,73 @@ type UserInfo struct {
 
 // ExternalAuthData 外置登录认证数据
 type ExternalAuthData struct {
-	ServerURL    string `json:"serverUrl"`    // Yggdrasil API 服务器地址（如 https://littleskin.cn/api/yggdrasil）
-	AccessToken  string `json:"accessToken"`  // 访问令牌
-	ClientToken  string `json:"clientToken"`  // 客户端令牌
-	UUID         string `json:"uuid"`         // 玩家 UUID
-	Username     string `json:"username"`     // 游戏内用户名
-	Password     string `json:"password"`     // 登录密码（加密存储，用于刷新令牌）
-	ServerName   string `json:"serverName"`   // 服务器显示名称
+	ServerURL   string `json:"serverUrl"`   // Yggdrasil API 服务器地址（如 https://littleskin.cn/api/yggdrasil）
+	AccessToken string `json:"accessToken"` // 访问令牌
+	ClientToken string `json:"clientToken"` // 客户端令牌
+	UUID        string `json:"uuid"`        // 玩家 UUID
+	Username    string `json:"username"`    // 游戏内用户名
+	Password    string `json:"password"`    // 登录密码（加密存储，用于刷新令牌）
+	ServerName  string `json:"serverName"`  // 服务器显示名称
 }
 
 // PasswordData 密码数据
 type PasswordData struct {
-	PasswordMD5 string `json:"passwordMD5"`
+	PasswordHash string `json:"passwordHash"`
 }
 
 // UserConfig 用户配置（每个用户独立）
 type UserConfig struct {
-	VersionIsolation         bool   `json:"versionIsolation"`
-	SelectedVersion          string `json:"selectedVersion"`
-	ThemeColor               string `json:"themeColor"`               // 主题色: blue, cyan, pink, purple, orange, yellow, green
-	BackgroundImage          string `json:"backgroundImage"`           // 自定义背景图片路径，留空则使用默认
-	ShowExportLaunchCommand  bool   `json:"showExportLaunchCommand"`   // 显示导出启动命令按钮
+	VersionIsolation        bool   `json:"versionIsolation"`
+	SelectedVersion         string `json:"selectedVersion"`
+	ThemeColor              string `json:"themeColor"`              // 主题色: blue, cyan, pink, purple, orange, yellow, green
+	BackgroundImage         string `json:"backgroundImage"`         // 自定义背景图片路径，留空则使用默认
+	ShowExportLaunchCommand bool   `json:"showExportLaunchCommand"` // 显示导出启动命令按钮
 }
 
 // GlobalConfig 全局配置
 type GlobalConfig struct {
-	CurrentUser      string `json:"currentUser"`
-	JavaPath         string `json:"javaPath"`
-	MaxMemory        int    `json:"maxMemory"`
-	MinMemory        int    `json:"minMemory"`
-	MinecraftDir     string `json:"minecraftDir"`     // 自定义 .minecraft 目录，留空则使用默认路径
-	PortableMode     bool   `json:"portableMode"`     // 便携版模式：优先使用 QGL\pe\java\bin\java.exe
+	CurrentUser  string `json:"currentUser"`
+	JavaPath     string `json:"javaPath"`
+	MaxMemory    int    `json:"maxMemory"`
+	MinMemory    int    `json:"minMemory"`
+	MinecraftDir string `json:"minecraftDir"` // 自定义 .minecraft 目录，留空则使用默认路径
+	PortableMode bool   `json:"portableMode"` // 便携版模式：优先使用 QGL\pe\java\bin\java.exe
+}
+
+// validateUsername 安全加固: 校验用户名，防止路径遍历
+func validateUsername(username string) error {
+	if username == "" {
+		return fmt.Errorf("用户名不能为空")
+	}
+	if len(username) > 64 {
+		return fmt.Errorf("用户名过长")
+	}
+	// 禁止路径遍历字符
+	if strings.Contains(username, "..") || strings.Contains(username, "/") || strings.Contains(username, "\\") {
+		return fmt.Errorf("用户名包含非法字符")
+	}
+	// 禁止控制字符
+	for _, c := range username {
+		if c < 32 || c == 127 {
+			return fmt.Errorf("用户名包含控制字符")
+		}
+	}
+	return nil
+}
+
+// hashPassword 安全加固: 使用 bcrypt 哈希密码
+func hashPassword(password string) (string, error) {
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcryptCost)
+	if err != nil {
+		return "", err
+	}
+	return string(hash), nil
+}
+
+// verifyPassword 安全加固: 使用 bcrypt 验证密码
+func verifyPassword(password, hash string) bool {
+	err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(password))
+	return err == nil
 }
 
 func (a *App) GetAppDir() string {
@@ -125,25 +165,6 @@ func (a *App) GetMinecraftDir() string {
 	return filepath.Join(a.GetQGLDir(), ".minecraft")
 }
 
-
-// isValidUsername 验证用户名是否合法（防止路径遍历）
-func isValidUsername(username string) bool {
-	if username == "" || len(username) > 64 {
-		return false
-	}
-	// 禁止路径遍历字符
-	if strings.Contains(username, "..") || strings.Contains(username, "/") || strings.Contains(username, "\\") {
-		return false
-	}
-	// 只允许字母、数字、下划线、中文、点、减号
-	for _, r := range username {
-		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '.' || r == '-' || r > 127) {
-			return false
-		}
-	}
-	return true
-}
-
 func (a *App) CheckFirstRun() bool {
 	usersDir := a.GetUsersDir()
 	entries, err := os.ReadDir(usersDir)
@@ -160,7 +181,6 @@ func (a *App) CheckFirstRun() bool {
 
 // GetUserType 获取用户类型
 func (a *App) GetUserType(username string) UserType {
-	// 安全校验: 防止用户名路径遍历
 	if err := validateUsername(username); err != nil {
 		return UserTypeOffline
 	}
@@ -181,7 +201,6 @@ func (a *App) GetUserType(username string) UserType {
 
 // saveUserType 保存用户类型
 func (a *App) saveUserType(username string, userType UserType) error {
-	// 安全校验: 防止用户名路径遍历
 	if err := validateUsername(username); err != nil {
 		return err
 	}
@@ -205,13 +224,15 @@ func (a *App) GetUsers() ([]UserInfo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("读取用户目录失败: %w", err)
 	}
-
 	var users []UserInfo
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
 		}
 		username := entry.Name()
+		if err := validateUsername(username); err != nil {
+			continue
+		}
 		hasPwd, err := a.UserHasPassword(username)
 		if err != nil {
 			hasPwd = false
@@ -241,6 +262,9 @@ func (a *App) GetUsers() ([]UserInfo, error) {
 
 // CreateGuestUser 创建访客用户（需要安全密码）
 func (a *App) CreateGuestUser(username string, securityPassword string) error {
+	if err := validateUsername(username); err != nil {
+		return err
+	}
 	if securityPassword == "" {
 		return fmt.Errorf("访客用户必须设置安全密码")
 	}
@@ -249,14 +273,20 @@ func (a *App) CreateGuestUser(username string, securityPassword string) error {
 	}
 	// 访客用户的密码文件存储安全密码
 	userDir := filepath.Join(a.GetUsersDir(), username)
+	// 安全加固: 使用 bcrypt 哈希密码
+	hash, err := hashPassword(securityPassword)
+	if err != nil {
+		return fmt.Errorf("密码哈希失败: %w", err)
+	}
 	pwdData := PasswordData{
-		PasswordMD5: umfsHash([]byte(securityPassword)),
+		PasswordHash: hash,
 	}
 	pwdBytes, err := json.MarshalIndent(pwdData, "", "  ")
 	if err != nil {
 		return fmt.Errorf("序列化密码数据失败: %w", err)
 	}
 	pwdPath := filepath.Join(userDir, "password.json")
+	// 安全加固: 密码文件权限 0600
 	if err := os.WriteFile(pwdPath, pwdBytes, 0600); err != nil {
 		return fmt.Errorf("写入密码文件失败: %w", err)
 	}
@@ -266,6 +296,9 @@ func (a *App) CreateGuestUser(username string, securityPassword string) error {
 
 // CreateOfflineUser 创建离线用户（可选密码）
 func (a *App) CreateOfflineUser(username string, password string) error {
+	if err := validateUsername(username); err != nil {
+		return err
+	}
 	if err := a.CreateUser(username, password); err != nil {
 		return err
 	}
@@ -274,6 +307,9 @@ func (a *App) CreateOfflineUser(username string, password string) error {
 
 // CreatePremiumUser 创建正版用户
 func (a *App) CreatePremiumUser(username string, authData MSAuthData) error {
+	if err := validateUsername(username); err != nil {
+		return err
+	}
 	// 创建用户目录和基础配置（不设置密码）
 	if err := a.CreateUser(username, ""); err != nil {
 		return err
@@ -288,6 +324,9 @@ func (a *App) CreatePremiumUser(username string, authData MSAuthData) error {
 
 // CreateExternalUser 创建外置用户
 func (a *App) CreateExternalUser(username string, authData ExternalAuthData) error {
+	if err := validateUsername(username); err != nil {
+		return err
+	}
 	if err := a.CreateUser(username, ""); err != nil {
 		return err
 	}
@@ -299,7 +338,6 @@ func (a *App) CreateExternalUser(username string, authData ExternalAuthData) err
 
 // SaveExternalAuthData 保存外置登录认证数据（加密存储，和正版账号一样）
 func (a *App) SaveExternalAuthData(username string, authData *ExternalAuthData) error {
-	// 安全校验: 防止用户名路径遍历
 	if err := validateUsername(username); err != nil {
 		return err
 	}
@@ -307,7 +345,6 @@ func (a *App) SaveExternalAuthData(username string, authData *ExternalAuthData) 
 	if err := os.MkdirAll(userDir, 0755); err != nil {
 		return fmt.Errorf("创建用户目录失败: %w", err)
 	}
-
 	// 构建需要加密的数据（除 serverName 以外的敏感字段）
 	encryptPayload := map[string]interface{}{
 		"serverUrl":   authData.ServerURL,
@@ -321,30 +358,27 @@ func (a *App) SaveExternalAuthData(username string, authData *ExternalAuthData) 
 	if err != nil {
 		return fmt.Errorf("序列化外置认证数据失败: %w", err)
 	}
-
 	// 加密
 	key := getEncryptionKey(username)
 	encrypted, err := aesGCMEncrypt(payloadBytes, key)
 	if err != nil {
 		return fmt.Errorf("加密外置认证数据失败: %w", err)
 	}
-
 	// 构建加密后的存储格式
 	encData := ExternalAuthDataEncrypted{
 		ServerName: authData.ServerName,
 		Data:       encrypted,
 	}
-
 	data, err := json.MarshalIndent(encData, "", "  ")
 	if err != nil {
 		return fmt.Errorf("序列化加密数据失败: %w", err)
 	}
-	return os.WriteFile(filepath.Join(userDir, "external_auth.json"), data, 0644)
+	// 安全加固: 认证数据文件权限 0600
+	return os.WriteFile(filepath.Join(userDir, "external_auth.json"), data, 0600)
 }
 
 // GetExternalAuthData 获取外置登录认证数据（解密读取）
 func (a *App) GetExternalAuthData(username string) (*ExternalAuthData, error) {
-	// 安全校验: 防止用户名路径遍历
 	if err := validateUsername(username); err != nil {
 		return nil, err
 	}
@@ -353,7 +387,6 @@ func (a *App) GetExternalAuthData(username string) (*ExternalAuthData, error) {
 	if err != nil {
 		return nil, fmt.Errorf("读取外置认证数据失败: %w", err)
 	}
-
 	// 先尝试按加密格式解析
 	var encData ExternalAuthDataEncrypted
 	if err := json.Unmarshal(data, &encData); err == nil && encData.Data != "" {
@@ -370,7 +403,6 @@ func (a *App) GetExternalAuthData(username string) (*ExternalAuthData, error) {
 		authData.ServerName = encData.ServerName // 服务器名称不加密
 		return &authData, nil
 	}
-
 	// 兼容旧版明文格式
 	var authData ExternalAuthData
 	if err := json.Unmarshal(data, &authData); err != nil {
@@ -381,28 +413,32 @@ func (a *App) GetExternalAuthData(username string) (*ExternalAuthData, error) {
 
 // CreateUser 创建用户基础方法
 func (a *App) CreateUser(username string, password string) error {
-	if !isValidUsername(username) {
-		return fmt.Errorf("用户名不合法")
+	if err := validateUsername(username); err != nil {
+		return err
 	}
 	userDir := filepath.Join(a.GetUsersDir(), username)
 	if err := os.MkdirAll(userDir, 0755); err != nil {
 		return fmt.Errorf("创建用户目录失败: %w", err)
 	}
-
 	if password != "" {
+		// 安全加固: 使用 bcrypt 哈希密码
+		hash, err := hashPassword(password)
+		if err != nil {
+			return fmt.Errorf("密码哈希失败: %w", err)
+		}
 		pwdData := PasswordData{
-			PasswordMD5: umfsHash([]byte(password)),
+			PasswordHash: hash,
 		}
 		pwdBytes, err := json.MarshalIndent(pwdData, "", "  ")
 		if err != nil {
 			return fmt.Errorf("序列化密码数据失败: %w", err)
 		}
 		pwdPath := filepath.Join(userDir, "password.json")
+		// 安全加固: 密码文件权限 0600
 		if err := os.WriteFile(pwdPath, pwdBytes, 0600); err != nil {
 			return fmt.Errorf("写入密码文件失败: %w", err)
 		}
 	}
-
 	defaultConfig := UserConfig{
 		VersionIsolation: false,
 		SelectedVersion:  "",
@@ -412,22 +448,22 @@ func (a *App) CreateUser(username string, password string) error {
 		return fmt.Errorf("序列化用户配置失败: %w", err)
 	}
 	configPath := filepath.Join(userDir, "config.json")
-	if err := os.WriteFile(configPath, configBytes, 0644); err != nil {
+	if err := os.WriteFile(configPath, configBytes, 0600); err != nil {
 		return fmt.Errorf("写入用户配置文件失败: %w", err)
 	}
-
 	return nil
 }
 
 func (a *App) LoginUser(username string, password string) error {
+	if err := validateUsername(username); err != nil {
+		return err
+	}
 	userType := a.GetUserType(username)
-
 	if userType == UserTypeGuest {
 		// 访客用户：不需要密码即可进入，但进入后处于锁定状态
 		a.guestUnlocked = false
 		return a.SetCurrentUser(username)
 	}
-
 	if userType == UserTypePremium {
 		// 正版用户：刷新令牌，如果刷新失败则需要重新登录
 		if err := a.RefreshMicrosoftToken(username); err != nil {
@@ -435,7 +471,6 @@ func (a *App) LoginUser(username string, password string) error {
 		}
 		return a.SetCurrentUser(username)
 	}
-
 	if userType == UserTypeExternal {
 		// 外置用户：刷新令牌
 		if err := a.RefreshExternalToken(username); err != nil {
@@ -443,13 +478,11 @@ func (a *App) LoginUser(username string, password string) error {
 		}
 		return a.SetCurrentUser(username)
 	}
-
 	// 离线用户：正常密码验证
 	hasPwd, err := a.UserHasPassword(username)
 	if err != nil {
 		return fmt.Errorf("检查用户密码失败: %w", err)
 	}
-
 	if hasPwd {
 		if password == "" {
 			return fmt.Errorf("该用户已设置密码，请输入密码")
@@ -464,8 +497,8 @@ func (a *App) LoginUser(username string, password string) error {
 		if err := json.Unmarshal(pwdBytes, &pwdData); err != nil {
 			return fmt.Errorf("解析密码文件失败: %w", err)
 		}
-		inputUMFS := umfsHash([]byte(password))
-		if inputUMFS != pwdData.PasswordMD5 {
+		// 安全加固: 使用 bcrypt 验证密码
+		if !verifyPassword(password, pwdData.PasswordHash) {
 			return fmt.Errorf("密码错误")
 		}
 	} else {
@@ -473,7 +506,6 @@ func (a *App) LoginUser(username string, password string) error {
 			return fmt.Errorf("该用户未设置密码，无需输入密码")
 		}
 	}
-
 	return a.SetCurrentUser(username)
 }
 
@@ -489,7 +521,6 @@ func (a *App) UnlockGuest(securityPassword string) error {
 	if securityPassword == "" {
 		return fmt.Errorf("请输入安全密码")
 	}
-
 	userDir := filepath.Join(a.GetUsersDir(), currentUser.Username)
 	pwdPath := filepath.Join(userDir, "password.json")
 	pwdBytes, err := os.ReadFile(pwdPath)
@@ -500,11 +531,10 @@ func (a *App) UnlockGuest(securityPassword string) error {
 	if err := json.Unmarshal(pwdBytes, &pwdData); err != nil {
 		return fmt.Errorf("解析安全密码文件失败: %w", err)
 	}
-	inputUMFS := umfsHash([]byte(securityPassword))
-	if inputUMFS != pwdData.PasswordMD5 {
+	// 安全加固: 使用 bcrypt 验证密码
+	if !verifyPassword(securityPassword, pwdData.PasswordHash) {
 		return fmt.Errorf("安全密码错误")
 	}
-
 	a.guestUnlocked = true
 	return nil
 }
@@ -527,6 +557,9 @@ func (a *App) LockGuest() {
 }
 
 func (a *App) SetCurrentUser(username string) error {
+	if err := validateUsername(username); err != nil {
+		return err
+	}
 	config, err := a.GetGlobalConfig()
 	if err != nil {
 		config = &GlobalConfig{}
@@ -542,6 +575,9 @@ func (a *App) GetCurrentUser() (UserInfo, error) {
 	}
 	if config.CurrentUser == "" {
 		return UserInfo{}, fmt.Errorf("未设置当前用户")
+	}
+	if err := validateUsername(config.CurrentUser); err != nil {
+		return UserInfo{}, fmt.Errorf("无效的用户名")
 	}
 	hasPwd, err := a.UserHasPassword(config.CurrentUser)
 	if err != nil {
@@ -561,7 +597,6 @@ func (a *App) GetCurrentUser() (UserInfo, error) {
 }
 
 func (a *App) UserHasPassword(username string) (bool, error) {
-	// 安全校验: 防止用户名路径遍历
 	if err := validateUsername(username); err != nil {
 		return false, err
 	}
@@ -585,7 +620,7 @@ func (a *App) UserHasPassword(username string) (bool, error) {
 	if err := json.Unmarshal(pwdBytes, &pwdData); err != nil {
 		return false, nil
 	}
-	return pwdData.PasswordMD5 != "", nil
+	return pwdData.PasswordHash != "", nil
 }
 
 func (a *App) GetGlobalConfig() (*GlobalConfig, error) {
@@ -614,14 +649,14 @@ func (a *App) SaveGlobalConfig(config *GlobalConfig) error {
 		return fmt.Errorf("序列化全局配置失败: %w", err)
 	}
 	configPath := filepath.Join(qglDir, "config.json")
-	if err := os.WriteFile(configPath, data, 0644); err != nil {
+	// 安全加固: 配置文件权限 0600
+	if err := os.WriteFile(configPath, data, 0600); err != nil {
 		return fmt.Errorf("写入全局配置失败: %w", err)
 	}
 	return nil
 }
 
 func (a *App) GetUserConfig(username string) (*UserConfig, error) {
-	// 安全校验: 防止用户名路径遍历
 	if err := validateUsername(username); err != nil {
 		return nil, err
 	}
@@ -641,7 +676,6 @@ func (a *App) GetUserConfig(username string) (*UserConfig, error) {
 }
 
 func (a *App) SaveUserConfig(username string, config *UserConfig) error {
-	// 安全校验: 防止用户名路径遍历
 	if err := validateUsername(username); err != nil {
 		return err
 	}
@@ -654,7 +688,8 @@ func (a *App) SaveUserConfig(username string, config *UserConfig) error {
 		return fmt.Errorf("序列化用户配置失败: %w", err)
 	}
 	configPath := filepath.Join(userDir, "config.json")
-	if err := os.WriteFile(configPath, data, 0644); err != nil {
+	// 安全加固: 用户配置文件权限 0600
+	if err := os.WriteFile(configPath, data, 0600); err != nil {
 		return fmt.Errorf("写入用户配置失败: %w", err)
 	}
 	return nil
@@ -843,21 +878,19 @@ func (a *App) GetBingDailyImage() (string, error) {
 		return "", fmt.Errorf("创建缓存目录失败: %w", err)
 	}
 	cachePath := filepath.Join(cacheDir, "bing_daily.jpg")
-
 	// 请求 Bing API（会重定向到图片 URL）
 	client := &http.Client{
+		Timeout: 30 * time.Second,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			// 不自动跟随重定向，我们需要获取最终的图片 URL
 			return http.ErrUseLastResponse
 		},
 	}
-
 	resp, err := client.Get("https://bing.biturl.top/?resolution=1920&format=image&index=0&mkt=zh-CN")
 	if err != nil {
 		return "", fmt.Errorf("请求 Bing API 失败: %w", err)
 	}
 	defer resp.Body.Close()
-
 	// 获取最终图片 URL（从 Location 头或响应体中）
 	imageURL := ""
 	if resp.StatusCode == 302 || resp.StatusCode == 301 || resp.StatusCode == 307 || resp.StatusCode == 308 {
@@ -868,40 +901,38 @@ func (a *App) GetBingDailyImage() (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("读取响应失败: %w", err)
 		}
-		if err := os.WriteFile(cachePath, data, 0644); err != nil {
+		if err := os.WriteFile(cachePath, data, 0600); err != nil {
 			return "", fmt.Errorf("缓存图片失败: %w", err)
 		}
 		return a.fileToDataURL(cachePath)
 	}
-
 	if imageURL == "" {
 		return "", fmt.Errorf("未获取到图片地址，状态码: %d", resp.StatusCode)
 	}
-
+	// 安全加固: 校验图片 URL 协议
+	if !strings.HasPrefix(imageURL, "http://") && !strings.HasPrefix(imageURL, "https://") {
+		return "", fmt.Errorf("无效的图片 URL 协议")
+	}
 	// 下载实际图片
-	imgResp, err := http.Get(imageURL)
+	imgClient := &http.Client{Timeout: 60 * time.Second}
+	imgResp, err := imgClient.Get(imageURL)
 	if err != nil {
 		return "", fmt.Errorf("下载图片失败: %w", err)
 	}
 	defer imgResp.Body.Close()
-
 	if imgResp.StatusCode != 200 {
 		return "", fmt.Errorf("下载失败，状态码: %d", imgResp.StatusCode)
 	}
-
 	data, err := io.ReadAll(imgResp.Body)
 	if err != nil {
 		return "", fmt.Errorf("读取图片数据失败: %w", err)
 	}
-
 	// 缓存到本地
-	if err := os.WriteFile(cachePath, data, 0644); err != nil {
+	if err := os.WriteFile(cachePath, data, 0600); err != nil {
 		return "", fmt.Errorf("缓存图片失败: %w", err)
 	}
-
 	// 设置为当前背景
 	a.SetBackgroundImage(cachePath)
-
 	return a.fileToDataURL(cachePath)
 }
 
@@ -916,6 +947,14 @@ func (a *App) GetCachedBingImage() string {
 }
 
 func (a *App) fileToDataURL(path string) (string, error) {
+	// 安全加固: 限制文件大小，防止内存溢出
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", err
+	}
+	if info.Size() > 50*1024*1024 { // 50MB 限制
+		return "", fmt.Errorf("文件过大")
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return "", err
