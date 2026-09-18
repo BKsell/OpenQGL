@@ -207,7 +207,7 @@ func (a *App) emitProgress(status string, currentFile string, downloaded, total 
 // downloadFile 下载文件到指定路径
 func (a *App) downloadFile(url string, destPath string, reportProgress bool) error {
 	dir := filepath.Dir(destPath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0700); err != nil {
 		return fmt.Errorf("创建目录失败 %s: %v", dir, err)
 	}
 
@@ -497,7 +497,7 @@ func (a *App) scanVersionFolder(versionFolder string, folderName string) Install
 
 	// 3. 创建 QGL/config.json
 	configDir := filepath.Join(versionFolder, "QGL")
-	if err := os.MkdirAll(configDir, 0755); err == nil {
+	if err := os.MkdirAll(configDir, 0700); err == nil {
 		config := map[string]string{
 			"type":    versionType,
 			"name":    "",
@@ -505,7 +505,7 @@ func (a *App) scanVersionFolder(versionFolder string, folderName string) Install
 			"loader":  loader,
 		}
 		configData, _ := json.MarshalIndent(config, "", "  ")
-		os.WriteFile(filepath.Join(configDir, "config.json"), configData, 0644)
+		os.WriteFile(filepath.Join(configDir, "config.json"), configData, 0600)
 	}
 
 	return info
@@ -810,7 +810,7 @@ func (a *App) downloadJavaItem(majorVer int, url string) error {
 	// 下载文件
 	a.emitProgress("downloading", target.FileName, 0, 0)
 
-	resp, err := http.Get(url)
+	resp, err := safeHTTPClient().Get(url)
 	if err != nil {
 		return fmt.Errorf("下载失败: %v", err)
 	}
@@ -870,7 +870,7 @@ func (a *App) DownloadVersion(versionID string, versionURL string, customName st
 	versionDir := filepath.Join(mcDir, "versions", customName)
 
 	// 1. 创建版本目录
-	if err := os.MkdirAll(versionDir, 0755); err != nil {
+	if err := os.MkdirAll(versionDir, 0700); err != nil {
 		return fmt.Errorf("创建版本目录失败: %v", err)
 	}
 
@@ -984,7 +984,7 @@ func (a *App) DownloadVersion(versionID string, versionURL string, customName st
 	// 6. 解压 natives 到版本目录下的 natives 文件夹
 	a.emitProgress("extracting", "natives", 0, 0)
 	nativesDir := filepath.Join(versionDir, customName+"-natives")
-	if err := os.MkdirAll(nativesDir, 0755); err != nil {
+	if err := os.MkdirAll(nativesDir, 0700); err != nil {
 		return fmt.Errorf("创建 natives 目录失败: %v", err)
 	}
 	a.extractNativesFromJSON(mcDir, nativesDir, &versionJSON)
@@ -1121,7 +1121,7 @@ func (a *App) fixMissingLibraries(mcDir string, versionJSON *VersionJSON) {
 			os.Remove(libPath)
 		}
 
-		os.MkdirAll(filepath.Dir(libPath), 0755)
+		os.MkdirAll(filepath.Dir(libPath), 0700)
 		if a.downloadFromMirrors(urls, libPath) {
 			downloadedCount++
 			a.writeLog("补全库文件: %s", filepath.Base(libPath))
@@ -1146,7 +1146,7 @@ func (a *App) fixMissingLibraries(mcDir string, versionJSON *VersionJSON) {
 
 	if !a.checkFileHash(versionJar, jarSHA1) {
 		if versionJSON.Downloads != nil && versionJSON.Downloads.Client != nil && versionJSON.Downloads.Client.URL != "" {
-			os.MkdirAll(filepath.Dir(versionJar), 0755)
+			os.MkdirAll(filepath.Dir(versionJar), 0700)
 			url := versionJSON.Downloads.Client.URL
 			urls := a.getMirrorURLs(url)
 			// 替换特殊路径
@@ -1266,7 +1266,7 @@ func (a *App) downloadFromMirrors(urls []string, destPath string) bool {
 	for _, url := range urls {
 		// 删除可能存在的损坏文件
 		os.Remove(destPath)
-		os.MkdirAll(filepath.Dir(destPath), 0755)
+		os.MkdirAll(filepath.Dir(destPath), 0700)
 
 		if err := a.downloadFile(url, destPath, false); err != nil {
 			a.writeLog("下载失败 [%s]: %v", url, err)
@@ -1294,7 +1294,7 @@ func (a *App) fixAssetsIndex(mcDir string, versionJSON *VersionJSON) {
 
 	a.writeLog("资源索引文件缺失，正在下载: %s", versionJSON.AssetIndex.ID)
 
-	os.MkdirAll(assetIndexDir, 0755)
+	os.MkdirAll(assetIndexDir, 0700)
 
 	url := versionJSON.AssetIndex.URL
 	urls := a.getMirrorURLs(url)
@@ -1348,7 +1348,7 @@ func (a *App) fixMissingAssets(mcDir string, assetIndexPath string) {
 		originalURL := fmt.Sprintf("https://resources.download.minecraft.net/%s/%s", obj.Hash[:2], obj.Hash)
 		urls := a.getMirrorURLs(originalURL)
 
-		os.MkdirAll(filepath.Dir(objPath), 0755)
+		os.MkdirAll(filepath.Dir(objPath), 0700)
 		if a.downloadFromMirrors(urls, objPath) {
 			downloadedCount++
 		}
@@ -1453,7 +1453,7 @@ func extractNatives(jarPath string, destDir string) (int, error) {
 // 增强：支持 natives-windows-64 键、处理损坏的 jar（参考 PCL 的 McLaunchNatives）
 func (a *App) extractNativesFromJSON(mcDir string, nativesDir string, versionJSON *VersionJSON) {
 	// 确保 natives 目录存在
-	os.MkdirAll(nativesDir, 0755)
+	os.MkdirAll(nativesDir, 0700)
 
 	// 记录所有提取的文件路径，用于清理多余文件（参考 PCL）
 	var allExtractedFiles []string
@@ -1556,7 +1556,7 @@ func (a *App) setGameLanguage(gameDir string, versionID string) {
 	if err != nil {
 		// 文件不存在，创建新的
 		content := fmt.Sprintf("lang:%s\n", requiredLang)
-		if err := os.WriteFile(optionsPath, []byte(content), 0644); err != nil {
+		if err := os.WriteFile(optionsPath, []byte(content), 0600); err != nil {
 			a.writeLog("创建 options.txt 失败: %v", err)
 		} else {
 			a.writeLog("已创建 options.txt，设置语言为 %s", requiredLang)
@@ -1599,7 +1599,7 @@ func (a *App) setGameLanguage(gameDir string, versionID string) {
 
 	// 写回文件
 	newData := strings.Join(lines, "\n")
-	if err := os.WriteFile(optionsPath, []byte(newData), 0644); err != nil {
+	if err := os.WriteFile(optionsPath, []byte(newData), 0600); err != nil {
 		a.writeLog("写入 options.txt 失败: %v", err)
 	} else {
 		a.writeLog("已将游戏语言设置为 %s", requiredLang)
@@ -1644,7 +1644,7 @@ func (a *App) ensureNativesForLoader(mcDir string, versionID string, versionDir 
 
 // copyDirContents 复制目录中的所有文件到目标目录
 func copyDirContents(srcDir string, dstDir string) error {
-	os.MkdirAll(dstDir, 0755)
+	os.MkdirAll(dstDir, 0700)
 
 	entries, err := os.ReadDir(srcDir)
 	if err != nil {
@@ -1662,7 +1662,7 @@ func copyDirContents(srcDir string, dstDir string) error {
 		if err != nil {
 			continue
 		}
-		os.WriteFile(dstPath, data, 0644)
+		os.WriteFile(dstPath, data, 0600)
 	}
 
 	return nil
@@ -1768,7 +1768,7 @@ func (a *App) LaunchGame(versionID string) error {
 	}
 
 	// 4. 确保游戏目录存在
-	if err := os.MkdirAll(gameDir, 0755); err != nil {
+	if err := os.MkdirAll(gameDir, 0700); err != nil {
 		return fmt.Errorf("创建游戏目录失败: %v", err)
 	}
 
@@ -1779,7 +1779,7 @@ func (a *App) LaunchGame(versionID string) error {
 
 	// 6. 提取 natives（从合并后的完整 libraries 列表中提取）
 	nativesDir := filepath.Join(versionDir, versionID+"-natives")
-	if err := os.MkdirAll(nativesDir, 0755); err != nil {
+	if err := os.MkdirAll(nativesDir, 0700); err != nil {
 		return fmt.Errorf("创建 natives 目录失败: %v", err)
 	}
 	a.extractNativesFromJSON(mcDir, nativesDir, versionJSON)
@@ -2262,7 +2262,7 @@ func (a *App) GetLaunchCommand(versionID string) (string, error) {
 
 	// 6. 提取 natives
 	nativesDir := filepath.Join(versionDir, versionID+"-natives")
-	if err := os.MkdirAll(nativesDir, 0755); err != nil {
+	if err := os.MkdirAll(nativesDir, 0700); err != nil {
 		return "", fmt.Errorf("创建 natives 目录失败: %v", err)
 	}
 	a.extractNativesFromJSON(mcDir, nativesDir, versionJSON)
