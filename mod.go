@@ -30,9 +30,21 @@ func isPathInDir(path, dir string) bool {
 	return !strings.HasPrefix(rel, "..")
 }
 
+// isValidModID 验证 Mod ID 格式，防止 URL 注入
+func isValidModID(id string) bool {
+	if len(id) > 100 {
+		return false
+	}
+	for _, r := range id {
+		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_') {
+			return false
+		}
+	}
+	return true
+}
+
 // ===== Modrinth API 相关结构体 =====
 
-// ModSearchResult Mod 搜索结果
 type ModSearchResult struct {
 	ProjectID    string   `json:"project_id"`
 	Slug         string   `json:"slug"`
@@ -43,11 +55,10 @@ type ModSearchResult struct {
 	ClientSide   string   `json:"client_side"`
 	ServerSide   string   `json:"server_side"`
 	Categories   []string `json:"categories"`
-	GameVersions []string `json:"versions"`  // Modrinth API 字段名为 "versions"
+	GameVersions []string `json:"versions"`
 	Loaders      []string `json:"loaders"`
 }
 
-// ModSearchResponse Mod 搜索响应
 type ModSearchResponse struct {
 	Hits      []ModSearchResult `json:"hits"`
 	TotalHits int               `json:"total_hits"`
@@ -55,7 +66,6 @@ type ModSearchResponse struct {
 	Limit     int               `json:"limit"`
 }
 
-// ModVersion Mod 版本信息
 type ModVersion struct {
 	ID            string          `json:"id"`
 	ProjectID     string          `json:"project_id"`
@@ -68,7 +78,6 @@ type ModVersion struct {
 	Changelog     string          `json:"changelog"`
 }
 
-// ModFile Mod 文件信息
 type ModFile struct {
 	Filename string `json:"filename"`
 	URL      string `json:"url"`
@@ -77,14 +86,12 @@ type ModFile struct {
 	SHA1     string `json:"sha1"`
 }
 
-// ModDependency Mod 依赖
 type ModDependency struct {
 	ProjectID      string `json:"project_id"`
 	VersionID      string `json:"version_id"`
 	DependencyType string `json:"dependency_type"`
 }
 
-// ModDetail Mod 详情
 type ModDetail struct {
 	ID           string   `json:"id"`
 	Slug         string   `json:"slug"`
@@ -101,7 +108,6 @@ type ModDetail struct {
 	ProjectType  string   `json:"project_type"`
 }
 
-// ModDependencyInfo 前端显示用的依赖信息
 type ModDependencyInfo struct {
 	ProjectID      string `json:"projectId"`
 	ProjectName    string `json:"projectName"`
@@ -109,14 +115,12 @@ type ModDependencyInfo struct {
 	DependencyType string `json:"dependencyType"`
 }
 
-// ModCategory Mod 分类
 type ModCategory struct {
 	Name        string `json:"name"`
 	Icon        string `json:"icon"`
 	ProjectType string `json:"project_type"`
 }
 
-// ModFileInfo Mod 文件信息（管理用）
 type ModFileInfo struct {
 	FileName  string `json:"fileName"`
 	FilePath  string `json:"filePath"`
@@ -126,9 +130,7 @@ type ModFileInfo struct {
 
 const modrinthBaseURL = "https://api.modrinth.com/v2"
 
-// mirrorModURL 将 Mod 下载 URL 替换为中国镜像源（参考 PCL 的 DlSourceModGet）
-// Modrinth CDN -> mod.mcimirror.top/modrinth
-// CurseForge -> mod.mcimirror.top/curseforge
+// mirrorModURL 将 Mod 下载 URL 替换为中国镜像源
 func mirrorModURL(original string) string {
 	u := original
 	u = strings.Replace(u, "https://cdn.modrinth.com", "https://mod.mcimirror.top/modrinth", 1)
@@ -156,13 +158,14 @@ func (a *App) SearchMods(query string, gameVersion string, loader string, catego
 	var facets []string
 	facets = append(facets, `["project_type:mod"]`)
 
-	if gameVersion != "" {
+	// 安全校验：过滤非法字符
+	if gameVersion != "" && isValidMCVersion(gameVersion) {
 		facets = append(facets, fmt.Sprintf(`["versions:%s"]`, gameVersion))
 	}
-	if loader != "" {
+	if loader != "" && isValidModID(loader) {
 		facets = append(facets, fmt.Sprintf(`["categories:%s"]`, loader))
 	}
-	if category != "" {
+	if category != "" && isValidModID(category) {
 		facets = append(facets, fmt.Sprintf(`["categories:%s"]`, category))
 	}
 
@@ -173,7 +176,8 @@ func (a *App) SearchMods(query string, gameVersion string, loader string, catego
 
 	apiURL := fmt.Sprintf("%s/search?%s", modrinthBaseURL, params.Encode())
 
-	resp, err := http.Get(apiURL)
+	client := safeHTTPClient()
+	resp, err := client.Get(apiURL)
 	if err != nil {
 		return nil, fmt.Errorf("搜索 Mod 失败: %v", err)
 	}
@@ -189,7 +193,6 @@ func (a *App) SearchMods(query string, gameVersion string, loader string, catego
 		return nil, fmt.Errorf("解析搜索结果失败: %v", err)
 	}
 
-	// 确保返回非 nil slice
 	if result.Hits == nil {
 		result.Hits = []ModSearchResult{}
 	}
@@ -210,9 +213,14 @@ func (a *App) SearchMods(query string, gameVersion string, loader string, catego
 
 // GetModDetail 获取 Mod 详情
 func (a *App) GetModDetail(projectID string) (*ModDetail, error) {
+	if !isValidModID(projectID) {
+		return nil, fmt.Errorf("无效的 Mod ID 格式")
+	}
+
 	apiURL := fmt.Sprintf("%s/project/%s", modrinthBaseURL, projectID)
 
-	resp, err := http.Get(apiURL)
+	client := safeHTTPClient()
+	resp, err := client.Get(apiURL)
 	if err != nil {
 		return nil, fmt.Errorf("获取 Mod 详情失败: %v", err)
 	}
@@ -232,14 +240,18 @@ func (a *App) GetModDetail(projectID string) (*ModDetail, error) {
 
 // GetModVersions 获取 Mod 版本列表
 func (a *App) GetModVersions(projectID string, gameVersion string, loader string) ([]ModVersion, error) {
+	if !isValidModID(projectID) {
+		return nil, fmt.Errorf("无效的 Mod ID 格式")
+	}
+
 	apiURL := fmt.Sprintf("%s/project/%s/version", modrinthBaseURL, projectID)
 
 	params := url.Values{}
-	if gameVersion != "" {
+	if gameVersion != "" && isValidMCVersion(gameVersion) {
 		gvJSON, _ := json.Marshal([]string{gameVersion})
 		params.Set("game_versions", string(gvJSON))
 	}
-	if loader != "" {
+	if loader != "" && isValidModID(loader) {
 		loaderJSON, _ := json.Marshal([]string{loader})
 		params.Set("loaders", string(loaderJSON))
 	}
@@ -248,7 +260,8 @@ func (a *App) GetModVersions(projectID string, gameVersion string, loader string
 		apiURL += "?" + params.Encode()
 	}
 
-	resp, err := http.Get(apiURL)
+	client := safeHTTPClient()
+	resp, err := client.Get(apiURL)
 	if err != nil {
 		return nil, fmt.Errorf("获取 Mod 版本失败: %v", err)
 	}
@@ -286,9 +299,14 @@ func (a *App) GetModVersions(projectID string, gameVersion string, loader string
 
 // GetModDependencies 获取 Mod 依赖信息
 func (a *App) GetModDependencies(versionID string) ([]ModDependencyInfo, error) {
+	if !isValidModID(versionID) {
+		return nil, fmt.Errorf("无效的版本 ID 格式")
+	}
+
 	apiURL := fmt.Sprintf("%s/version/%s", modrinthBaseURL, versionID)
 
-	resp, err := http.Get(apiURL)
+	client := safeHTTPClient()
+	resp, err := client.Get(apiURL)
 	if err != nil {
 		return nil, fmt.Errorf("获取版本详情失败: %v", err)
 	}
@@ -333,16 +351,22 @@ func (a *App) GetModDependencies(versionID string) ([]ModDependencyInfo, error) 
 
 // AddModToDownloadList 添加 Mod 到下载列表
 func (a *App) AddModToDownloadList(versionID string, savePath string) error {
-	// 安全校验: savePath必须在.minecraft目录内，防止路径遍历
+	if !isValidModID(versionID) {
+		return fmt.Errorf("无效的版本 ID 格式")
+	}
+
+	// 安全校验: savePath必须在.minecraft目录内
 	if savePath != "" {
 		mcDir := a.GetMinecraftDir()
 		if !isPathInDir(savePath, mcDir) {
 			return fmt.Errorf("保存路径越界，必须在.minecraft目录内")
 		}
 	}
+
 	apiURL := fmt.Sprintf("%s/version/%s", modrinthBaseURL, versionID)
 
-	resp, err := http.Get(apiURL)
+	client := safeHTTPClient()
+	resp, err := client.Get(apiURL)
 	if err != nil {
 		return fmt.Errorf("获取版本详情失败: %v", err)
 	}
@@ -371,12 +395,17 @@ func (a *App) AddModToDownloadList(versionID string, savePath string) error {
 		return fmt.Errorf("未找到 Mod 文件")
 	}
 
+	// 安全校验：下载 URL 必须是 HTTPS
+	if !isHTTPSURL(primaryFile.URL) {
+		return fmt.Errorf("不安全的下载 URL（非 HTTPS）")
+	}
+
 	if savePath == "" {
 		mcDir := a.GetMinecraftDir()
 		savePath = filepath.Join(mcDir, "mods")
 	}
 
-	if err := os.MkdirAll(savePath, 0755); err != nil {
+	if err := os.MkdirAll(savePath, 0700); err != nil {
 		return fmt.Errorf("创建保存目录失败: %v", err)
 	}
 
@@ -409,18 +438,18 @@ func (a *App) AddModToDownloadList(versionID string, savePath string) error {
 	return nil
 }
 
-// ResolveModDependencies 解析 mod 的前置依赖，返回需要安装的依赖 mod 列表
-// 递归解析依赖，跳过已选择的 mod 和可选依赖
-// gameVersion 和 loader 用于筛选兼容的依赖版本
+// ResolveModDependencies 解析 mod 的前置依赖
 func (a *App) ResolveModDependencies(versionIDs []string, gameVersion string, loader string) ([]ModDependencyResult, error) {
 	var results []ModDependencyResult
-	visited := make(map[string]bool) // 已处理的 projectID
+	visited := make(map[string]bool)
 
-	// 先把用户已选择的 mod 标记为已处理
 	for _, vid := range versionIDs {
-		// 获取版本信息以获取 projectID
+		if !isValidModID(vid) {
+			continue
+		}
+
 		apiURL := fmt.Sprintf("%s/version/%s", modrinthBaseURL, vid)
-		resp, err := http.Get(apiURL)
+		resp, err := safeHTTPClient().Get(apiURL)
 		if err != nil {
 			continue
 		}
@@ -435,15 +464,18 @@ func (a *App) ResolveModDependencies(versionIDs []string, gameVersion string, lo
 		}
 	}
 
-	// 递归解析依赖
 	var resolveDeps func(vid string, depth int) error
 	resolveDeps = func(vid string, depth int) error {
 		if depth > 5 {
-			return nil // 防止无限递归
+			return nil
+		}
+
+		if !isValidModID(vid) {
+			return nil
 		}
 
 		apiURL := fmt.Sprintf("%s/version/%s", modrinthBaseURL, vid)
-		resp, err := http.Get(apiURL)
+		resp, err := safeHTTPClient().Get(apiURL)
 		if err != nil {
 			return nil
 		}
@@ -455,33 +487,27 @@ func (a *App) ResolveModDependencies(versionIDs []string, gameVersion string, lo
 		}
 
 		for _, dep := range version.Dependencies {
-			// 跳过可选依赖和嵌入式依赖
 			if dep.DependencyType == "optional" || dep.DependencyType == "embedded" {
 				continue
 			}
-			// 只处理必需依赖
 			if dep.DependencyType != "required" {
 				continue
 			}
 			if dep.ProjectID == "" {
 				continue
 			}
-			// 跳过已处理的
 			if visited[dep.ProjectID] {
 				continue
 			}
 			visited[dep.ProjectID] = true
 
-			// 获取依赖 mod 的详情
 			detail, err := a.GetModDetail(dep.ProjectID)
 			if err != nil {
 				continue
 			}
 
-			// 如果有 version_id，直接使用；否则查找兼容版本
 			depVersionID := dep.VersionID
 			if depVersionID == "" {
-				// 查找兼容的版本
 				versions, err := a.GetModVersions(dep.ProjectID, gameVersion, loader)
 				if err != nil || len(versions) == 0 {
 					continue
@@ -497,13 +523,11 @@ func (a *App) ResolveModDependencies(versionIDs []string, gameVersion string, lo
 				DependencyType: dep.DependencyType,
 			})
 
-			// 递归解析此依赖的依赖
 			_ = resolveDeps(depVersionID, depth+1)
 		}
 		return nil
 	}
 
-	// 解析所有用户选择的 mod 的依赖
 	for _, vid := range versionIDs {
 		_ = resolveDeps(vid, 0)
 	}
@@ -511,7 +535,6 @@ func (a *App) ResolveModDependencies(versionIDs []string, gameVersion string, lo
 	return results, nil
 }
 
-// ModDependencyResult 依赖解析结果
 type ModDependencyResult struct {
 	ProjectID      string `json:"projectId"`
 	ProjectName    string `json:"projectName"`
@@ -534,7 +557,6 @@ func (a *App) SelectModSaveDir() (string, error) {
 // GetDefaultModDir 获取默认 Mod 目录
 func (a *App) GetDefaultModDir(versionID string) string {
 	mcDir := a.GetMinecraftDir()
-	// 安全校验: versionID禁止路径遍历
 	if versionID != "" && !strings.Contains(versionID, "..") && !strings.Contains(versionID, "/") && !strings.Contains(versionID, "\\") {
 		return filepath.Join(mcDir, "versions", versionID, "mods")
 	}
@@ -543,7 +565,6 @@ func (a *App) GetDefaultModDir(versionID string) string {
 
 // GetModList 获取指定版本的 Mod 列表
 func (a *App) GetModList(versionID string) ([]ModFileInfo, error) {
-	// 安全校验: versionID禁止路径遍历
 	if versionID != "" {
 		if strings.Contains(versionID, "..") || strings.Contains(versionID, "/") || strings.Contains(versionID, "\\") {
 			return nil, fmt.Errorf("版本ID包含非法字符")
@@ -601,7 +622,6 @@ func (a *App) GetModList(versionID string) ([]ModFileInfo, error) {
 
 // ToggleMod 切换 Mod 启用/禁用状态
 func (a *App) ToggleMod(modFilePath string, enable bool) error {
-	// 安全校验: modFilePath必须在.minecraft目录内，防止路径遍历
 	mcDir := a.GetMinecraftDir()
 	if !isPathInDir(modFilePath, mcDir) {
 		return fmt.Errorf("文件路径越界，必须在.minecraft目录内")
@@ -634,7 +654,6 @@ func (a *App) ToggleMod(modFilePath string, enable bool) error {
 
 // ImportMod 导入 Mod 文件
 func (a *App) ImportMod(versionID string) error {
-	// 安全校验: versionID禁止路径遍历
 	if versionID != "" {
 		if strings.Contains(versionID, "..") || strings.Contains(versionID, "/") || strings.Contains(versionID, "\\") {
 			return fmt.Errorf("版本ID包含非法字符")
@@ -659,7 +678,7 @@ func (a *App) ImportMod(versionID string) error {
 		modsDir = filepath.Join(mcDir, "mods")
 	}
 
-	if err := os.MkdirAll(modsDir, 0755); err != nil {
+	if err := os.MkdirAll(modsDir, 0700); err != nil {
 		return fmt.Errorf("创建 Mod 目录失败: %v", err)
 	}
 
@@ -676,7 +695,7 @@ func (a *App) ImportMod(versionID string) error {
 		return fmt.Errorf("Mod 文件已存在: %s", fileName)
 	}
 
-	dst, err := os.Create(destPath)
+	dst, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
 	if err != nil {
 		return fmt.Errorf("创建目标文件失败: %v", err)
 	}
@@ -692,7 +711,6 @@ func (a *App) ImportMod(versionID string) error {
 
 // DeleteMod 删除 Mod 文件
 func (a *App) DeleteMod(modFilePath string) error {
-	// 安全校验: modFilePath必须在.minecraft目录内，防止路径遍历删除任意文件
 	mcDir := a.GetMinecraftDir()
 	if !isPathInDir(modFilePath, mcDir) {
 		return fmt.Errorf("文件路径越界，必须在.minecraft目录内")
@@ -711,7 +729,7 @@ func (a *App) downloadModItem(item *DownloadItem) error {
 		destDir = filepath.Join(mcDir, "mods")
 	}
 
-	if err := os.MkdirAll(destDir, 0755); err != nil {
+	if err := os.MkdirAll(destDir, 0700); err != nil {
 		return fmt.Errorf("创建 mods 目录失败: %v", err)
 	}
 
@@ -731,13 +749,19 @@ func (a *App) downloadModItem(item *DownloadItem) error {
 
 	a.emitProgress("downloading", fileName, 0, 0)
 
+	// 安全校验：下载 URL 必须是 HTTPS
+	if !isHTTPSURL(item.URL) {
+		return fmt.Errorf("不安全的下载 URL（非 HTTPS）")
+	}
+
 	// 先尝试镜像源，失败再回退到官方源
-	resp, err := http.Get(mirrorModURL(item.URL))
+	client := safeHTTPClient()
+	resp, err := client.Get(mirrorModURL(item.URL))
 	if err != nil || resp.StatusCode != http.StatusOK {
 		if resp != nil {
 			resp.Body.Close()
 		}
-		resp, err = http.Get(item.URL)
+		resp, err = safeHTTPClient().Get(item.URL)
 		if err != nil {
 			return fmt.Errorf("下载 Mod 失败: %v", err)
 		}
@@ -748,7 +772,7 @@ func (a *App) downloadModItem(item *DownloadItem) error {
 		return fmt.Errorf("下载 Mod 失败: HTTP %d", resp.StatusCode)
 	}
 
-	out, err := os.Create(destPath)
+	out, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
 	if err != nil {
 		return fmt.Errorf("创建文件失败: %v", err)
 	}
@@ -782,7 +806,8 @@ func (a *App) downloadModItem(item *DownloadItem) error {
 func (a *App) GetModrinthCategories() ([]ModCategory, error) {
 	apiURL := fmt.Sprintf("%s/tag/category", modrinthBaseURL)
 
-	resp, err := http.Get(apiURL)
+	client := safeHTTPClient()
+	resp, err := client.Get(apiURL)
 	if err != nil {
 		return nil, fmt.Errorf("获取分类失败: %v", err)
 	}
