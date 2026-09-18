@@ -1,8 +1,7 @@
-package main
+﻿package main
 
 import (
 	"embed"
-	"log"
 	"log"
 
 	"github.com/wailsapp/wails/v2"
@@ -15,10 +14,8 @@ import (
 var assets embed.FS
 
 func main() {
-	// Create an instance of the app structure
 	app := NewApp()
 
-	// Create application with options
 	err := wails.Run(&options.App{
 		Title:  "QingLongLauncher - 青龙启动器",
 		Width:  1024,
