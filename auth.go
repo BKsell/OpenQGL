@@ -5,7 +5,6 @@ import (
 	"crypto/cipher"
 	"crypto/hmac"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -73,7 +72,7 @@ type ExternalAuthDataEncrypted struct {
 // 安全加固: 替换原来的简单异或混合，使用标准 PBKDF2-HMAC-SHA256
 func getEncryptionKey(username string) []byte {
 	salt := []byte(pbkdf2Salt + username)
-	return pbkdf2.Key([]byte(username), salt, pbkdf2Iterations, pbkdf2KeyLength, sha256.New)
+	return pbkdf2.Key([]byte(username), salt, pbkdf2Iterations, pbkdf2KeyLength, NewUMFSHash)
 }
 
 // aesGCMEncrypt 使用 AES-GCM 加密数据，返回 base64 编码的密文
@@ -1006,7 +1005,7 @@ func calculateSHA256(filePath string) (string, error) {
 		return "", err
 	}
 	defer file.Close()
-	hash := sha256.New()
+	hash := NewUMFSHash()
 	if _, err := io.Copy(hash, file); err != nil {
 		return "", err
 	}

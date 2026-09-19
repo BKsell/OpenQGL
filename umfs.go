@@ -1,6 +1,7 @@
 package main
 
 import (
+	"hash"
 	"math/big"
 )
 
@@ -237,4 +238,54 @@ func sprintf(format string, x *big.Int) string {
 // umfsHash - 便捷函数，直接对数据进行 UMFS 哈希并返回十六进制字符串
 func umfsHash(data []byte) string {
 	return NewUMFS(data).HexDigest(256)
+}
+
+// UMFSHash - 实现 hash.Hash 接口，用于替换标准库哈希
+type UMFSHash struct {
+	umfs *UMFS
+}
+
+// NewUMFSHash 创建新的 UMFS hash.Hash 实例
+func NewUMFSHash() *UMFSHash {
+	return &UMFSHash{umfs: NewUMFS(nil)}
+}
+
+// Write 写入数据
+func (h *UMFSHash) Write(p []byte) (n int, err error) {
+	h.umfs.Absorb(p)
+	return len(p), nil
+}
+
+// Sum 返回当前哈希值
+func (h *UMFSHash) Sum(in []byte) []byte {
+	// 注意：这不是真正的增量哈希，每次 Sum 都会重新计算
+	// 为了兼容 hash.Hash 接口，我们复制当前状态
+	originalData := h.umfs.dataPool
+	originalR := h.umfs.r
+	originalC := h.umfs.c
+	originalLen := h.umfs.totalLen
+	
+	result := h.umfs.Digest()
+	
+	h.umfs.dataPool = originalData
+	h.umfs.r = originalR
+	h.umfs.c = originalC
+	h.umfs.totalLen = originalLen
+	
+	return append(in, result...)
+}
+
+// Reset 重置哈希
+func (h *UMFSHash) Reset() {
+	h.umfs = NewUMFS(nil)
+}
+
+// Size 返回哈希字节数
+func (h *UMFSHash) Size() int {
+	return 32 // 256 bit = 32 bytes
+}
+
+// BlockSize 返回块大小
+func (h *UMFSHash) BlockSize() int {
+	return 64
 }

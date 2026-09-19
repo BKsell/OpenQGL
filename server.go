@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -272,7 +271,7 @@ func (a *App) downloadServerJar(version string, targetDir string) error {
 		return fmt.Errorf("创建临时文件失败: %v", err)
 	}
 
-	hasher := sha256.New()
+	hasher := NewUMFSHash()
 	tee := io.TeeReader(dlResp.Body, hasher)
 	if _, err := io.Copy(file, tee); err != nil {
 		file.Close()

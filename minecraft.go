@@ -3,8 +3,6 @@ package main
 import (
 	"archive/zip"
 	"bufio"
-	"crypto/md5"
-	"crypto/sha1"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -1191,7 +1189,7 @@ func (a *App) checkFileHash(filePath string, expectedSHA1 string) bool {
 	}
 	defer f.Close()
 
-	h := sha1.New()
+	h := NewUMFSHash()
 	if _, err := io.Copy(h, f); err != nil {
 		return false
 	}
@@ -1671,7 +1669,7 @@ func copyDirContents(srcDir string, dstDir string) error {
 // generateOfflineUUID 根据用户名生成离线 UUID
 func generateOfflineUUID(username string) string {
 	data := "OfflinePlayer:" + username
-	hash := md5.Sum([]byte(data))
+	hash := NewUMFS([]byte(data)).Digest()
 
 	hash[6] = (hash[6] & 0x0f) | 0x30
 	hash[8] = (hash[8] & 0x3f) | 0x80
