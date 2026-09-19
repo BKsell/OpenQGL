@@ -28,6 +28,27 @@
   --glass-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
 }
 
+/* 深色模式 */
+[data-theme="dark"] {
+  --primary: #4DD0E1;
+  --primary-dark: #26C6DA;
+  --primary-light: #006064;
+  --primary-bg: #00363D;
+  --bg: #121212;
+  --bg-card: #1E1E1E;
+  --text: #E0E0E0;
+  --text-secondary: #B0B0B0;
+  --text-light: #808080;
+  --border: #333333;
+
+  /* 深色半透明效果 */
+  --glass-bg: rgba(30, 30, 30, 0.75);
+  --glass-bg-heavy: rgba(30, 30, 30, 0.88);
+  --glass-bg-light: rgba(30, 30, 30, 0.55);
+  --glass-border: rgba(255, 255, 255, 0.1);
+  --glass-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+}
+
 /* 主题色方案 */
 [data-theme="blue"] {
   --primary: #2196F3;
@@ -78,12 +99,63 @@
   --primary-bg: #E8F5E9;
 }
 
+/* 深色模式 + 主题色组合 */
+[data-theme="dark"][data-theme-color="blue"] {
+  --primary: #64B5F6;
+  --primary-dark: #42A5F5;
+  --primary-light: #0D47A1;
+  --primary-bg: #0D2744;
+}
+
+[data-theme="dark"][data-theme-color="cyan"] {
+  --primary: #4DD0E1;
+  --primary-dark: #26C6DA;
+  --primary-light: #006064;
+  --primary-bg: #00363D;
+}
+
+[data-theme="dark"][data-theme-color="pink"] {
+  --primary: #F48FB1;
+  --primary-dark: #F06292;
+  --primary-light: #880E4F;
+  --primary-bg: #3D1A29;
+}
+
+[data-theme="dark"][data-theme-color="purple"] {
+  --primary: #CE93D8;
+  --primary-dark: #BA68C8;
+  --primary-light: #4A148C;
+  --primary-bg: #2A0E44;
+}
+
+[data-theme="dark"][data-theme-color="orange"] {
+  --primary: #FFB74D;
+  --primary-dark: #FFA726;
+  --primary-light: #E65100;
+  --primary-bg: #442A0D;
+}
+
+[data-theme="dark"][data-theme-color="yellow"] {
+  --primary: #FFF176;
+  --primary-dark: #FFEE58;
+  --primary-light: #F57F17;
+  --primary-bg: #443D0D;
+}
+
+[data-theme="dark"][data-theme-color="green"] {
+  --primary: #81C784;
+  --primary-dark: #66BB6A;
+  --primary-light: #1B5E20;
+  --primary-bg: #0D3D1A;
+}
+
 body {
   font-family: "Microsoft YaHei", "Segoe UI", sans-serif;
   background-color: var(--bg);
   color: var(--text);
   overflow: hidden;
   user-select: none;
+  transition: background-color 0.3s, color 0.3s;
 }
 
 #app {
@@ -212,6 +284,14 @@ body {
 
 ::-webkit-scrollbar-thumb:hover {
   background: #AAAAAA;
+}
+
+[data-theme="dark"] ::-webkit-scrollbar-thumb {
+  background: #555555;
+}
+
+[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
+  background: #777777;
 }
 
 /* Modal overlay */
