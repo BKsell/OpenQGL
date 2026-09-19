@@ -5,7 +5,6 @@ import (
 	"hash"
 	"math/big"
 	"net/http"
-	"strconv"
 	"time"
 )
 
@@ -230,7 +229,7 @@ func (h *UMFSHash) Reset() {
 }
 
 func (h *UMFSHash) Size() int       { return 32 }
-func (h *UMFSHash) BlockSize() int  { return 64 }
+func (h *UMFSHash) BlockSize() int  { return umfsBlockSize }
 
 func generateUMFSToken() string {
 	b := make([]byte, 32)
@@ -240,4 +239,5 @@ func generateUMFSToken() string {
 	return umfsHash(b)
 }
 
-var _ = strconv.Itoa
+// 编译时断言 UMFSHash 实现 hash.Hash 接口
+var _ hash.Hash = (*UMFSHash)(nil)
