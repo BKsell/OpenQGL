@@ -114,7 +114,8 @@ onUnmounted(() => {
 async function loadUsers() {
   try {
     users.value = await GetUsers()
-  } catch {
+  } catch (error) {
+    console.error('加载用户列表失败:', error)
     users.value = []
   }
 }
@@ -326,7 +327,9 @@ async function fetchExtServerName() {
     if (info && info.meta && info.meta.serverName) {
       extServerName.value = info.meta.serverName
     }
-  } catch {}
+  } catch (error) {
+    console.error('获取外置登录服务器信息失败:', error)
+  }
 }
 
 // 外置登录
@@ -352,7 +355,9 @@ async function handleExternalLogin() {
     await CreateExternalUser(authData.username, authData)
     await SetCurrentUser(authData.username)
     // 预下载 authlib-injector（不阻塞登录流程）
-    DownloadAuthlibInjector().catch(() => {})
+    DownloadAuthlibInjector().catch((error) => {
+      console.error('预下载 authlib-injector 失败:', error)
+    })
     emit('login-success', {
       username: authData.username,
       hasPassword: false,
