@@ -17,9 +17,11 @@ type ModTranslationEntry struct {
 }
 
 var (
-	translationEntries []ModTranslationEntry
-	translationLoaded  bool
-	translationMutex   sync.RWMutex
+	translationEntries  []ModTranslationEntry
+	exactTranslations   map[string]string
+	prefixTranslations  map[string]string
+	translationLoaded   bool
+	translationMutex    sync.RWMutex
 )
 
 func loadTranslations() {
@@ -35,6 +37,9 @@ func loadTranslations() {
 	if err != nil {
 		return
 	}
+
+	exactTranslations = make(map[string]string)
+	prefixTranslations = make(map[string]string)
 
 	scanner := bufio.NewScanner(strings.NewReader(string(data)))
 	for scanner.Scan() {
@@ -55,11 +60,21 @@ func loadTranslations() {
 			}
 			english := strings.TrimSpace(part[:idx])
 			chinese := strings.TrimSpace(part[idx+1:])
-			if english != "" && chinese != "" {
-				translationEntries = append(translationEntries, ModTranslationEntry{
-					English: english,
-					Chinese: chinese,
-				})
+			if english == "" || chinese == "" {
+				continue
+			}
+
+			translationEntries = append(translationEntries, ModTranslationEntry{
+				English: english,
+				Chinese: chinese,
+			})
+
+			lowerEnglish := strings.ToLower(english)
+			if strings.HasSuffix(english, "@") {
+				prefix := strings.ToLower(english[:len(english)-1])
+				prefixTranslations[prefix] = chinese
+			} else {
+				exactTranslations[lowerEnglish] = chinese
 			}
 		}
 	}
@@ -73,22 +88,19 @@ func (a *App) TranslateModName(english string) string {
 
 	lowerEnglish := strings.ToLower(strings.TrimSpace(english))
 
-	for _, entry := range translationEntries {
-		key := strings.TrimSuffix(entry.English, "@")
-		if strings.ToLower(key) == lowerEnglish {
-			return entry.Chinese
+	// 精确匹配（O(1)）
+	if chinese, ok := exactTranslations[lowerEnglish]; ok {
+		return chinese
+	}
+
+	// 前缀匹配
+	for prefix, chinese := range prefixTranslations {
+		if strings.HasPrefix(lowerEnglish, prefix) {
+			return chinese
 		}
 	}
 
-	for _, entry := range translationEntries {
-		if strings.HasSuffix(entry.English, "@") {
-			prefix := strings.ToLower(entry.English[:len(entry.English)-1])
-			if strings.HasPrefix(lowerEnglish, prefix) {
-				return entry.Chinese
-			}
-		}
-	}
-
+	// 包含匹配
 	for _, entry := range translationEntries {
 		if !strings.HasSuffix(entry.English, "@") {
 			key := strings.ToLower(entry.English)
@@ -135,10 +147,7 @@ func fuzzyMatch(s, t string) float64 {
 	}
 	lenS := len(s)
 	lenT := len(t)
-	if lenS == 0 {
-		return 0
-	}
-	if lenT == 0 {
+	if lenS == 0 || lenT == 0 {
 		return 0
 	}
 
@@ -156,7 +165,7 @@ func fuzzyMatch(s, t string) float64 {
 			if s[i-1] == t[j-1] {
 				cost = 0
 			}
-			matrix[i][j] = min3(
+			matrix[i][j] = min(
 				matrix[i-1][j]+1,
 				matrix[i][j-1]+1,
 				matrix[i-1][j-1]+cost,
@@ -170,12 +179,9 @@ func fuzzyMatch(s, t string) float64 {
 	return 1.0 - float64(matrix[lenS][lenT])/float64(maxLen)
 }
 
-func min3(a, b, c int) int {
-	if a < b {
-		if a < c {
-			return a
-		}
-		return c
+func min(a, b, c int) int {
+	if a < b && a < c {
+		return a
 	}
 	if b < c {
 		return b
