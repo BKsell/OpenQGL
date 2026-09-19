@@ -89,7 +89,7 @@ onMounted(async () => {
   })
 
   // 加载导出启动命令按钮设置
-  try { showExportLaunchBtn.value = await GetShowExportLaunchCommand() } catch {}
+  try { showExportLaunchBtn.value = await GetShowExportLaunchCommand() } catch (error) { console.error('获取导出启动命令设置失败:', error) }
 })
 
 async function refreshData() {
@@ -117,7 +117,7 @@ async function refreshData() {
 
   if (!selectedVersion.value && installedVersions.value.length > 0) {
     selectedVersion.value = installedVersions.value[0].folderName
-    try { await SetSelectedVersion(selectedVersion.value) } catch {}
+    try { await SetSelectedVersion(selectedVersion.value) } catch (error) { console.error('设置默认版本失败:', error) }
   }
 
   if (isolationResult.status === 'fulfilled') {
@@ -139,7 +139,9 @@ async function selectUser(user) {
     try {
       await SetCurrentUser(user.username)
       currentUser.value = user
-    } catch {}
+    } catch (error) {
+      console.error('切换用户失败:', error)
+    }
   }
 }
 
@@ -154,9 +156,11 @@ async function showVersionSelect() {
     // 如果当前选中的版本不在列表中，选中第一个
     if (installedVersions.value.length > 0 && !installedVersions.value.find(v => v.folderName === selectedVersion.value)) {
       selectedVersion.value = installedVersions.value[0].folderName
-      try { await SetSelectedVersion(selectedVersion.value) } catch {}
+      try { await SetSelectedVersion(selectedVersion.value) } catch (error) { console.error('设置选中版本失败:', error) }
     }
-  } catch {} finally {
+  } catch (error) {
+    console.error('扫描游戏版本失败:', error)
+  } finally {
     versionListLoading.value = false
   }
 }
@@ -164,7 +168,7 @@ async function showVersionSelect() {
 async function selectVersion(ver) {
   selectedVersion.value = ver.folderName
   showVersionList.value = false
-  try { await SetSelectedVersion(ver.folderName) } catch {}
+  try { await SetSelectedVersion(ver.folderName) } catch (error) { console.error('设置选中版本失败:', error) }
 }
 
 async function handleLaunch() {
@@ -190,12 +194,14 @@ async function handleLaunch() {
         const recJava = await GetRecommendedJavaForVersion(selectedVersion.value)
         if (recJava > 0) {
           await AddJavaToDownloadList(recJava)
-          try { await StartDownloadList() } catch {}
+          try { await StartDownloadList() } catch (error) { console.error('开始下载列表失败:', error) }
           launchMsg.value = t('main.javaAutoDownloaded', { version: recJava })
           launchMsgType.value = 'info'
           return
         }
-      } catch {}
+      } catch (error) {
+        console.error('获取推荐Java版本失败:', error)
+      }
     }
 
     launchMsg.value = t('main.launchFailed') + errMsg
@@ -207,7 +213,9 @@ async function toggleVersionIsolation() {
   try {
     await SetVersionIsolation(!versionIsolation.value)
     versionIsolation.value = !versionIsolation.value
-  } catch {}
+  } catch (error) {
+    console.error('切换版本隔离失败:', error)
+  }
 }
 
 async function handleExportLaunchCommand() {
@@ -459,14 +467,14 @@ const userTypeLabel = computed(() => {
             v-for="ver in installedVersions"
             :key="ver.folderName"
             class="version-item"
-            :class="{ active: ver.folderName === selectedVersion }"
+            :class="{ active: ver.folderName === selectedVersion.value }"
             @click="selectVersion(ver)"
           >
             <span class="version-name">
               <span v-if="ver.name">{{ ver.name }} - </span>{{ ver.version }}
               <span v-if="ver.loader" class="version-loader-tag">{{ ver.loader }}</span>
             </span>
-            <span v-if="ver.folderName === selectedVersion" class="current-badge">{{ t('main.selected') }}</span>
+            <span v-if="ver.folderName === selectedVersion.value" class="current-badge">{{ t('main.selected') }}</span>
           </div>
         </div>
         <button class="btn btn-outline btn-block" @click="showVersionList = false" style="margin-top: 12px;">{{ t('app.cancel') }}</button>
