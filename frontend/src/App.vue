@@ -170,7 +170,9 @@ onMounted(async () => {
     try {
       const url = await GetBackgroundImageDataURL()
       backgroundImageURL.value = url || ''
-    } catch {}
+    } catch (error) {
+      console.error('加载背景图片失败:', error)
+    }
   })
 
   EventsOn('downloadListCompleted', () => {
@@ -217,12 +219,17 @@ onUnmounted(() => {
 })
 
 async function refreshDownloadCount() {
-  try { downloadCount.value = await GetDownloadListCount() } catch { downloadCount.value = 0 }
+  try { downloadCount.value = await GetDownloadListCount() } catch (error) {
+    console.error('获取下载计数失败:', error)
+    downloadCount.value = 0
+  }
 }
 
 async function refreshDownloadList() {
   if (!showDownloadList.value) return
-  try { downloadList.value = await GetDownloadList() || [] } catch {}
+  try { downloadList.value = await GetDownloadList() || [] } catch (error) {
+    console.error('获取下载列表失败:', error)
+  }
 }
 
 function onLoginSuccess(user) {
@@ -270,7 +277,10 @@ async function openDownloadList() {
   if (isGuestLocked.value) return
   showDownloadList.value = true
   downloadListLoading.value = true
-  try { downloadList.value = await GetDownloadList() || [] } catch { downloadList.value = [] }
+  try { downloadList.value = await GetDownloadList() || [] } catch (error) {
+    console.error('获取下载列表失败:', error)
+    downloadList.value = []
+  }
   finally { downloadListLoading.value = false }
 }
 
@@ -279,7 +289,9 @@ async function removeDownloadItem(item) {
     await RemoveFromDownloadList(item.customName)
     downloadList.value = await GetDownloadList() || []
     downloadCount.value = await GetDownloadListCount()
-  } catch {}
+  } catch (error) {
+    console.error('移除下载项失败:', error)
+  }
 }
 
 async function startDownload() {
