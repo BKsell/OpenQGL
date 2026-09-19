@@ -496,13 +496,14 @@ const userTypeLabel = computed(() => {
 .left-panel {
   width: 320px;
   min-width: 280px;
-  background: rgba(255, 255, 255, 0.92);
+  background: var(--glass-bg-heavy);
   backdrop-filter: blur(24px);
   -webkit-backdrop-filter: blur(24px);
   border-right: 1px solid var(--glass-border);
   display: flex;
   flex-direction: column;
   padding: 24px 20px;
+  transition: background 0.3s;
 }
 
 .user-section {
@@ -687,7 +688,7 @@ const userTypeLabel = computed(() => {
 }
 
 .tip-content {
-  color: rgba(0, 0, 0, 0.75);
+  color: var(--text-secondary);
 }
 
 .launch-version {
@@ -789,7 +790,7 @@ const userTypeLabel = computed(() => {
 .feature-card {
   width: 200px;
   padding: 24px 20px;
-  background: rgba(255, 255, 255, 0.78);
+  background: var(--glass-bg-light);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   border: 1.5px solid var(--border);
