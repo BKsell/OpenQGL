@@ -1,4 +1,4 @@
-package main
+﻿package main
 
 import (
 	"archive/zip"
@@ -45,6 +45,13 @@ func safeHTTPClient() *http.Client {
 			},
 		},
 	}
+}
+
+
+// readLimited 读取响应体，限制最大大小防止内存耗尽攻击
+// 用于 API JSON 响应，最大 10MB
+func readLimited(r io.Reader, maxSize int64) ([]byte, error) {
+	return io.ReadAll(io.LimitReader(r, maxSize))
 }
 
 // ===== 日志功能 =====
