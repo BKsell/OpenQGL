@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 	"golang.org/x/crypto/bcrypt"
@@ -690,7 +691,7 @@ func (a *App) SaveUserConfig(username string, config *UserConfig) error {
 	configPath := filepath.Join(userDir, "config.json")
 	// 安全加固: 用户配置文件权限 0600
 	if err := os.WriteFile(configPath, data, 0600); err != nil {
-		return fmt.Errorf("写入用户配置失败: %w", err)
+		return fmt.Errorf("写入用户配置文件失败: %w", err)
 	}
 	return nil
 }
@@ -879,12 +880,10 @@ func (a *App) GetBingDailyImage() (string, error) {
 	}
 	cachePath := filepath.Join(cacheDir, "bing_daily.jpg")
 	// 请求 Bing API（会重定向到图片 URL）
-	client := &http.Client{
-		Timeout: 30 * time.Second,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			// 不自动跟随重定向，我们需要获取最终的图片 URL
-			return http.ErrUseLastResponse
-		},
+	client := safeHTTPClient()
+	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		// 不自动跟随重定向，我们需要获取最终的图片 URL
+		return http.ErrUseLastResponse
 	}
 	resp, err := client.Get("https://bing.biturl.top/?resolution=1920&format=image&index=0&mkt=zh-CN")
 	if err != nil {
@@ -914,8 +913,7 @@ func (a *App) GetBingDailyImage() (string, error) {
 		return "", fmt.Errorf("无效的图片 URL 协议")
 	}
 	// 下载实际图片
-	imgClient := &http.Client{Timeout: 60 * time.Second}
-	imgResp, err := imgClient.Get(imageURL)
+	imgResp, err := safeHTTPClient().Get(imageURL)
 	if err != nil {
 		return "", fmt.Errorf("下载图片失败: %w", err)
 	}
