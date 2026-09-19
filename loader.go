@@ -23,6 +23,8 @@ import (
 // ===== 安全工具函数 =====
 
 // isHTTPSURL 验证 URL 是否为 HTTPS 协议
+// isHTTPSURL 验证 URL 是否为 HTTPS 协议
+// 防止 HTTP 中间人攻击，所有下载 URL 必须使用 HTTPS
 func isHTTPSURL(rawURL string) bool {
 	u, err := url.Parse(rawURL)
 	if err != nil {
@@ -32,6 +34,8 @@ func isHTTPSURL(rawURL string) bool {
 }
 
 // safeHTTPClient 创建带超时的安全 HTTP 客户端
+// safeHTTPClient 创建安全的 HTTP 客户端
+// 配置 30 秒超时，TLS 1.2 最低版本，防止资源耗尽和降级攻击
 func safeHTTPClient() *http.Client {
 	return &http.Client{
 		Timeout: 30 * time.Second,
@@ -219,6 +223,8 @@ func (a *App) GetForgeVersions(mcVersion string) ([]LoaderInfo, error) {
 	return loaders, nil
 }
 
+// isValidMCVersion 验证 Minecraft 版本号格式
+// 防止版本号注入攻击，只允许数字、点、下划线和字母
 func isValidMCVersion(version string) bool {
 	if len(version) > 20 {
 		return false

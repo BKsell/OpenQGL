@@ -71,12 +71,17 @@ func isValidMemory(mem int) bool {
 	return mem >= minMemoryMB && mem <= maxMemoryMB
 }
 
+// sanitizeServerName 清理服务器名称，防止路径遍历和特殊字符注入
+// 移除 .. / \ : * ? " < > | 等危险字符，确保文件名安全
 func sanitizeServerName(name string) string {
 	name = strings.TrimSpace(name)
 	replacer := strings.NewReplacer("..", "", "/", "", "\\", "", ":", "", "*", "", "?", "", '"', "", "<", "", ">", "", "|", "")
 	return replacer.Replace(name)
 }
 
+// isPathTraversal 检查目标路径是否存在路径遍历风险
+// 返回 true 表示存在风险（不安全），返回 false 表示安全
+// 通过解析绝对路径并检查前缀来防止 ../ 类攻击
 func isPathTraversal(baseDir, targetPath string) bool {
 	resolvedBase, err := filepath.Abs(baseDir)
 	if err != nil {
