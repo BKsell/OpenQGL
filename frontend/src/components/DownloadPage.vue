@@ -114,19 +114,25 @@ async function loadJavaList() {
   try {
     javaList.value = await GetJavaDownloadList()
     installedJavaList.value = await SearchJava()
-  } catch {}
+  } catch (error) {
+    console.error('加载Java下载列表失败:', error)
+  }
 }
 
 async function loadModCategories() {
   try {
     modCategories.value = await GetModrinthCategories()
-  } catch {}
+  } catch (error) {
+    console.error('加载Mod分类失败:', error)
+  }
 }
 
 async function loadInstalledVersions() {
   try {
     installedGameVersions.value = await GetInstalledVersions()
-  } catch {}
+  } catch (error) {
+    console.error('加载已安装版本失败:', error)
+  }
 }
 
 function selectVersion(ver) {
@@ -281,7 +287,8 @@ async function getModChineseName(mod) {
   try {
     const chinese = await TranslateModName(key)
     return chinese && chinese !== key ? chinese : ''
-  } catch {
+  } catch (error) {
+    console.error('翻译Mod名称失败:', error)
     return ''
   }
 }
@@ -321,7 +328,8 @@ async function selectMod(mod) {
     try {
       const deps = await GetModDependencies(modVersions.value[0].id)
       modDependencies.value = deps || []
-    } catch {
+    } catch (error) {
+      console.error('加载Mod依赖失败:', error)
       modDependencies.value = []
     } finally {
       modDepsLoading.value = false
@@ -508,7 +516,8 @@ async function loadLoaderVersions() {
     for (let i = 0; i < loaderVersions.value.length; i++) {
       try {
         loaderVersions.value[i].isInstalled = await CheckLoaderInstalled(mcVer, loaderTab.value)
-      } catch {
+      } catch (error) {
+        console.error('检查加载器安装状态失败:', error)
         loaderVersions.value[i].isInstalled = false
       }
     }
