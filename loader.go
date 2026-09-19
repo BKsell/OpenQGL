@@ -1,9 +1,8 @@
-﻿package main
+package main
 
 import (
 	"archive/zip"
 	_ "embed"
-	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -23,7 +22,6 @@ import (
 // ===== 安全工具函数 =====
 
 // isHTTPSURL 验证 URL 是否为 HTTPS 协议
-// isHTTPSURL 验证 URL 是否为 HTTPS 协议
 // 防止 HTTP 中间人攻击，所有下载 URL 必须使用 HTTPS
 func isHTTPSURL(rawURL string) bool {
 	u, err := url.Parse(rawURL)
@@ -32,21 +30,6 @@ func isHTTPSURL(rawURL string) bool {
 	}
 	return u.Scheme == "https"
 }
-
-// safeHTTPClient 创建带超时的安全 HTTP 客户端
-// safeHTTPClient 创建安全的 HTTP 客户端
-// 配置 30 秒超时，TLS 1.2 最低版本，防止资源耗尽和降级攻击
-func safeHTTPClient() *http.Client {
-	return &http.Client{
-		Timeout: 30 * time.Second,
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{
-				MinVersion: tls.VersionTLS12,
-			},
-		},
-	}
-}
-
 
 // readLimited 读取响应体，限制最大大小防止内存耗尽攻击
 // 用于 API JSON 响应，最大 10MB
