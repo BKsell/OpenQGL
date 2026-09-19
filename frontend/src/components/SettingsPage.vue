@@ -71,7 +71,8 @@ const showExportLaunchCommand = ref(false)
 async function toggleExportLaunchCommand() {
   try {
     await SetShowExportLaunchCommand(showExportLaunchCommand.value)
-  } catch {
+  } catch (error) {
+    console.error('切换导出启动命令设置失败:', error)
     showExportLaunchCommand.value = !showExportLaunchCommand.value
   }
 }
@@ -109,21 +110,23 @@ onMounted(async () => {
     backgroundImage.value = bgResult.value
   }
 
-  try { portableMode.value = await IsPortableMode() } catch {}
-  try { portableJavaPath.value = await GetPortableJavaPath() } catch {}
+  try { portableMode.value = await IsPortableMode() } catch (error) { console.error('获取便携模式状态失败:', error) }
+  try { portableJavaPath.value = await GetPortableJavaPath() } catch (error) { console.error('获取便携Java路径失败:', error) }
   try {
     const info = await GetPortableJavaInfo()
     portableJavaInfo.value = info
-  } catch {}
+  } catch (error) { console.error('获取便携Java信息失败:', error) }
 
-  try { showExportLaunchCommand.value = await GetShowExportLaunchCommand() } catch {}
+  try { showExportLaunchCommand.value = await GetShowExportLaunchCommand() } catch (error) { console.error('获取导出启动命令设置失败:', error) }
 
   searchJavaList()
 
   if (javaPath.value) {
     try {
       javaInfo.value = await GetJavaInfo(javaPath.value)
-    } catch {}
+    } catch (error) {
+      console.error('获取Java信息失败:', error)
+    }
   }
 })
 
@@ -131,7 +134,8 @@ async function searchJavaList() {
   searchingJava.value = true
   try {
     javaList.value = await SearchJava() || []
-  } catch {
+  } catch (error) {
+    console.error('搜索Java失败:', error)
     javaList.value = []
   } finally {
     searchingJava.value = false
@@ -144,10 +148,12 @@ async function togglePortableMode() {
     try {
       const info = await GetPortableJavaInfo()
       portableJavaInfo.value = info
-    } catch {
+    } catch (error) {
+      console.error('获取便携Java信息失败:', error)
       portableJavaInfo.value = null
     }
-  } catch (e) {
+  } catch (error) {
+    console.error('切换便携模式失败:', error)
     portableMode.value = !portableMode.value
   }
 }
@@ -172,7 +178,9 @@ function clearMinecraftDir() {
 async function resetMinecraftDir() {
   try {
     minecraftDir.value = await GetMinecraftDir()
-  } catch {}
+  } catch (error) {
+    console.error('获取默认Minecraft目录失败:', error)
+  }
 }
 
 async function saveSettings() {
@@ -188,8 +196,9 @@ async function saveSettings() {
     await SetVersionIsolation(versionIsolation.value)
     saveMsg.value = t('settings.settingsSaved')
     setTimeout(() => { saveMsg.value = '' }, 2000)
-  } catch (e) {
-    saveMsg.value = t('settings.saveFailed') + String(e).replace('Error: ', '')
+  } catch (error) {
+    console.error('保存设置失败:', error)
+    saveMsg.value = t('settings.saveFailed') + String(error).replace('Error: ', '')
   } finally {
     saving.value = false
   }
@@ -207,8 +216,12 @@ const themeColors = [
 
 async function changeThemeColor(color) {
   themeColor.value = color
-  try { await SetThemeColor(color) } catch {}
-  document.querySelector('[data-theme]')?.setAttribute('data-theme', color)
+  try {
+    await SetThemeColor(color)
+    document.querySelector('[data-theme]')?.setAttribute('data-theme', color)
+  } catch (error) {
+    console.error('切换主题颜色失败:', error)
+  }
 }
 
 async function selectBgImage() {
@@ -220,12 +233,14 @@ async function selectBgImage() {
       const url = await GetBackgroundImageDataURL()
       if (url) backgroundImage.value = url
     }
-  } catch {}
+  } catch (error) {
+    console.error('选择背景图片失败:', error)
+  }
 }
 
 async function resetBgImage() {
   backgroundImage.value = ''
-  try { await SetBackgroundImage('') } catch {}
+  try { await SetBackgroundImage('') } catch (error) { console.error('重置背景图片失败:', error) }
 }
 
 async function fetchBingDailyImage() {
@@ -235,7 +250,8 @@ async function fetchBingDailyImage() {
     if (url) {
       backgroundImage.value = url
     }
-  } catch (e) {
+  } catch (error) {
+    console.error('获取Bing每日图片失败:', error)
   } finally {
     bingLoading.value = false
   }
