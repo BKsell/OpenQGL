@@ -35,6 +35,7 @@ const saving = ref(false)
 const saveMsg = ref('')
 const users = ref([])
 const themeColor = ref('cyan')
+const darkMode = ref(false)
 const backgroundImage = ref('')
 const bingLoading = ref(false)
 
@@ -77,7 +78,25 @@ async function toggleExportLaunchCommand() {
   }
 }
 
+// 深色模式切换
+function toggleDarkMode() {
+  const root = document.documentElement
+  if (darkMode.value) {
+    root.setAttribute('data-mode', 'dark')
+    localStorage.setItem('qgl-dark-mode', 'true')
+  } else {
+    root.removeAttribute('data-mode')
+    localStorage.setItem('qgl-dark-mode', 'false')
+  }
+}
+
 onMounted(async () => {
+  // 恢复深色模式设置
+  darkMode.value = localStorage.getItem('qgl-dark-mode') === 'true'
+  if (darkMode.value) {
+    document.documentElement.setAttribute('data-mode', 'dark')
+  }
+
   const [configResult, isolationResult, usersResult, themeResult, bgResult] = await Promise.allSettled([
     GetGlobalConfig(),
     IsVersionIsolation(),
@@ -400,6 +419,20 @@ const javaVersionLabel = computed(() => {
           <h3 class="panel-title">{{ t('settings.personalize') }}</h3>
 
           <div class="setting-group">
+            <div class="group-header">外观模式</div>
+            <div class="setting-row">
+              <div class="setting-text">
+                <div class="setting-name">深色模式</div>
+                <div class="setting-desc">切换浅色/深色主题</div>
+              </div>
+              <label class="toggle">
+                <input type="checkbox" v-model="darkMode" @change="toggleDarkMode" />
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+          </div>
+
+          <div class="setting-group">
             <div class="group-header">{{ t('settings.themeColor') }}</div>
             <div class="theme-colors">
               <div
@@ -591,7 +624,7 @@ const javaVersionLabel = computed(() => {
   padding: 16px 24px;
   border-bottom: 1px solid var(--glass-border);
   flex-shrink: 0;
-  background: rgba(255, 255, 255, 0.88);
+  background: var(--glass-bg-heavy);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
 }
@@ -611,7 +644,7 @@ const javaVersionLabel = computed(() => {
 .settings-nav {
   width: 220px;
   min-width: 200px;
-  background: rgba(255, 255, 255, 0.92);
+  background: var(--glass-bg-heavy);
   backdrop-filter: blur(24px);
   -webkit-backdrop-filter: blur(24px);
   border-right: 1px solid var(--border);
@@ -662,10 +695,10 @@ const javaVersionLabel = computed(() => {
 
 .content-panel {
   max-width: 640px;
-  background: rgba(255, 255, 255, 0.85);
+  background: var(--glass-bg-heavy);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
-  border: 1px solid rgba(255, 255, 255, 0.4);
+  border: 1px solid var(--glass-border);
   border-radius: 12px;
   padding: 24px;
 }
@@ -678,13 +711,13 @@ const javaVersionLabel = computed(() => {
 }
 
 .setting-group {
-  background: rgba(255, 255, 255, 0.6);
+  background: var(--glass-bg);
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
   border-radius: 10px;
   padding: 16px;
   margin-bottom: 16px;
-  border: 1px solid rgba(255, 255, 255, 0.3);
+  border: 1px solid var(--glass-border);
 }
 
 .group-header {
@@ -750,7 +783,7 @@ const javaVersionLabel = computed(() => {
   padding: 6px 12px;
   border: 1px solid var(--border);
   border-radius: 8px;
-  background: white;
+  background: var(--bg-card);
   color: var(--text);
   font-size: 13px;
   font-weight: 500;
@@ -774,7 +807,7 @@ const javaVersionLabel = computed(() => {
   align-items: center;
   gap: 16px;
   padding: 20px;
-  background: rgba(255, 255, 255, 0.82);
+  background: var(--glass-bg-heavy);
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
   border-radius: 12px;
@@ -909,7 +942,7 @@ const javaVersionLabel = computed(() => {
 .about-card {
   text-align: center;
   padding: 32px 20px;
-  background: rgba(255, 255, 255, 0.82);
+  background: var(--glass-bg-heavy);
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
   border-radius: 16px;
@@ -942,7 +975,7 @@ const javaVersionLabel = computed(() => {
   display: inline-block;
   font-size: 13px;
   padding: 3px 12px;
-  background: white;
+  background: var(--bg-card);
   color: var(--primary-dark);
   border-radius: 12px;
   font-weight: 600;
@@ -1237,7 +1270,7 @@ const javaVersionLabel = computed(() => {
 .portable-java-status {
   margin-top: 8px;
   padding: 12px 16px;
-  background: rgba(255, 255, 255, 0.6);
+  background: var(--glass-bg);
   border-radius: 8px;
   border: 1px solid var(--glass-border);
 }
