@@ -5,6 +5,7 @@ import (
 	"crypto/cipher"
 	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -69,7 +70,7 @@ type ExternalAuthDataEncrypted struct {
 }
 
 // getEncryptionKey 使用 PBKDF2 派生 32 字节 AES 密钥
-// 安全加固: 替换原来的简单异或混合，使用标准 PBKDF2-HMAC-SHA256
+// 使用 UMFS 作为底层哈希函数（bool-hybrid-array 生态）
 func getEncryptionKey(username string) []byte {
 	salt := []byte(pbkdf2Salt + username)
 	return pbkdf2.Key([]byte(username), salt, pbkdf2Iterations, pbkdf2KeyLength, NewUMFSHash)
@@ -196,7 +197,6 @@ type MCEntitlementResponse struct {
 
 // StartMicrosoftLogin 开始微软登录流程（Device Code Flow）
 func (a *App) StartMicrosoftLogin() (string, error) {
-	// Step 1: 请求设备代码
 	data := url.Values{
 		"client_id": {oauthClientID},
 		"scope":     {oauthScope},
@@ -218,23 +218,18 @@ func (a *App) StartMicrosoftLogin() (string, error) {
 		return "", fmt.Errorf("设备代码错误: %s - %s", dcResp.Error, dcResp.ErrorDescription)
 	}
 
-	// 安全加固: 验证 URL 协议，防止命令注入
 	if !strings.HasPrefix(dcResp.VerificationURL, "https://") {
 		return "", fmt.Errorf("无效的验证 URL 协议")
 	}
 
-	// 安全加固: 使用 exec.Command 直接调用，不经过 shell 解析
 	openCmd := exec.Command("cmd", "/c", "start", "", dcResp.VerificationURL)
 	openCmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	openCmd.Start()
 
-	// 自动复制用户代码到剪贴板
 	runtime.ClipboardSetText(a.ctx, dcResp.UserCode)
 
-	// 在后台轮询令牌
 	go a.pollMicrosoftToken(dcResp)
 
-	// 返回用户需要访问的URL和代码
 	result := fmt.Sprintf("%s|%s", dcResp.VerificationURL, dcResp.UserCode)
 	return result, nil
 }
@@ -277,7 +272,6 @@ func (a *App) pollMicrosoftToken(dc DeviceCodeResponse) {
 			runtime.EventsEmit(a.ctx, "msLoginError", fmt.Sprintf("登录失败: %s", tokenResp.ErrorDescription))
 			return
 		}
-		// 获取到 Microsoft Access Token，继续后续步骤
 		a.completeMicrosoftLogin(tokenResp.AccessToken, tokenResp.RefreshToken, tokenResp.ExpiresIn)
 		return
 	}
@@ -286,29 +280,24 @@ func (a *App) pollMicrosoftToken(dc DeviceCodeResponse) {
 // completeMicrosoftLogin 完成微软登录的后续步骤（Xbox → Minecraft）
 func (a *App) completeMicrosoftLogin(msAccessToken string, msRefreshToken string, msExpiresIn int) {
 	runtime.EventsEmit(a.ctx, "msLoginProgress", "正在验证 Xbox Live...")
-	// Step 2: OAuth Token → XBL Token
 	xblToken, _, err := a.authXBL(msAccessToken)
 	if err != nil {
 		runtime.EventsEmit(a.ctx, "msLoginError", fmt.Sprintf("Xbox Live 验证失败: %v", err))
 		return
 	}
 	runtime.EventsEmit(a.ctx, "msLoginProgress", "正在获取 XSTS 令牌...")
-	// Step 3: XBL Token → XSTS Token + UHS
 	xstsToken, xstsUHS, err := a.authXSTS(xblToken)
 	if err != nil {
 		runtime.EventsEmit(a.ctx, "msLoginError", fmt.Sprintf("XSTS 验证失败: %v", err))
 		return
 	}
 	runtime.EventsEmit(a.ctx, "msLoginProgress", "正在登录 Minecraft...")
-	// Step 4: XSTS Token → Minecraft Access Token
-	// 注意：使用 XSTS 返回的 UHS，而不是 XBL 的 UHS
 	mcAccessToken, mcExpiresIn, err := a.authMinecraft(xstsToken, xstsUHS)
 	if err != nil {
 		runtime.EventsEmit(a.ctx, "msLoginError", fmt.Sprintf("Minecraft 登录失败: %v", err))
 		return
 	}
 	runtime.EventsEmit(a.ctx, "msLoginProgress", "正在验证游戏所有权...")
-	// Step 5: 验证是否持有 Minecraft
 	hasGame, err := a.checkMCEntitlement(mcAccessToken)
 	if err != nil {
 		runtime.EventsEmit(a.ctx, "msLoginError", fmt.Sprintf("验证游戏所有权失败: %v", err))
@@ -319,14 +308,12 @@ func (a *App) completeMicrosoftLogin(msAccessToken string, msRefreshToken string
 		return
 	}
 	runtime.EventsEmit(a.ctx, "msLoginProgress", "正在获取玩家档案...")
-	// Step 6: 获取玩家档案
 	profile, err := a.getMCProfile(mcAccessToken)
 	if err != nil {
 		runtime.EventsEmit(a.ctx, "msLoginError", fmt.Sprintf("获取玩家档案失败: %v", err))
 		return
 	}
 
-	// 保存认证数据
 	authData := MSAuthData{
 		AccessToken:   msAccessToken,
 		RefreshToken:  msRefreshToken,
@@ -337,13 +324,11 @@ func (a *App) completeMicrosoftLogin(msAccessToken string, msRefreshToken string
 		MCExpiresAt:   time.Now().Add(time.Duration(mcExpiresIn) * time.Second).Unix(),
 	}
 
-	// 创建正版用户
 	if err := a.CreatePremiumUser(profile.Name, authData); err != nil {
 		runtime.EventsEmit(a.ctx, "msLoginError", fmt.Sprintf("创建用户失败: %v", err))
 		return
 	}
 
-	// 设置为当前用户
 	if err := a.SetCurrentUser(profile.Name); err != nil {
 		runtime.EventsEmit(a.ctx, "msLoginError", fmt.Sprintf("设置当前用户失败: %v", err))
 		return
@@ -415,7 +400,6 @@ func (a *App) authXSTS(xblToken string) (string, string, error) {
 	if err != nil {
 		return "", "", err
 	}
-	// 先检查是否有 XErr 错误码
 	var xstsErrResp struct {
 		XErr    int    `json:"XErr"`
 		Message string `json:"Message"`
@@ -472,7 +456,6 @@ func (a *App) authMinecraft(xstsToken string, uhs string) (string, int, error) {
 	if err != nil {
 		return "", 0, err
 	}
-	// 先检查是否有错误响应
 	var mcErrResp MCLoginResponse
 	json.Unmarshal(respBody, &mcErrResp)
 	if mcErrResp.Error != "" {
@@ -497,7 +480,7 @@ func (a *App) authMinecraft(xstsToken string, uhs string) (string, int, error) {
 	}
 	expiresIn := mcResp.ExpiresIn
 	if expiresIn <= 0 {
-		expiresIn = 86400 // 默认24小时
+		expiresIn = 86400
 	}
 	return mcResp.AccessToken, expiresIn, nil
 }
@@ -563,11 +546,9 @@ func (a *App) RefreshMicrosoftToken(username string) error {
 	if authData.RefreshToken == "" {
 		return fmt.Errorf("无刷新令牌，请重新登录")
 	}
-	// 检查是否需要刷新
 	if time.Now().Unix() < authData.MCExpiresAt-60 {
 		return nil
 	}
-	// 用 refresh_token 获取新的 access_token
 	data := url.Values{
 		"client_id":     {oauthClientID},
 		"grant_type":    {"refresh_token"},
@@ -590,7 +571,6 @@ func (a *App) RefreshMicrosoftToken(username string) error {
 	if tokenResp.Error != "" {
 		return fmt.Errorf("刷新令牌失败: %s", tokenResp.ErrorDescription)
 	}
-	// 重新走 Xbox → Minecraft 流程
 	xblToken, _, err := a.authXBL(tokenResp.AccessToken)
 	if err != nil {
 		return err
@@ -603,7 +583,6 @@ func (a *App) RefreshMicrosoftToken(username string) error {
 	if err != nil {
 		return err
 	}
-	// 更新存储
 	authData.AccessToken = tokenResp.AccessToken
 	authData.RefreshToken = tokenResp.RefreshToken
 	authData.MCAccessToken = mcAccessToken
@@ -619,10 +598,8 @@ func (a *App) GetMSAuthData(username string) (*MSAuthData, error) {
 	if err != nil {
 		return nil, err
 	}
-	// 先尝试按加密格式解析
 	var encData MSAuthDataEncrypted
 	if err := json.Unmarshal(data, &encData); err == nil && encData.Data != "" {
-		// 加密格式：解密 Data 字段
 		key := getEncryptionKey(username)
 		decrypted, err := aesGCMDecrypt(encData.Data, key)
 		if err != nil {
@@ -632,10 +609,9 @@ func (a *App) GetMSAuthData(username string) (*MSAuthData, error) {
 		if err := json.Unmarshal(decrypted, &authData); err != nil {
 			return nil, fmt.Errorf("解析解密后的认证数据失败: %w", err)
 		}
-		authData.Username = username // 确保用户名正确
+		authData.Username = username
 		return &authData, nil
 	}
-	// 兼容旧版明文格式
 	var authData MSAuthData
 	if err := json.Unmarshal(data, &authData); err != nil {
 		return nil, err
@@ -649,7 +625,6 @@ func (a *App) SaveMSAuthData(username string, authData *MSAuthData) error {
 	if err := os.MkdirAll(userDir, 0700); err != nil {
 		return err
 	}
-	// 构建需要加密的数据（除 username 以外的所有字段）
 	encryptPayload := map[string]interface{}{
 		"accessToken":   authData.AccessToken,
 		"refreshToken":  authData.RefreshToken,
@@ -662,13 +637,11 @@ func (a *App) SaveMSAuthData(username string, authData *MSAuthData) error {
 	if err != nil {
 		return err
 	}
-	// 加密
 	key := getEncryptionKey(username)
 	encrypted, err := aesGCMEncrypt(payloadBytes, key)
 	if err != nil {
 		return fmt.Errorf("加密认证数据失败: %w", err)
 	}
-	// 构建加密后的存储格式
 	encData := MSAuthDataEncrypted{
 		Username: username,
 		Data:     encrypted,
@@ -682,7 +655,6 @@ func (a *App) SaveMSAuthData(username string, authData *MSAuthData) error {
 
 // ===== Yggdrasil 外置登录 =====
 
-// YggdrasilAuthResponse Yggdrasil 认证响应
 type YggdrasilAuthResponse struct {
 	AccessToken       string `json:"accessToken"`
 	ClientToken       string `json:"clientToken"`
@@ -694,40 +666,34 @@ type YggdrasilAuthResponse struct {
 		ID   string `json:"id"`
 		Name string `json:"name"`
 	} `json:"selectedProfile"`
-	Error        string `json:"error"`
-	ErrorMessage string `json:"errorMessage"`
-	Cause        string `json:"cause"`
+	Error         string `json:"error"`
+	ErrorMessage  string `json:"errorMessage"`
+	Cause         string `json:"cause"`
 }
 
-// YggdrasilServerMeta Yggdrasil 服务器元信息
 type YggdrasilServerMeta struct {
 	ServerName string `json:"serverName"`
 }
 
-// YggdrasilServerLinks Yggdrasil 服务器链接
 type YggdrasilServerLinks struct {
 	Homepage string `json:"homepage"`
 	Register string `json:"register"`
 }
 
-// YggdrasilServerInfo Yggdrasil 服务器信息
 type YggdrasilServerInfo struct {
 	Meta  YggdrasilServerMeta  `json:"meta"`
 	Links YggdrasilServerLinks `json:"links"`
 }
 
 // normalizeYggdrasilURL 规范化 Yggdrasil 服务器地址
-// 安全加固: 校验 URL 协议，只允许 http/https
 func normalizeYggdrasilURL(serverURL string) (string, error) {
 	serverURL = strings.TrimSpace(serverURL)
 	serverURL = strings.TrimSuffix(serverURL, "/")
 
-	// 安全加固: 校验 URL 协议
 	if !strings.HasPrefix(serverURL, "http://") && !strings.HasPrefix(serverURL, "https://") {
 		return "", fmt.Errorf("无效的服务器地址协议，只支持 http/https")
 	}
 
-	// 如果不以 /api/yggdrasil 结尾，自动添加
 	if !strings.HasSuffix(serverURL, "/api/yggdrasil") {
 		serverURL = serverURL + "/api/yggdrasil"
 	}
@@ -741,13 +707,11 @@ func (a *App) GetYggdrasilServerInfo(serverURL string) (*YggdrasilServerInfo, er
 		return nil, err
 	}
 	serverURL = normalized
-	// 请求服务器根路径获取信息
 	infoURL := strings.TrimSuffix(serverURL, "/api/yggdrasil")
 	if !strings.HasSuffix(infoURL, "/") {
 		infoURL += "/"
 	}
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Get(infoURL)
+	resp, err := httpClient.Get(infoURL)
 	if err != nil {
 		return nil, fmt.Errorf("无法连接到验证服务器: %v", err)
 	}
@@ -771,7 +735,6 @@ func (a *App) LoginYggdrasil(serverURL string, username string, password string)
 	}
 	serverURL = normalized
 	authURL := serverURL + "/authserver/authenticate"
-	// 构建认证请求
 	payload := map[string]interface{}{
 		"agent": map[string]interface{}{
 			"name":    "Minecraft",
@@ -785,13 +748,12 @@ func (a *App) LoginYggdrasil(serverURL string, username string, password string)
 	if err != nil {
 		return nil, fmt.Errorf("构建请求失败: %v", err)
 	}
-	client := &http.Client{Timeout: 15 * time.Second}
 	req, err := http.NewRequest("POST", authURL, strings.NewReader(string(body)))
 	if err != nil {
 		return nil, fmt.Errorf("创建请求失败: %v", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := client.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("连接验证服务器失败: %v", err)
 	}
@@ -804,7 +766,6 @@ func (a *App) LoginYggdrasil(serverURL string, username string, password string)
 	if err := json.Unmarshal(respBody, &authResp); err != nil {
 		return nil, fmt.Errorf("解析响应失败: %v", err)
 	}
-	// 检查错误
 	if authResp.Error != "" {
 		errMsg := authResp.ErrorMessage
 		if errMsg == "" {
@@ -818,7 +779,6 @@ func (a *App) LoginYggdrasil(serverURL string, username string, password string)
 	if authResp.AccessToken == "" {
 		return nil, fmt.Errorf("登录失败: 未获取到访问令牌")
 	}
-	// 获取选中的角色
 	var playerName string
 	var playerUUID string
 	if authResp.SelectedProfile != nil {
@@ -830,7 +790,6 @@ func (a *App) LoginYggdrasil(serverURL string, username string, password string)
 	} else {
 		return nil, fmt.Errorf("该账号还没有创建角色，请先在皮肤站创建角色")
 	}
-	// 获取服务器名称
 	serverName := ""
 	serverInfo, infoErr := a.GetYggdrasilServerInfo(serverURL)
 	if infoErr == nil && serverInfo.Meta.ServerName != "" {
@@ -853,24 +812,22 @@ func (a *App) RefreshExternalToken(username string) error {
 	if err != nil {
 		return fmt.Errorf("获取外置认证数据失败: %v", err)
 	}
-	// 尝试 refresh 端点
 	refreshURL := authData.ServerURL + "/authserver/refresh"
 	payload := map[string]interface{}{
 		"accessToken": authData.AccessToken,
 		"clientToken": authData.ClientToken,
-		"requestUser": true,
+		"requestUser":  true,
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("构建请求失败: %v", err)
 	}
-	client := &http.Client{Timeout: 15 * time.Second}
 	req, err := http.NewRequest("POST", refreshURL, strings.NewReader(string(body)))
 	if err != nil {
 		return fmt.Errorf("创建请求失败: %v", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := client.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("连接验证服务器失败: %v", err)
 	}
@@ -884,7 +841,6 @@ func (a *App) RefreshExternalToken(username string) error {
 		return fmt.Errorf("解析响应失败: %v", err)
 	}
 	if authResp.Error != "" {
-		// refresh 失败，尝试用密码重新登录
 		if authData.Password != "" {
 			newAuthData, loginErr := a.LoginYggdrasil(authData.ServerURL, authData.Username, authData.Password)
 			if loginErr != nil {
@@ -896,7 +852,6 @@ func (a *App) RefreshExternalToken(username string) error {
 		}
 		return fmt.Errorf("令牌刷新失败: %s", authResp.ErrorMessage)
 	}
-	// 更新令牌
 	authData.AccessToken = authResp.AccessToken
 	if authResp.ClientToken != "" {
 		authData.ClientToken = authResp.ClientToken
@@ -909,18 +864,16 @@ func (a *App) RefreshExternalToken(username string) error {
 }
 
 // DownloadAuthlibInjector 下载 authlib-injector.jar
-// 安全加固: 添加 SHA-256 校验
+// 安全加固: 使用标准 SHA-256 校验（与外部 API 提供的哈希匹配）
 func (a *App) DownloadAuthlibInjector() (string, error) {
 	qglDir := a.GetQGLDir()
 	jarPath := filepath.Join(qglDir, "authlib-injector.jar")
-	// 如果已存在，直接返回
 	if _, err := os.Stat(jarPath); err == nil {
 		return jarPath, nil
 	}
 	if err := os.MkdirAll(qglDir, 0700); err != nil {
 		return "", fmt.Errorf("创建目录失败: %v", err)
 	}
-	// 参考 PCL：先获取 latest.json 获取下载地址，再下载 jar
 	latestURLs := []string{
 		"https://authlib-injector.yushi.moe/artifact/latest.json",
 		"https://bmclapi2.bangbang93.com/mirrors/authlib-injector/artifact/latest.json",
@@ -928,9 +881,8 @@ func (a *App) DownloadAuthlibInjector() (string, error) {
 	var latestInfo map[string]interface{}
 	var downloadURL string
 	var expectedSHA256 string
-	client := &http.Client{Timeout: 15 * time.Second}
-	for _, url := range latestURLs {
-		resp, err := client.Get(url)
+	for _, u := range latestURLs {
+		resp, err := httpClient.Get(u)
 		if err != nil {
 			continue
 		}
@@ -941,7 +893,6 @@ func (a *App) DownloadAuthlibInjector() (string, error) {
 				if du, ok := latestInfo["download_url"].(string); ok && du != "" {
 					downloadURL = du
 				}
-				// 安全加固: 获取预期的 SHA-256 哈希
 				if sha, ok := latestInfo["sha256"].(string); ok && sha != "" {
 					expectedSHA256 = strings.ToLower(sha)
 				}
@@ -954,12 +905,10 @@ func (a *App) DownloadAuthlibInjector() (string, error) {
 	if downloadURL == "" {
 		return "", fmt.Errorf("获取 authlib-injector 下载地址失败")
 	}
-	// 替换为 BMCLAPI 镜像作为备用
 	mirrorURL := strings.ReplaceAll(downloadURL, "authlib-injector.yushi.moe", "bmclapi2.bangbang93.com/mirrors/authlib-injector")
-	downloadClient := &http.Client{Timeout: 120 * time.Second}
 	var lastErr error
-	for _, url := range []string{downloadURL, mirrorURL} {
-		resp, err := downloadClient.Get(url)
+	for _, u := range []string{downloadURL, mirrorURL} {
+		resp, err := httpClient.Get(u)
 		if err != nil {
 			lastErr = err
 			continue
@@ -980,7 +929,6 @@ func (a *App) DownloadAuthlibInjector() (string, error) {
 		}
 		file.Close()
 
-		// 安全加固: 校验 SHA-256 哈希
 		if expectedSHA256 != "" {
 			actualSHA256, err := calculateSHA256(jarPath)
 			if err != nil {
@@ -998,18 +946,18 @@ func (a *App) DownloadAuthlibInjector() (string, error) {
 	return "", fmt.Errorf("下载 authlib-injector 失败: %v", lastErr)
 }
 
-// calculateSHA256 计算文件的 SHA-256 哈希
+// calculateSHA256 计算文件的 SHA-256 哈希（标准算法，用于与外部 API 校验）
 func calculateSHA256(filePath string) (string, error) {
 	file, err := os.Open(filePath)
 	if err != nil {
 		return "", err
 	}
 	defer file.Close()
-	hash := NewUMFSHash()
-	if _, err := io.Copy(hash, file); err != nil {
+	h := sha256.New()
+	if _, err := io.Copy(h, file); err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("%x", hash.Sum(nil)), nil
+	return fmt.Sprintf("%x", h.Sum(nil)), nil
 }
 
 // GetAuthlibInjectorPath 获取 authlib-injector.jar 路径（不存在则下载）
