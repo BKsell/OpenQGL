@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted, onUnmounted, computed, defineAsyncComponent, nextTick } from 'vue'
+import { ref, onMounted, onUnmounted, computed, defineAsyncComponent, nextTick, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import LoginPage from './components/LoginPage.vue'
 // 主页是首屏，保持同步加载
@@ -35,6 +35,7 @@ const transitionName = ref('page-left')
 
 // 主题和背景（backgroundDataURL 存储实际可用的 data URL）
 const themeColor = ref('cyan')
+const darkMode = ref(false)
 const backgroundImageURL = ref('')
 
 // 下载列表相关
@@ -58,6 +59,10 @@ const toastMessage = ref('')
 const toastVisible = ref(false)
 let toastTimer = null
 
+// 系统主题监听
+let mediaQuery = null
+let mediaQueryHandler = null
+
 const isGuestLocked = computed(() => {
   return currentUser.value?.type === 'guest' && currentUser.value?.isLocked
 })
@@ -79,6 +84,22 @@ const bgStyle = computed(() => {
     backgroundPosition: 'center',
     backgroundRepeat: 'no-repeat'
   }
+})
+
+// 应用深色模式
+function applyDarkMode(isDark) {
+  darkMode.value = isDark
+  const root = document.documentElement
+  if (isDark) {
+    root.setAttribute('data-mode', 'dark')
+  } else {
+    root.removeAttribute('data-mode')
+  }
+}
+
+// 监听深色模式变化
+watch(darkMode, (newVal) => {
+  localStorage.setItem('qgl-dark-mode', newVal ? 'true' : 'false')
 })
 
 function showToast(msg, duration = 3000) {
@@ -122,6 +143,29 @@ async function loadThemeAndBg() {
   }
 }
 
+// 初始化深色模式
+function initDarkMode() {
+  // 优先使用用户手动设置
+  const saved = localStorage.getItem('qgl-dark-mode')
+  if (saved !== null) {
+    applyDarkMode(saved === 'true')
+    return
+  }
+
+  // 否则跟随系统主题
+  mediaQuery = window.matchMedia('(prefers-color-scheme: dark)')
+  applyDarkMode(mediaQuery.matches)
+
+  // 监听系统主题变化
+  mediaQueryHandler = (e) => {
+    // 只有用户没有手动设置时才跟随系统
+    if (localStorage.getItem('qgl-dark-mode') === null) {
+      applyDarkMode(e.matches)
+    }
+  }
+  mediaQuery.addEventListener('change', mediaQueryHandler)
+}
+
 onMounted(async () => {
   // 设置全局弹窗引用
   nextTick(() => {
@@ -129,6 +173,9 @@ onMounted(async () => {
       setQGLDialogRef(qglDialog.value)
     }
   })
+
+  // 初始化深色模式
+  initDarkMode()
 
   // 注册事件监听（不阻塞启动）
   EventsOn('launchStatus', (status) => {
@@ -216,6 +263,10 @@ onMounted(async () => {
 
 onUnmounted(() => {
   if (toastTimer) clearTimeout(toastTimer)
+  // 移除系统主题监听
+  if (mediaQuery && mediaQueryHandler) {
+    mediaQuery.removeEventListener('change', mediaQueryHandler)
+  }
 })
 
 async function refreshDownloadCount() {
@@ -317,6 +368,12 @@ async function handleUnlock() {
   } catch (e) { unlockError.value = String(e).replace('Error: ', '') }
   finally { unlockLoading.value = false }
 }
+
+// 导出深色模式控制函数供 SettingsPage 使用
+defineExpose({
+  toggleDarkMode: () => applyDarkMode(!darkMode.value),
+  darkMode
+})
 </script>
 
 <template>
@@ -324,7 +381,7 @@ async function handleUnlock() {
     <!-- 背景图片层 -->
     <div class="bg-layer" :style="bgStyle"></div>
     <!-- 半透明遮罩层 -->
-    <div class="bg-overlay"></div>
+    <div class="bg-overlay" :class="{ 'dark': darkMode }"></div>
 
     <!-- 页面内容 + 过渡动画 -->
     <Transition :name="transitionName" mode="out-in">
@@ -522,6 +579,11 @@ async function handleUnlock() {
   z-index: 1;
   background: rgba(255, 255, 255, 0.15);
   pointer-events: none;
+  transition: background 0.3s ease;
+}
+
+.bg-overlay.dark {
+  background: rgba(0, 0, 0, 0.4);
 }
 
 /* ====== 全局按钮 ====== */
