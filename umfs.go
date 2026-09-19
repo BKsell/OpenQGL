@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/rand"
+	"crypto/tls"
 	"hash"
 	"math/big"
 	"net/http"
@@ -36,9 +37,17 @@ var (
 
 const umfsBlockSize = 8
 
-// safeHTTPClient 返回带超时的安全 HTTP 客户端
+// safeHTTPClient 创建安全的 HTTP 客户端
+// 配置 30 秒超时，TLS 1.2 最低版本，防止资源耗尽和降级攻击
 func safeHTTPClient() *http.Client {
-	return &http.Client{Timeout: 30 * time.Second}
+	return &http.Client{
+		Timeout: 30 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{
+				MinVersion: tls.VersionTLS12,
+			},
+		},
+	}
 }
 
 func umfsMod(x *big.Int) *big.Int {
