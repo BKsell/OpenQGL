@@ -510,7 +510,7 @@ function getUserTypeLabel(type) {
         <template v-else-if="msLoginStep === 'polling'">
           <div class="ms-login-box fade-in">
             <div class="win11-avatar">
-              <svg class="spin" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#00BCD4" stroke-width="2.5" stroke-linecap="round"><path d="M12 2a10 10 0 0 1 10 10"/></svg>
+              <svg class="spin" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="2.5" stroke-linecap="round"><path d="M12 2a10 10 0 0 1 10 10"/></svg>
             </div>
             <div class="ms-progress">{{ msProgressMsg }}</div>
             <div class="ms-waiting">{{ t('login.connectingMicrosoft') }}</div>
@@ -777,11 +777,12 @@ function getUserTypeLabel(type) {
   max-width: 380px;
   padding: 32px 28px;
   border-radius: 16px;
-  background: rgba(255, 255, 255, 0.88);
+  background: var(--glass-bg-heavy);
   backdrop-filter: blur(24px);
   -webkit-backdrop-filter: blur(24px);
-  border: 1px solid rgba(255, 255, 255, 0.4);
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.08);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-shadow);
+  transition: background 0.3s;
 }
 
 /* ===== 头像 ===== */
@@ -789,8 +790,8 @@ function getUserTypeLabel(type) {
   width: 120px;
   height: 120px;
   border-radius: 50%;
-  background: #E0F7FA;
-  color: #0097A7;
+  background: var(--primary-light);
+  color: var(--primary-dark);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -812,22 +813,22 @@ function getUserTypeLabel(type) {
 }
 
 .win11-avatar.create-mode {
-  background: #E0F7FA;
-  color: #0097A7;
+  background: var(--primary-light);
+  color: var(--primary-dark);
 }
 
 /* ===== 用户名 ===== */
 .win11-username {
   font-size: 20px;
   font-weight: 400;
-  color: #333333;
+  color: var(--text);
   margin-bottom: 4px;
 }
 
 /* ===== 提示文字 ===== */
 .win11-hint {
   font-size: 14px;
-  color: #999999;
+  color: var(--text-light);
   margin-top: 4px;
 }
 
@@ -842,40 +843,40 @@ function getUserTypeLabel(type) {
 
 .win11-input {
   padding: 10px 14px;
-  border: 2px solid #E0E0E0;
+  border: 2px solid var(--border);
   border-radius: 4px 0 0 4px;
   font-size: 14px;
   outline: none;
   background: var(--glass-bg-heavy);
-  color: #333333;
+  color: var(--text);
   transition: border-color 0.15s;
 }
 
 .win11-input:focus {
-  border-color: #00BCD4;
+  border-color: var(--primary);
 }
 
 .win11-input::placeholder {
-  color: #BBBBBB;
+  color: var(--text-light);
 }
 
 .win11-input-block {
   width: 100%;
   border-radius: 4px;
-  border: 2px solid #E0E0E0;
+  border: 2px solid var(--border);
 }
 
 .win11-input-block:focus {
-  border-color: #00BCD4;
+  border-color: var(--primary);
 }
 
 .win11-submit-btn {
   height: 40px;
   padding: 0 14px;
-  border: 2px solid #00BCD4;
+  border: 2px solid var(--primary);
   border-left: none;
   border-radius: 0 4px 4px 0;
-  background: #00BCD4;
+  background: var(--primary);
   color: white;
   cursor: pointer;
   display: flex;
@@ -886,8 +887,8 @@ function getUserTypeLabel(type) {
 }
 
 .win11-submit-btn:hover {
-  background: #0097A7;
-  border-color: #0097A7;
+  background: var(--primary-dark);
+  border-color: var(--primary-dark);
 }
 
 .win11-submit-btn:disabled {
@@ -899,9 +900,9 @@ function getUserTypeLabel(type) {
 .win11-login-btn {
   width: 240px;
   padding: 10px 0;
-  border: 2px solid #00BCD4;
+  border: 2px solid var(--primary);
   border-radius: 4px;
-  background: #00BCD4;
+  background: var(--primary);
   color: white;
   font-size: 14px;
   font-weight: 500;
@@ -911,8 +912,8 @@ function getUserTypeLabel(type) {
 }
 
 .win11-login-btn:hover {
-  background: #0097A7;
-  border-color: #0097A7;
+  background: var(--primary-dark);
+  border-color: var(--primary-dark);
 }
 
 .win11-login-btn:disabled {
@@ -924,7 +925,7 @@ function getUserTypeLabel(type) {
 .win11-type-tabs {
   display: flex;
   gap: 0;
-  border: 2px solid #E0E0E0;
+  border: 2px solid var(--border);
   border-radius: 4px;
   overflow: hidden;
   margin-top: 4px;
@@ -934,12 +935,12 @@ function getUserTypeLabel(type) {
   padding: 8px 20px;
   border: none;
   background: var(--glass-bg-heavy);
-  color: #666666;
+  color: var(--text-secondary);
   font-size: 13px;
   font-weight: 500;
   cursor: pointer;
   transition: all 0.15s;
-  border-right: 1px solid #E0E0E0;
+  border-right: 1px solid var(--border);
 }
 
 .win11-type-tab:last-child {
@@ -947,7 +948,7 @@ function getUserTypeLabel(type) {
 }
 
 .win11-type-tab.active {
-  background: #00BCD4;
+  background: var(--primary);
   color: white;
 }
 
@@ -962,17 +963,17 @@ function getUserTypeLabel(type) {
   gap: 10px;
   width: 240px;
   margin-top: 4px;
-  background: rgba(255, 255, 255, 0.65);
+  background: var(--glass-bg);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   border-radius: 12px;
   padding: 16px;
-  border: 1px solid rgba(255, 255, 255, 0.3);
+  border: 1px solid var(--glass-border);
 }
 
 .win11-form-hint {
   font-size: 12px;
-  color: #999999;
+  color: var(--text-light);
   text-align: center;
 }
 
@@ -985,28 +986,28 @@ function getUserTypeLabel(type) {
 .ext-template-btn {
   flex: 1;
   padding: 6px 10px;
-  border: 1.5px solid #E0E0E0;
+  border: 1.5px solid var(--border);
   border-radius: 6px;
   background: var(--glass-bg-heavy);
-  color: #666666;
+  color: var(--text-secondary);
   font-size: 12px;
   cursor: pointer;
   transition: all 0.15s;
 }
 
 .ext-template-btn.active {
-  border-color: #00BCD4;
-  color: #00BCD4;
-  background: rgba(0, 188, 212, 0.08);
+  border-color: var(--primary);
+  color: var(--primary);
+  background: var(--primary-bg);
 }
 
 .ext-template-btn:hover:not(.active) {
-  border-color: #B0BEC5;
+  border-color: var(--text-light);
 }
 
 .ext-server-name {
   font-size: 12px;
-  color: #00BCD4;
+  color: var(--primary);
   text-align: center;
   margin-top: -4px;
 }
@@ -1033,23 +1034,23 @@ function getUserTypeLabel(type) {
   flex-direction: column;
   align-items: center;
   gap: 8px;
-  background: rgba(255, 255, 255, 0.75);
+  background: var(--glass-bg);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   border-radius: 12px;
   padding: 20px 16px;
-  border: 1px solid rgba(255, 255, 255, 0.3);
+  border: 1px solid var(--glass-border);
 }
 
 .premium-desc {
   font-size: 14px;
-  color: #333333;
+  color: var(--text);
   font-weight: 500;
 }
 
 .premium-hint {
   font-size: 12px;
-  color: #999999;
+  color: var(--text-light);
   line-height: 1.5;
   max-width: 260px;
 }
@@ -1061,12 +1062,12 @@ function getUserTypeLabel(type) {
   flex-direction: column;
   align-items: center;
   gap: 10px;
-  background: rgba(255, 255, 255, 0.75);
+  background: var(--glass-bg);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   border-radius: 12px;
   padding: 20px 16px;
-  border: 1px solid rgba(255, 255, 255, 0.3);
+  border: 1px solid var(--glass-border);
 }
 
 .ms-auto-hint {
@@ -1082,36 +1083,36 @@ function getUserTypeLabel(type) {
 .ms-step-title {
   font-size: 16px;
   font-weight: 600;
-  color: #333333;
+  color: var(--text);
 }
 
 .ms-step-desc {
   font-size: 13px;
-  color: #666666;
+  color: var(--text-secondary);
   text-align: left;
   width: 100%;
 }
 
 .ms-url-box {
   background: var(--glass-bg);
-  border: 1px solid #E0E0E0;
+  border: 1px solid var(--border);
   border-radius: 4px;
   padding: 8px 12px;
   font-size: 13px;
-  color: #0097A7;
+  color: var(--primary-dark);
   word-break: break-all;
   font-family: monospace;
   width: 100%;
 }
 
 .ms-code-box {
-  background: #E0F7FA;
-  border: 2px solid #00BCD4;
+  background: var(--primary-light);
+  border: 2px solid var(--primary);
   border-radius: 4px;
   padding: 12px;
   font-size: 24px;
   font-weight: 700;
-  color: #0097A7;
+  color: var(--primary-dark);
   letter-spacing: 4px;
   font-family: monospace;
   width: 100%;
@@ -1120,13 +1121,13 @@ function getUserTypeLabel(type) {
 
 .ms-progress {
   font-size: 13px;
-  color: #00BCD4;
+  color: var(--primary);
   font-weight: 500;
 }
 
 .ms-waiting {
   font-size: 12px;
-  color: #999999;
+  color: var(--text-light);
 }
 
 /* ===== 左下角：用户列表 + 注册按钮 ===== */
@@ -1147,10 +1148,10 @@ function getUserTypeLabel(type) {
   gap: 8px;
   padding: 10px 14px;
   border-radius: 12px;
-  background: rgba(255, 255, 255, 0.82);
+  background: var(--glass-bg-heavy);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
-  border: 1px solid rgba(255, 255, 255, 0.35);
+  border: 1px solid var(--glass-border);
 }
 
 .win11-corner-btn {
@@ -1158,12 +1159,12 @@ function getUserTypeLabel(type) {
   align-items: center;
   gap: 8px;
   padding: 8px 16px;
-  border: 1px solid #E0E0E0;
+  border: 1px solid var(--border);
   border-radius: 4px;
   background: var(--glass-bg-heavy);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
-  color: #333333;
+  color: var(--text);
   font-size: 13px;
   font-weight: 400;
   cursor: pointer;
@@ -1171,12 +1172,12 @@ function getUserTypeLabel(type) {
 }
 
 .win11-corner-btn:hover {
-  background: #F5F5F5;
-  border-color: #CCCCCC;
+  background: var(--bg-card);
+  border-color: var(--text-light);
 }
 
 .win11-corner-btn:active {
-  background: #EEEEEE;
+  background: var(--bg-secondary);
 }
 
 /* ===== 右下角用户列表 ===== */
@@ -1193,7 +1194,7 @@ function getUserTypeLabel(type) {
   align-items: center;
   gap: 10px;
   padding: 8px 14px;
-  border: 1px solid #E0E0E0;
+  border: 1px solid var(--border);
   border-radius: 4px;
   background: var(--glass-bg-heavy);
   backdrop-filter: blur(12px);
@@ -1205,11 +1206,11 @@ function getUserTypeLabel(type) {
 
 .win11-user-chip:hover {
   background: var(--glass-bg);
-  border-color: #CCCCCC;
+  border-color: var(--text-light);
 }
 
 .win11-user-chip.active {
-  border-color: #00BCD4;
+  border-color: var(--primary);
   background: var(--primary-bg);
 }
 
@@ -1217,8 +1218,8 @@ function getUserTypeLabel(type) {
   width: 32px;
   height: 32px;
   border-radius: 50%;
-  background: #E0F7FA;
-  color: #0097A7;
+  background: var(--primary-light);
+  color: var(--primary-dark);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1240,7 +1241,7 @@ function getUserTypeLabel(type) {
 .win11-chip-name {
   font-size: 13px;
   font-weight: 500;
-  color: #333333;
+  color: var(--text);
 }
 
 .win11-chip-type {
@@ -1277,7 +1278,7 @@ function getUserTypeLabel(type) {
 
 .win11-no-users {
   font-size: 13px;
-  color: #999999;
+  color: var(--text-light);
   padding: 8px 14px;
 }
 
