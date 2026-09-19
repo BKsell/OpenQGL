@@ -647,7 +647,7 @@ func (a *App) GetMSAuthData(username string) (*MSAuthData, error) {
 // SaveMSAuthData 保存微软认证数据（加密存储，username 以外的字段全部加密）
 func (a *App) SaveMSAuthData(username string, authData *MSAuthData) error {
 	userDir := filepath.Join(a.GetUsersDir(), username)
-	if err := os.MkdirAll(userDir, 0755); err != nil {
+	if err := os.MkdirAll(userDir, 0700); err != nil {
 		return err
 	}
 	// 构建需要加密的数据（除 username 以外的所有字段）
@@ -918,7 +918,7 @@ func (a *App) DownloadAuthlibInjector() (string, error) {
 	if _, err := os.Stat(jarPath); err == nil {
 		return jarPath, nil
 	}
-	if err := os.MkdirAll(qglDir, 0755); err != nil {
+	if err := os.MkdirAll(qglDir, 0700); err != nil {
 		return "", fmt.Errorf("创建目录失败: %v", err)
 	}
 	// 参考 PCL：先获取 latest.json 获取下载地址，再下载 jar

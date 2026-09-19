@@ -205,7 +205,7 @@ func (a *App) saveUserType(username string, userType UserType) error {
 		return err
 	}
 	userDir := filepath.Join(a.GetUsersDir(), username)
-	if err := os.MkdirAll(userDir, 0755); err != nil {
+	if err := os.MkdirAll(userDir, 0700); err != nil {
 		return err
 	}
 	typeData := struct {
@@ -342,7 +342,7 @@ func (a *App) SaveExternalAuthData(username string, authData *ExternalAuthData) 
 		return err
 	}
 	userDir := filepath.Join(a.GetUsersDir(), username)
-	if err := os.MkdirAll(userDir, 0755); err != nil {
+	if err := os.MkdirAll(userDir, 0700); err != nil {
 		return fmt.Errorf("创建用户目录失败: %w", err)
 	}
 	// 构建需要加密的数据（除 serverName 以外的敏感字段）
@@ -417,7 +417,7 @@ func (a *App) CreateUser(username string, password string) error {
 		return err
 	}
 	userDir := filepath.Join(a.GetUsersDir(), username)
-	if err := os.MkdirAll(userDir, 0755); err != nil {
+	if err := os.MkdirAll(userDir, 0700); err != nil {
 		return fmt.Errorf("创建用户目录失败: %w", err)
 	}
 	if password != "" {
@@ -641,7 +641,7 @@ func (a *App) GetGlobalConfig() (*GlobalConfig, error) {
 
 func (a *App) SaveGlobalConfig(config *GlobalConfig) error {
 	qglDir := a.GetQGLDir()
-	if err := os.MkdirAll(qglDir, 0755); err != nil {
+	if err := os.MkdirAll(qglDir, 0700); err != nil {
 		return fmt.Errorf("创建QGL目录失败: %w", err)
 	}
 	data, err := json.MarshalIndent(config, "", "  ")
@@ -680,7 +680,7 @@ func (a *App) SaveUserConfig(username string, config *UserConfig) error {
 		return err
 	}
 	userDir := filepath.Join(a.GetUsersDir(), username)
-	if err := os.MkdirAll(userDir, 0755); err != nil {
+	if err := os.MkdirAll(userDir, 0700); err != nil {
 		return fmt.Errorf("创建用户目录失败: %w", err)
 	}
 	data, err := json.MarshalIndent(config, "", "  ")
@@ -874,7 +874,7 @@ func fileExists(path string) bool {
 // 3. 缓存到本地并返回 data URL
 func (a *App) GetBingDailyImage() (string, error) {
 	cacheDir := filepath.Join(a.GetQGLDir(), "cache")
-	if err := os.MkdirAll(cacheDir, 0755); err != nil {
+	if err := os.MkdirAll(cacheDir, 0700); err != nil {
 		return "", fmt.Errorf("创建缓存目录失败: %w", err)
 	}
 	cachePath := filepath.Join(cacheDir, "bing_daily.jpg")
