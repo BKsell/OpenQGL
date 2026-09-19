@@ -1,4 +1,4 @@
-package main
+﻿package main
 
 import (
 	"archive/zip"
@@ -512,10 +512,23 @@ func (a *App) scanVersionFolder(versionFolder string, folderName string) Install
 // ===== 下载列表功能 =====
 
 // AddToDownloadList 添加版本到下载列表
+// sanitizeVersionName 清理版本名称，防止路径遍历和特殊字符注入
+func sanitizeVersionName(name string) string {
+	name = strings.TrimSpace(name)
+	replacer := strings.NewReplacer("..", "", "/", "", "\\", "", ":", "", "*", "", "?", "", '"', "", "<", "", ">", "", "|", "")
+	return replacer.Replace(name)
+}
+
 func (a *App) AddToDownloadList(versionID string, versionURL string, customName string, versionType string) error {
 	a.downloadMutex.Lock()
 	defer a.downloadMutex.Unlock()
 
+
+	// 安全加固：清理版本名称，防止路径遍历
+	customName = sanitizeVersionName(customName)
+	if customName == "" {
+		return fmt.Errorf("版本名称无效")
+	}
 	for _, item := range a.downloadList {
 		if item.CustomName == customName {
 			return fmt.Errorf("下载列表中已存在同名版本: %s", customName)
