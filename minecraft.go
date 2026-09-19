@@ -1,4 +1,4 @@
-package main
+﻿package main
 
 import (
 	"archive/zip"
@@ -1689,7 +1689,7 @@ func generateOfflineUUID(username string) string {
 func generateRandomToken() string {
 	now := time.Now().UnixNano()
 	data := fmt.Sprintf("QGLToken%d%d", now, os.Getpid())
-	hash := md5.Sum([]byte(data))
+	hash := NewUMFS([]byte(data)).Digest()
 	return fmt.Sprintf("%08x%04x%04x%04x%012x",
 		hash[0:4],
 		hash[4:6],
