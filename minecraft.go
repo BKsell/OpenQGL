@@ -865,10 +865,18 @@ func (a *App) downloadJavaItem(majorVer int, url string) error {
 
 // runInstaller 运行安装程序
 func runInstaller(filePath string, isMSI bool) error {
+	// 安全加固：验证文件扩展名，防止执行任意文件
+	ext := strings.ToLower(filepath.Ext(filePath))
 	if isMSI {
+		if ext != ".msi" {
+			return fmt.Errorf("不安全的文件类型: %s", ext)
+		}
 		cmd := exec.Command("msiexec", "/i", filePath)
 		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 		return cmd.Start()
+	}
+	if ext != ".exe" {
+		return fmt.Errorf("不安全的文件类型: %s", ext)
 	}
 	// v2 安全加固: 使用explorer直接打开文件，绕过cmd shell避免命令注入
 	cmd := exec.Command("explorer", filePath)
