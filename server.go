@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -21,11 +22,11 @@ import (
 )
 
 const (
-	minPort = 1
-	maxPort = 65535
-	minMemoryMB = 128
-	maxMemoryMB = 32768
-	allowedDirPerm = 0700
+	minPort       = 1
+	maxPort       = 65535
+	minMemoryMB   = 128
+	maxMemoryMB   = 32768
+	allowedDirPerm  = 0700
 	allowedFilePerm = 0600
 )
 
@@ -72,7 +73,6 @@ func isValidMemory(mem int) bool {
 }
 
 // sanitizeServerName 清理服务器名称，防止路径遍历和特殊字符注入
-// 移除 .. / \ : * ? " < > | 等危险字符，确保文件名安全
 func sanitizeServerName(name string) string {
 	name = strings.TrimSpace(name)
 	replacer := strings.NewReplacer("..", "", "/", "", "\\", "", ":", "", "*", "", "?", "", '"', "", "<", "", ">", "", "|", "")
@@ -80,8 +80,6 @@ func sanitizeServerName(name string) string {
 }
 
 // isPathTraversal 检查目标路径是否存在路径遍历风险
-// 返回 true 表示存在风险（不安全），返回 false 表示安全
-// 通过解析绝对路径并检查前缀来防止 ../ 类攻击
 func isPathTraversal(baseDir, targetPath string) bool {
 	resolvedBase, err := filepath.Abs(baseDir)
 	if err != nil {
@@ -195,6 +193,7 @@ func (a *App) CreateServer(name, version string, port, maxMem, minMem int, onlin
 }
 
 // downloadServerJar 下载服务器 JAR 文件
+// 安全加固: 使用标准 SHA-1 校验（Mojang API 返回的是 SHA1）
 func (a *App) downloadServerJar(version string, targetDir string) error {
 	jarPath := filepath.Join(targetDir, version+"-server.jar")
 	if _, err := os.Stat(jarPath); err == nil {
@@ -223,8 +222,7 @@ func (a *App) downloadServerJar(version string, targetDir string) error {
 	versionURL = strings.Replace(versionURL, "https://piston-meta.mojang.com", "https://bmclapi2.bangbang93.com", 1)
 	versionURL = strings.Replace(versionURL, "https://launcher.mojang.com", "https://bmclapi2.bangbang93.com", 1)
 
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Get(versionURL)
+	resp, err := httpClient.Get(versionURL)
 	if err != nil {
 		return fmt.Errorf("下载版本 JSON 失败: %v", err)
 	}
@@ -260,8 +258,7 @@ func (a *App) downloadServerJar(version string, targetDir string) error {
 	jarURL = strings.Replace(jarURL, "https://piston-data.mojang.com", "https://bmclapi2.bangbang93.com", 1)
 	jarURL = strings.Replace(jarURL, "https://launcher.mojang.com", "https://bmclapi2.bangbang93.com", 1)
 
-	downloadClient := &http.Client{Timeout: 120 * time.Second}
-	dlResp, err := downloadClient.Get(jarURL)
+	dlResp, err := httpClient.Get(jarURL)
 	if err != nil {
 		return fmt.Errorf("下载服务端 JAR 失败: %v", err)
 	}
@@ -276,7 +273,7 @@ func (a *App) downloadServerJar(version string, targetDir string) error {
 		return fmt.Errorf("创建临时文件失败: %v", err)
 	}
 
-	hasher := NewUMFSHash()
+	hasher := sha1.New()
 	tee := io.TeeReader(dlResp.Body, hasher)
 	if _, err := io.Copy(file, tee); err != nil {
 		file.Close()
@@ -335,9 +332,7 @@ func (a *App) StartServer(name string) error {
 
 	cmd := exec.Command(javaPath, args...)
 	cmd.Dir = cfg.ServerDir
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		HideWindow: true,
-	}
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
