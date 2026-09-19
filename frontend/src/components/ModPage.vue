@@ -27,7 +27,9 @@ async function loadInstalledVersions() {
     if (installedVersions.value.length > 0 && !selectedVersion.value) {
       selectedVersion.value = installedVersions.value[0].folderName
     }
-  } catch {}
+  } catch (error) {
+    console.error('加载已安装版本列表失败:', error)
+  }
 }
 
 async function loadModList() {
