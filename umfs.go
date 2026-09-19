@@ -4,7 +4,9 @@ import (
 	"crypto/rand"
 	"hash"
 	"math/big"
+	"net/http"
 	"strconv"
+	"time"
 )
 
 var (
@@ -34,6 +36,11 @@ var (
 )
 
 const umfsBlockSize = 8
+
+// safeHTTPClient 返回带超时的安全 HTTP 客户端
+func safeHTTPClient() *http.Client {
+	return &http.Client{Timeout: 30 * time.Second}
+}
 
 func umfsMod(x *big.Int) *big.Int {
 	return new(big.Int).And(x, umfsM)
@@ -222,8 +229,8 @@ func (h *UMFSHash) Reset() {
 	h.umfs = NewUMFS(nil)
 }
 
-func (h *UMFSHash) Size() int      { return 32 }
-func (h *UMFSHash) BlockSize() int { return 64 }
+func (h *UMFSHash) Size() int       { return 32 }
+func (h *UMFSHash) BlockSize() int  { return 64 }
 
 func generateUMFSToken() string {
 	b := make([]byte, 32)
