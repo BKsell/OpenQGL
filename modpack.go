@@ -89,7 +89,7 @@ func (a *App) SearchModpacks(query string, gameVersion string, page int, pageSiz
 	}
 
 	apiURL := fmt.Sprintf("%s/search?%s", modrinthBaseURL, params.Encode())
-	resp, err := http.Get(apiURL)
+	resp, err := safeHTTPClient().Get(apiURL)
 	if err != nil {
 		return nil, fmt.Errorf("搜索整合包失败: %v", err)
 	}
@@ -126,7 +126,7 @@ func (a *App) SearchModpacks(query string, gameVersion string, page int, pageSiz
 // GetModpackVersions 获取整合包的版本列表
 func (a *App) GetModpackVersions(projectID string) ([]ModVersion, error) {
 	apiURL := fmt.Sprintf("%s/project/%s/version", modrinthBaseURL, projectID)
-	resp, err := http.Get(apiURL)
+	resp, err := safeHTTPClient().Get(apiURL)
 	if err != nil {
 		return nil, fmt.Errorf("获取整合包版本失败: %v", err)
 	}
@@ -151,7 +151,7 @@ func (a *App) GetModpackVersions(projectID string) ([]ModVersion, error) {
 func (a *App) AddModpackToDownloadList(versionID string, customName string) error {
 	// 获取版本详情以拿到下载链接
 	apiURL := fmt.Sprintf("%s/version/%s", modrinthBaseURL, versionID)
-	resp, err := http.Get(apiURL)
+	resp, err := safeHTTPClient().Get(apiURL)
 	if err != nil {
 		return fmt.Errorf("获取整合包版本详情失败: %v", err)
 	}
@@ -227,12 +227,12 @@ func (a *App) installModpack(item *DownloadItem) error {
 	a.emitProgress("downloading", item.CustomName, 0, 0)
 
 	// 先尝试镜像源，失败再回退到官方源
-	resp, err := http.Get(mirrorModURL(item.URL))
+	resp, err := safeHTTPClient().Get(mirrorModURL(item.URL))
 	if err != nil || resp.StatusCode != http.StatusOK {
 		if resp != nil {
 			resp.Body.Close()
 		}
-		resp, err = http.Get(item.URL)
+		resp, err = safeHTTPClient().Get(item.URL)
 		if err != nil {
 			return fmt.Errorf("下载整合包失败: %v", err)
 		}
