@@ -3,7 +3,6 @@ package main
 import (
 	"bufio"
 	"embed"
-	"os"
 	"strings"
 	"sync"
 	"unicode"
@@ -12,20 +11,17 @@ import (
 //go:embed resources/ModData.txt
 var modDataFile embed.FS
 
-// ModTranslationEntry 翻译条目
 type ModTranslationEntry struct {
 	English string `json:"english"`
 	Chinese string `json:"chinese"`
 }
 
-// modTranslationCache 翻译缓存
 var (
 	translationEntries []ModTranslationEntry
 	translationLoaded  bool
-	translationMutex  sync.RWMutex
+	translationMutex   sync.RWMutex
 )
 
-// loadTranslations 加载翻译对照表（只加载一次）
 func loadTranslations() {
 	translationMutex.Lock()
 	defer translationMutex.Unlock()
@@ -47,14 +43,12 @@ func loadTranslations() {
 			continue
 		}
 
-		// 每行用 ¨ 分隔多个映射条目
 		parts := strings.Split(line, "¨")
 		for _, part := range parts {
 			part = strings.TrimSpace(part)
 			if part == "" {
 				continue
 			}
-			// 每个 | 分隔 英文标识|中文翻译
 			idx := strings.Index(part, "|")
 			if idx <= 0 || idx >= len(part)-1 {
 				continue
@@ -71,8 +65,6 @@ func loadTranslations() {
 	}
 }
 
-// TranslateModName 将英文 Mod 名称/Slug 翻译为中文
-// 支持精确匹配和前缀匹配
 func (a *App) TranslateModName(english string) string {
 	loadTranslations()
 
@@ -81,7 +73,6 @@ func (a *App) TranslateModName(english string) string {
 
 	lowerEnglish := strings.ToLower(strings.TrimSpace(english))
 
-	// 1. 精确匹配（去掉 @ 后缀比较）
 	for _, entry := range translationEntries {
 		key := strings.TrimSuffix(entry.English, "@")
 		if strings.ToLower(key) == lowerEnglish {
@@ -89,7 +80,6 @@ func (a *App) TranslateModName(english string) string {
 		}
 	}
 
-	// 2. 前缀匹配（@ 开头的条目，如 "industrial-craft@" 匹配 "industrial-craft-2-2-8-110"）
 	for _, entry := range translationEntries {
 		if strings.HasSuffix(entry.English, "@") {
 			prefix := strings.ToLower(entry.English[:len(entry.English)-1])
@@ -99,7 +89,6 @@ func (a *App) TranslateModName(english string) string {
 		}
 	}
 
-	// 3. 包含匹配（不带 @ 的条目，检查英文是否包含 key）
 	for _, entry := range translationEntries {
 		if !strings.HasSuffix(entry.English, "@") {
 			key := strings.ToLower(entry.English)
@@ -109,10 +98,9 @@ func (a *App) TranslateModName(english string) string {
 		}
 	}
 
-	return english // 无匹配则返回原名
+	return english
 }
 
-// SearchModsByChineseName 通过中文名称搜索 Mod（返回所有匹配的英文原名）
 func (a *App) SearchModsByChineseName(chineseQuery string) []string {
 	loadTranslations()
 
@@ -132,7 +120,6 @@ func (a *App) SearchModsByChineseName(chineseQuery string) []string {
 	return results
 }
 
-// GetTranslationCount 获取已加载的翻译条目数量
 func (a *App) GetTranslationCount() int {
 	loadTranslations()
 	translationMutex.RLock()
@@ -140,18 +127,20 @@ func (a *App) GetTranslationCount() int {
 	return len(translationEntries)
 }
 
-// fuzzyMatch 模糊匹配：检查两个字符串的相似度
 func fuzzyMatch(s, t string) float64 {
 	s = strings.ToLower(s)
 	t = strings.ToLower(t)
 	if s == t {
 		return 1.0
 	}
-	// 计算 Levenshtein 距离的简化版本
 	lenS := len(s)
 	lenT := len(t)
-	if lenS == 0 { return 0 }
-	if lenT == 0 { return 0 }
+	if lenS == 0 {
+		return 0
+	}
+	if lenT == 0 {
+		return 0
+	}
 
 	matrix := make([][]int, lenS+1)
 	for i := range matrix {
@@ -175,17 +164,25 @@ func fuzzyMatch(s, t string) float64 {
 		}
 	}
 	maxLen := lenS
-	if lenT > maxLen { maxLen = lenT }
+	if lenT > maxLen {
+		maxLen = lenT
+	}
 	return 1.0 - float64(matrix[lenS][lenT])/float64(maxLen)
 }
 
 func min3(a, b, c int) int {
-	if a < b { if a < c { return a } else { return c } }
-	if b < c { return b }
+	if a < b {
+		if a < c {
+			return a
+		}
+		return c
+	}
+	if b < c {
+		return b
+	}
 	return c
 }
 
-// isChinese 判断字符串是否包含中文
 func isChinese(s string) bool {
 	for _, r := range s {
 		if unicode.Is(unicode.Han, r) {
@@ -195,7 +192,6 @@ func isChinese(s string) bool {
 	return false
 }
 
-// GetModTranslationFileContent 获取翻译文件内容（用于显示开源协议信息）
 func (a *App) GetModTranslationFileContent() (string, error) {
 	data, err := modDataFile.ReadFile("resources/ModData.txt")
 	if err != nil {
@@ -204,9 +200,8 @@ func (a *App) GetModTranslationFileContent() (string, error) {
 	return string(data), nil
 }
 
-// ReadLicenseFile 读取 Apache License 文件内容
 func (a *App) ReadLicenseFile() string {
-	data, err := os.ReadFile("resources/APACHE_LICENSE.txt")
+	data, err := modDataFile.ReadFile("resources/APACHE_LICENSE.txt")
 	if err != nil {
 		return ""
 	}
