@@ -29,7 +29,7 @@
 }
 
 /* 深色模式 */
-[data-theme="dark"] {
+[data-mode="dark"] {
   --primary: #4DD0E1;
   --primary-dark: #26C6DA;
   --primary-light: #006064;
@@ -100,49 +100,49 @@
 }
 
 /* 深色模式 + 主题色组合 */
-[data-theme="dark"][data-theme-color="blue"] {
+[data-mode="dark"][data-theme="blue"] {
   --primary: #64B5F6;
   --primary-dark: #42A5F5;
   --primary-light: #0D47A1;
   --primary-bg: #0D2744;
 }
 
-[data-theme="dark"][data-theme-color="cyan"] {
+[data-mode="dark"][data-theme="cyan"] {
   --primary: #4DD0E1;
   --primary-dark: #26C6DA;
   --primary-light: #006064;
   --primary-bg: #00363D;
 }
 
-[data-theme="dark"][data-theme-color="pink"] {
+[data-mode="dark"][data-theme="pink"] {
   --primary: #F48FB1;
   --primary-dark: #F06292;
   --primary-light: #880E4F;
   --primary-bg: #3D1A29;
 }
 
-[data-theme="dark"][data-theme-color="purple"] {
+[data-mode="dark"][data-theme="purple"] {
   --primary: #CE93D8;
   --primary-dark: #BA68C8;
   --primary-light: #4A148C;
   --primary-bg: #2A0E44;
 }
 
-[data-theme="dark"][data-theme-color="orange"] {
+[data-mode="dark"][data-theme="orange"] {
   --primary: #FFB74D;
   --primary-dark: #FFA726;
   --primary-light: #E65100;
   --primary-bg: #442A0D;
 }
 
-[data-theme="dark"][data-theme-color="yellow"] {
+[data-mode="dark"][data-theme="yellow"] {
   --primary: #FFF176;
   --primary-dark: #FFEE58;
   --primary-light: #F57F17;
   --primary-bg: #443D0D;
 }
 
-[data-theme="dark"][data-theme-color="green"] {
+[data-mode="dark"][data-theme="green"] {
   --primary: #81C784;
   --primary-dark: #66BB6A;
   --primary-light: #1B5E20;
@@ -286,11 +286,11 @@ body {
   background: #AAAAAA;
 }
 
-[data-theme="dark"] ::-webkit-scrollbar-thumb {
+[data-mode="dark"] ::-webkit-scrollbar-thumb {
   background: #555555;
 }
 
-[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
+[data-mode="dark"] ::-webkit-scrollbar-thumb:hover {
   background: #777777;
 }
 
