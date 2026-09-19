@@ -1,4 +1,4 @@
-﻿package main
+package main
 
 import (
 	"archive/zip"
@@ -234,7 +234,7 @@ func (a *App) downloadFile(url string, destPath string, reportProgress bool) err
 		return fmt.Errorf("下载失败 %s: HTTP %d", url, resp.StatusCode)
 	}
 
-	out, err := os.Create(destPath)
+	out, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
 	if err != nil {
 		return fmt.Errorf("创建文件失败 %s: %v", destPath, err)
 	}
@@ -820,7 +820,7 @@ func (a *App) downloadJavaItem(majorVer int, url string) error {
 		return fmt.Errorf("下载失败: HTTP %d", resp.StatusCode)
 	}
 
-	out, err := os.Create(destPath)
+	out, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
 	if err != nil {
 		return fmt.Errorf("创建文件失败: %v", err)
 	}
@@ -1431,7 +1431,7 @@ func extractNatives(jarPath string, destDir string) (int, error) {
 			os.Remove(destPath)
 		}
 
-		out, err := os.Create(destPath)
+		out, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
 		if err != nil {
 			rc.Close()
 			continue

@@ -243,7 +243,7 @@ func (a *App) installModpack(item *DownloadItem) error {
 		return fmt.Errorf("下载整合包失败: HTTP %d", resp.StatusCode)
 	}
 
-	out, err := os.Create(mrpackPath)
+	out, err := os.OpenFile(mrpackPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
 	if err != nil {
 		return fmt.Errorf("创建临时文件失败: %v", err)
 	}
@@ -451,7 +451,7 @@ func (a *App) installModpack(item *DownloadItem) error {
 		if err != nil {
 			continue
 		}
-		out, err := os.Create(destPath)
+		out, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
 		if err != nil {
 			rc.Close()
 			continue

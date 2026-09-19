@@ -267,7 +267,7 @@ func (a *App) downloadServerJar(version string, targetDir string) error {
 	}
 
 	tempPath := jarPath + ".tmp"
-	file, err := os.Create(tempPath)
+	file, err := os.OpenFile(tempPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
 	if err != nil {
 		return fmt.Errorf("创建临时文件失败: %v", err)
 	}

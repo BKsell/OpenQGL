@@ -970,7 +970,7 @@ func (a *App) DownloadAuthlibInjector() (string, error) {
 			lastErr = fmt.Errorf("HTTP %d", resp.StatusCode)
 			continue
 		}
-		file, err := os.Create(jarPath)
+		file, err := os.OpenFile(jarPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
 		if err != nil {
 			return "", fmt.Errorf("创建文件失败: %v", err)
 		}
