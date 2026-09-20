@@ -1144,8 +1144,8 @@ const totalPages = computed(() => Math.ceil(modSearchTotal.value / 20))
   display: flex;
   gap: 0;
   padding: 0 24px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.35);
-  background: rgba(255, 255, 255, 0.85);
+  border-bottom: 1px solid var(--border);
+  background: var(--glass-bg-heavy);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
 }
@@ -1179,11 +1179,11 @@ const totalPages = computed(() => Math.ceil(modSearchTotal.value / 20))
 }
 
 .glass-container {
-  background: rgba(255, 255, 255, 0.75);
+  background: var(--glass-bg);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
   border-radius: 14px;
-  border: 1px solid rgba(255, 255, 255, 0.35);
+  border: 1px solid var(--glass-border);
   padding: 20px;
 }
 
@@ -1195,11 +1195,11 @@ const totalPages = computed(() => Math.ceil(modSearchTotal.value / 20))
   padding: 60px 0;
   color: var(--text-secondary);
   gap: 12px;
-  background: rgba(255, 255, 255, 0.45);
+  background: var(--glass-bg-light);
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
   border-radius: 10px;
-  border: 1px solid rgba(255, 255, 255, 0.25);
+  border: 1px solid var(--glass-border);
 }
 
 .spin {
@@ -1213,7 +1213,7 @@ const totalPages = computed(() => Math.ceil(modSearchTotal.value / 20))
 }
 
 .error-msg {
-  background: rgba(255, 235, 238, 0.85);
+  background: color-mix(in srgb, var(--danger) 10%, var(--glass-bg-heavy));
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   color: var(--danger);
@@ -1221,11 +1221,11 @@ const totalPages = computed(() => Math.ceil(modSearchTotal.value / 20))
   border-radius: 8px;
   font-size: 13px;
   margin-bottom: 16px;
-  border: 1px solid rgba(244, 67, 54, 0.2);
+  border: 1px solid color-mix(in srgb, var(--danger) 25%, transparent);
 }
 
 .success-msg {
-  background: rgba(232, 245, 233, 0.85);
+  background: color-mix(in srgb, var(--success) 10%, var(--glass-bg-heavy));
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   color: var(--success);
@@ -1233,7 +1233,7 @@ const totalPages = computed(() => Math.ceil(modSearchTotal.value / 20))
   border-radius: 8px;
   font-size: 13px;
   margin-bottom: 16px;
-  border: 1px solid rgba(76, 175, 80, 0.2);
+  border: 1px solid color-mix(in srgb, var(--success) 25%, transparent);
 }
 
 .filter-bar {
@@ -1304,12 +1304,12 @@ const totalPages = computed(() => Math.ceil(modSearchTotal.value / 20))
 }
 
 .version-type-badge.release {
-  background: #E8F5E9;
-  color: #2E7D32;
+  background: color-mix(in srgb, var(--success) 15%, transparent);
+  color: var(--success);
 }
 
 .version-type-badge.snapshot {
-  background: #FFF3E0;
+  background: color-mix(in srgb, #FF9800 15%, transparent);
   color: #E65100;
 }
 
@@ -1327,11 +1327,11 @@ const totalPages = computed(() => Math.ceil(modSearchTotal.value / 20))
   padding: 60px 0;
   gap: 16px;
   color: var(--text-secondary);
-  background: rgba(255, 255, 255, 0.45);
+  background: var(--glass-bg-light);
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
   border-radius: 10px;
-  border: 1px solid rgba(255, 255, 255, 0.25);
+  border: 1px dashed var(--border);
 }
 
 .back-link {
@@ -1405,7 +1405,7 @@ const totalPages = computed(() => Math.ceil(modSearchTotal.value / 20))
 }
 
 .advanced-toggle:hover {
-  background: #F0F0F0;
+  background: var(--bg-secondary);
 }
 
 .advanced-content {
@@ -1503,18 +1503,18 @@ const totalPages = computed(() => Math.ceil(modSearchTotal.value / 20))
 }
 
 .loader-tag.stable {
-  background: #E8F5E9;
-  color: #2E7D32;
+  background: color-mix(in srgb, var(--success) 15%, transparent);
+  color: var(--success);
 }
 
 .loader-tag.preview {
-  background: #FFF3E0;
+  background: color-mix(in srgb, #FF9800 15%, transparent);
   color: #E65100;
 }
 
 .loader-tag.installed {
-  background: #E3F2FD;
-  color: #1565C0;
+  background: color-mix(in srgb, var(--primary) 15%, transparent);
+  color: var(--primary);
 }
 
 .selected-loader-hint {
@@ -1680,8 +1680,8 @@ const totalPages = computed(() => Math.ceil(modSearchTotal.value / 20))
   font-size: 10px;
   padding: 1px 6px;
   border-radius: 4px;
-  background: #E0F7FA;
-  color: #00838F;
+  background: color-mix(in srgb, var(--primary) 15%, transparent);
+  color: var(--primary);
   font-weight: 500;
 }
 
@@ -1689,7 +1689,7 @@ const totalPages = computed(() => Math.ceil(modSearchTotal.value / 20))
   font-size: 10px;
   padding: 1px 6px;
   border-radius: 4px;
-  background: #F3E5F5;
+  background: color-mix(in srgb, #9C27B0 15%, transparent);
   color: #7B1FA2;
   font-weight: 500;
 }
@@ -1757,7 +1757,7 @@ const totalPages = computed(() => Math.ceil(modSearchTotal.value / 20))
   background: var(--glass-bg-heavy);
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
-  border: 1px solid #FFE082;
+  border: 1px solid color-mix(in srgb, #FF9800 25%, transparent);
   border-radius: 10px;
 }
 
@@ -1818,18 +1818,18 @@ const totalPages = computed(() => Math.ceil(modSearchTotal.value / 20))
 }
 
 .mod-dep-type.required {
-  background: #FFCDD2;
-  color: #C62828;
+  background: color-mix(in srgb, var(--danger) 15%, transparent);
+  color: var(--danger);
 }
 
 .mod-dep-type.optional {
-  background: #C8E6C9;
-  color: #2E7D32;
+  background: color-mix(in srgb, var(--success) 15%, transparent);
+  color: var(--success);
 }
 
 .mod-dep-type.incompatible {
-  background: #FFCDD2;
-  color: #B71C1C;
+  background: color-mix(in srgb, var(--danger) 20%, transparent);
+  color: var(--danger);
 }
 
 /* 版本列表 */
@@ -1968,7 +1968,7 @@ const totalPages = computed(() => Math.ceil(modSearchTotal.value / 20))
 }
 
 .java-installed {
-  color: #2E7D32;
+  color: var(--success);
   font-weight: 500;
 }
 
@@ -1985,9 +1985,9 @@ const totalPages = computed(() => Math.ceil(modSearchTotal.value / 20))
   font-weight: 500;
 }
 
-.java-webpage-tag { background: #E3F2FD; color: #1565C0; }
-.java-msi-tag { background: #FFF3E0; color: #E65100; }
-.java-zip-tag { background: #F3E5F5; color: #7B1FA2; }
+.java-webpage-tag { background: color-mix(in srgb, var(--primary) 15%, transparent); color: var(--primary); }
+.java-msi-tag { background: color-mix(in srgb, #FF9800 15%, transparent); color: #E65100; }
+.java-zip-tag { background: color-mix(in srgb, #9C27B0 15%, transparent); color: #7B1FA2; }
 
 .java-card-right {
   display: flex;
