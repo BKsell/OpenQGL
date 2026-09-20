@@ -403,7 +403,7 @@ defineExpose({
         v-else-if="currentPage === 'download'"
         key="download"
         :currentUser="currentUser"
-        @navigate="navigateTo"
+        @navigate="navigate"
       />
       <SettingsPage
         v-else-if="currentPage === 'settings'"
@@ -643,7 +643,7 @@ defineExpose({
   padding: 10px 24px; border-radius: 8px;
   font-size: 14px; font-weight: 500;
   z-index: 2000;
-  box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+  box-shadow: var(--glass-shadow);
   backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
   border: 1px solid var(--glass-border);
   pointer-events: none;
