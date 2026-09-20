@@ -2,8 +2,8 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import {
-  CheckFirstRun, GetUsers, CreateGuestUser, CreateOfflineUser,
-  LoginUser, SetCurrentUser, UserHasPassword, GetUserType,
+  GetUsers, CreateGuestUser, CreateOfflineUser,
+  LoginUser, SetCurrentUser, UserHasPassword,
   StartMicrosoftLogin, LoginYggdrasil, CreateExternalUser,
   GetYggdrasilServerInfo, DownloadAuthlibInjector
 } from '../../wailsjs/go/main/App.js'
