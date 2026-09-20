@@ -668,8 +668,8 @@ const userTypeLabel = computed(() => {
   gap: 8px;
   margin-top: 10px;
   padding: 8px 12px;
-  background: color-mix(in srgb, var(--primary, #2196F3) 12%, transparent);
-  border: 1px solid color-mix(in srgb, var(--primary, #2196F3) 30%, transparent);
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--primary) 30%, transparent);
   border-radius: 8px;
   font-size: 12px;
   line-height: 1.5;
@@ -679,7 +679,7 @@ const userTypeLabel = computed(() => {
 .tip-label {
   flex-shrink: 0;
   padding: 1px 6px;
-  background: var(--primary, #2196F3);
+  background: var(--primary);
   color: #fff;
   border-radius: 4px;
   font-size: 11px;
@@ -801,7 +801,7 @@ const userTypeLabel = computed(() => {
 
 .feature-card:hover {
   border-color: var(--primary);
-  box-shadow: 0 4px 16px rgba(0, 188, 212, 0.1);
+  box-shadow: 0 4px 16px color-mix(in srgb, var(--primary) 15%, transparent);
 }
 
 .feature-icon {
@@ -822,25 +822,25 @@ const userTypeLabel = computed(() => {
 }
 
 .easy-qgl-card {
-  border-color: #FF9800;
-  background: rgba(255, 152, 0, 0.06);
+  border-color: var(--easy-orange, #FF9800);
+  background: color-mix(in srgb, var(--easy-orange, #FF9800) 6%, transparent);
 }
 
 .easy-qgl-card:hover {
-  border-color: #F57C00;
-  box-shadow: 0 4px 16px rgba(255, 152, 0, 0.15);
-  background: rgba(255, 152, 0, 0.1);
+  border-color: var(--easy-orange-dark, #F57C00);
+  box-shadow: 0 4px 16px color-mix(in srgb, var(--easy-orange, #FF9800) 20%, transparent);
+  background: color-mix(in srgb, var(--easy-orange, #FF9800) 10%, transparent);
 }
 
 .qglplus-card {
-  border-color: #4CAF50;
-  background: rgba(76, 175, 80, 0.06);
+  border-color: var(--qglplus-green, #4CAF50);
+  background: color-mix(in srgb, var(--qglplus-green, #4CAF50) 6%, transparent);
 }
 
 .qglplus-card:hover {
-  border-color: #388E3C;
-  box-shadow: 0 4px 16px rgba(76, 175, 80, 0.15);
-  background: rgba(76, 175, 80, 0.1);
+  border-color: var(--qglplus-green-dark, #388E3C);
+  box-shadow: 0 4px 16px color-mix(in srgb, var(--qglplus-green, #4CAF50) 20%, transparent);
+  background: color-mix(in srgb, var(--qglplus-green, #4CAF50) 10%, transparent);
 }
 
 .locked-notice {
