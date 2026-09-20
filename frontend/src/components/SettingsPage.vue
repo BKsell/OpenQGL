@@ -4,10 +4,10 @@ import { useI18n } from 'vue-i18n'
 import i18n from '../i18n/index.js'
 import {
   GetGlobalConfig, SaveGlobalConfig, IsVersionIsolation,
-  SetVersionIsolation, GetCurrentUser, GetUsers, LockGuest,
+  SetVersionIsolation, GetUsers,
   SearchJava, GetJavaInfo, GetMinecraftDir,
   GetThemeColor, SetThemeColor, GetBackgroundImageDataURL, SetBackgroundImage, SelectBackgroundImage,
-  GetBingDailyImage, GetCachedBingImage,
+  GetBingDailyImage,
   IsPortableMode, SetPortableMode, GetPortableJavaPath, GetPortableJavaInfo,
   GetShowExportLaunchCommand, SetShowExportLaunchCommand
 } from '../../wailsjs/go/main/App.js'
