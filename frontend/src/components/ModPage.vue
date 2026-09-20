@@ -240,22 +240,24 @@ watch(() => modList.value, () => {
 .mod-top-glass {
   padding: 20px 24px;
   border-radius: 14px;
-  background: rgba(255, 255, 255, 0.82);
+  background: var(--glass-bg-heavy);
   backdrop-filter: blur(18px);
   -webkit-backdrop-filter: blur(18px);
-  border: 1px solid rgba(255, 255, 255, 0.4);
+  border: 1px solid var(--glass-border);
   margin-bottom: 20px;
+  transition: background 0.3s;
 }
 
 .mod-list-glass {
   flex: 1;
   padding: 20px 24px;
   border-radius: 14px;
-  background: rgba(255, 255, 255, 0.72);
+  background: var(--glass-bg);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
-  border: 1px solid rgba(255, 255, 255, 0.35);
+  border: 1px solid var(--glass-border);
   overflow-y: auto;
+  transition: background 0.3s;
 }
 
 .version-selector {
@@ -284,7 +286,7 @@ watch(() => modList.value, () => {
   border-radius: 6px;
   font-size: 13px;
   margin-bottom: 16px;
-  border: 1px solid #FFCDD2;
+  border: 1px solid color-mix(in srgb, var(--danger) 30%, transparent);
 }
 
 .mod-stats {
@@ -328,7 +330,7 @@ watch(() => modList.value, () => {
   padding: 60px 0;
   color: var(--text-secondary);
   gap: 12px;
-  background: rgba(255, 255, 255, 0.5);
+  background: var(--glass-bg-light);
   border-radius: 10px;
   margin: 20px 0;
 }
@@ -463,10 +465,10 @@ watch(() => modList.value, () => {
   padding: 48px 0;
   gap: 12px;
   color: var(--text-secondary);
-  background: rgba(255, 255, 255, 0.45);
+  background: var(--glass-bg-light);
   border-radius: 10px;
   margin: 20px 0;
-  border: 1px dashed rgba(200, 200, 200, 0.4);
+  border: 1px dashed var(--border);
 }
 
 .empty-icon {
