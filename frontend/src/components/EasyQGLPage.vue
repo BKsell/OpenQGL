@@ -448,7 +448,7 @@ function handleReturnToNormal() {
 }
 
 .glass-container {
-  background: rgba(255, 255, 255, 0.82);
+  background: var(--glass-bg);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
   border: 1px solid var(--border);
@@ -479,7 +479,9 @@ function handleReturnToNormal() {
   transition: all 0.2s; text-align: center; position: relative;
 }
 .choice-card:hover:not(.disabled-card) {
-  border-color: #FF9800; box-shadow: 0 6px 24px rgba(255, 152, 0, 0.15); transform: translateY(-2px);
+  border-color: var(--primary);
+  box-shadow: 0 6px 24px color-mix(in srgb, var(--primary) 15%, transparent);
+  transform: translateY(-2px);
 }
 .disabled-card { opacity: 0.5; cursor: not-allowed; }
 .choice-card-icon { font-size: 48px; margin-bottom: 16px; }
@@ -487,16 +489,18 @@ function handleReturnToNormal() {
 .choice-card-desc { font-size: 13px; color: var(--text-secondary); line-height: 1.5; }
 .coming-soon-badge {
   position: absolute; top: 12px; right: 12px; padding: 2px 10px;
-  background: #FF9800; color: white; border-radius: 10px; font-size: 11px; font-weight: 600;
+  background: var(--primary); color: white; border-radius: 10px; font-size: 11px; font-weight: 600;
 }
 
 .mode-section { max-width: 650px; margin: 0 auto; }
 
 .mode-header {
-  padding: 20px 24px; border-color: rgba(255, 152, 0, 0.25); margin-bottom: 16px;
+  padding: 20px 24px;
+  border-color: color-mix(in srgb, var(--primary) 25%, transparent);
+  margin-bottom: 16px;
 }
 .mode-badge {
-  display: inline-block; padding: 4px 12px; background: #FF9800; color: white;
+  display: inline-block; padding: 4px 12px; background: var(--primary); color: white;
   border-radius: 6px; font-size: 13px; font-weight: 600; margin-bottom: 12px;
 }
 .mode-info { display: flex; flex-direction: column; gap: 6px; }
@@ -505,7 +509,8 @@ function handleReturnToNormal() {
 
 /* 流程图 */
 .flow-chart {
-  padding: 24px; margin-bottom: 16px; border-color: rgba(255, 152, 0, 0.25);
+  padding: 24px; margin-bottom: 16px;
+  border-color: color-mix(in srgb, var(--primary) 25%, transparent);
 }
 
 .flow-steps {
@@ -523,10 +528,11 @@ function handleReturnToNormal() {
 }
 
 .flow-step.active .flow-dot {
-  background: #FF9800; color: white; box-shadow: 0 0 12px rgba(255, 152, 0, 0.4);
+  background: var(--primary); color: white;
+  box-shadow: 0 0 12px color-mix(in srgb, var(--primary) 40%, transparent);
 }
 .flow-step.done .flow-dot {
-  background: #4CAF50; color: white;
+  background: var(--success); color: white;
 }
 .flow-step.pending .flow-dot {
   background: var(--border); color: var(--text-light);
@@ -535,21 +541,22 @@ function handleReturnToNormal() {
 .flow-label {
   font-size: 12px; color: var(--text-secondary); text-align: center; white-space: nowrap;
 }
-.flow-step.active .flow-label { color: #FF9800; font-weight: 600; }
-.flow-step.done .flow-label { color: #4CAF50; }
+.flow-step.active .flow-label { color: var(--primary); font-weight: 600; }
+.flow-step.done .flow-label { color: var(--success); }
 
 .flow-line {
   flex: 1; height: 3px; background: var(--border); margin-top: 17px; min-width: 32px;
   transition: background 0.3s;
 }
-.flow-line.done { background: #4CAF50; }
+.flow-line.done { background: var(--success); }
 
 .flow-message {
   font-size: 15px; color: var(--text); font-weight: 500; text-align: center; margin-bottom: 12px;
 }
 
 .flow-log {
-  background: rgba(0, 0, 0, 0.04); border-radius: 8px; padding: 12px; max-height: 150px;
+  background: var(--glass-bg-light);
+  border-radius: 8px; padding: 12px; max-height: 150px;
   overflow-y: auto; margin-bottom: 8px;
 }
 .log-line {
@@ -557,15 +564,15 @@ function handleReturnToNormal() {
 }
 
 .flow-error {
-  font-size: 13px; color: #f44336; text-align: center; margin-top: 8px;
+  font-size: 13px; color: var(--danger); text-align: center; margin-top: 8px;
 }
 
 .mode-actions {
   display: flex; gap: 12px; padding: 16px 20px; margin-bottom: 16px;
 }
 
-.install-btn { background: #FF9800; border-color: #FF9800; }
-.install-btn:hover:not(:disabled) { background: #F57C00; }
+.install-btn { background: var(--primary); border-color: var(--primary); }
+.install-btn:hover:not(:disabled) { background: var(--primary-dark); }
 .install-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .selected-mods { padding: 20px 24px; }
@@ -574,10 +581,12 @@ function handleReturnToNormal() {
 
 .mod-item {
   display: flex; align-items: center; gap: 12px; padding: 10px 14px;
-  background: rgba(255, 152, 0, 0.06); border: 1px solid rgba(255, 152, 0, 0.15); border-radius: 10px;
+  background: color-mix(in srgb, var(--primary) 6%, var(--glass-bg-light));
+  border: 1px solid color-mix(in srgb, var(--primary) 15%, transparent);
+  border-radius: 10px;
 }
 .mod-icon {
-  width: 36px; height: 36px; border-radius: 8px; background: #FF9800; color: white;
+  width: 36px; height: 36px; border-radius: 8px; background: var(--primary); color: white;
   display: flex; align-items: center; justify-content: center; font-size: 16px;
   font-weight: 700; flex-shrink: 0;
 }
