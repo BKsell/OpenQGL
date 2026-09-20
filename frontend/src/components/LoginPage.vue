@@ -803,12 +803,12 @@ function getUserTypeLabel(type) {
 }
 
 .win11-avatar.premium {
-  background: #E8EAF6;
+  background: color-mix(in srgb, #283593 15%, transparent);
   color: #283593;
 }
 
 .win11-avatar.guest {
-  background: #FFF3E0;
+  background: color-mix(in srgb, #E65100 15%, transparent);
   color: #E65100;
 }
 
@@ -1014,12 +1014,12 @@ function getUserTypeLabel(type) {
 
 /* ===== 错误信息 ===== */
 .win11-error {
-  background: rgba(255, 235, 238, 0.9);
-  color: #F44336;
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  color: var(--danger);
   padding: 8px 16px;
   border-radius: 6px;
   font-size: 13px;
-  border: 1px solid #FFCDD2;
+  border: 1px solid color-mix(in srgb, var(--danger) 30%, transparent);
   text-align: center;
   width: 100%;
   backdrop-filter: blur(8px);
@@ -1072,8 +1072,8 @@ function getUserTypeLabel(type) {
 
 .ms-auto-hint {
   display: inline-block;
-  background: #E8F5E9;
-  color: #2E7D32;
+  background: color-mix(in srgb, var(--success) 15%, transparent);
+  color: var(--success);
   padding: 5px 14px;
   border-radius: 4px;
   font-size: 12px;
@@ -1229,13 +1229,18 @@ function getUserTypeLabel(type) {
 }
 
 .win11-chip-avatar.premium {
-  background: #E8EAF6;
+  background: color-mix(in srgb, #283593 15%, transparent);
   color: #283593;
 }
 
 .win11-chip-avatar.guest {
-  background: #FFF3E0;
+  background: color-mix(in srgb, #E65100 15%, transparent);
   color: #E65100;
+}
+
+.win11-chip-avatar.external {
+  background: color-mix(in srgb, #2E7D32 15%, transparent);
+  color: #2E7D32;
 }
 
 .win11-chip-name {
@@ -1252,27 +1257,22 @@ function getUserTypeLabel(type) {
 }
 
 .win11-chip-type.guest {
-  background: #FFF3E0;
+  background: color-mix(in srgb, #E65100 15%, transparent);
   color: #E65100;
 }
 
 .win11-chip-type.offline {
-  background: #E8F5E9;
+  background: color-mix(in srgb, #2E7D32 15%, transparent);
   color: #2E7D32;
 }
 
 .win11-chip-type.premium {
-  background: #E8EAF6;
+  background: color-mix(in srgb, #283593 15%, transparent);
   color: #283593;
 }
 
 .win11-chip-type.external {
-  background: #E8F5E9;
-  color: #2E7D32;
-}
-
-.win11-chip-avatar.external {
-  background: #E8F5E9;
+  background: color-mix(in srgb, #2E7D32 15%, transparent);
   color: #2E7D32;
 }
 
