@@ -1121,7 +1121,7 @@ const totalPages = computed(() => Math.ceil(modSearchTotal.value / 20))
 .easy-mode-badge {
   margin-left: auto;
   padding: 4px 12px;
-  background: #FF9800;
+  background: var(--easy-orange, #FF9800);
   color: white;
   border-radius: 6px;
   font-size: 12px;
@@ -1129,14 +1129,14 @@ const totalPages = computed(() => Math.ceil(modSearchTotal.value / 20))
 }
 
 .btn-easy-orange {
-  background: #FF9800;
-  border-color: #FF9800;
+  background: var(--easy-orange, #FF9800);
+  border-color: var(--easy-orange, #FF9800);
   color: white;
 }
 
 .btn-easy-orange:hover {
-  background: #F57C00;
-  border-color: #F57C00;
+  background: var(--easy-orange-dark, #F57C00);
+  border-color: var(--easy-orange-dark, #F57C00);
 }
 
 /* Tab 切换 */
@@ -1285,7 +1285,7 @@ const totalPages = computed(() => Math.ceil(modSearchTotal.value / 20))
 
 .version-card:hover {
   border-color: var(--primary);
-  box-shadow: 0 2px 12px rgba(0, 188, 212, 0.1);
+  box-shadow: 0 2px 12px color-mix(in srgb, var(--primary) 15%, transparent);
 }
 
 .version-id {
@@ -1309,8 +1309,8 @@ const totalPages = computed(() => Math.ceil(modSearchTotal.value / 20))
 }
 
 .version-type-badge.snapshot {
-  background: color-mix(in srgb, #FF9800 15%, transparent);
-  color: #E65100;
+  background: color-mix(in srgb, var(--warning, #FF9800) 15%, transparent);
+  color: var(--warning, #E65100);
 }
 
 .version-date {
@@ -1508,8 +1508,8 @@ const totalPages = computed(() => Math.ceil(modSearchTotal.value / 20))
 }
 
 .loader-tag.preview {
-  background: color-mix(in srgb, #FF9800 15%, transparent);
-  color: #E65100;
+  background: color-mix(in srgb, var(--warning, #FF9800) 15%, transparent);
+  color: var(--warning, #E65100);
 }
 
 .loader-tag.installed {
@@ -1594,7 +1594,7 @@ const totalPages = computed(() => Math.ceil(modSearchTotal.value / 20))
 
 .mod-card:hover {
   border-color: var(--primary);
-  box-shadow: 0 2px 12px rgba(0, 188, 212, 0.1);
+  box-shadow: 0 2px 12px color-mix(in srgb, var(--primary) 15%, transparent);
 }
 
 .mod-card-icon {
@@ -1689,8 +1689,8 @@ const totalPages = computed(() => Math.ceil(modSearchTotal.value / 20))
   font-size: 10px;
   padding: 1px 6px;
   border-radius: 4px;
-  background: color-mix(in srgb, #9C27B0 15%, transparent);
-  color: #7B1FA2;
+  background: color-mix(in srgb, var(--accent-purple, #9C27B0) 15%, transparent);
+  color: var(--accent-purple, #7B1FA2);
   font-weight: 500;
 }
 
@@ -1757,14 +1757,14 @@ const totalPages = computed(() => Math.ceil(modSearchTotal.value / 20))
   background: var(--glass-bg-heavy);
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
-  border: 1px solid color-mix(in srgb, #FF9800 25%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warning, #FF9800) 25%, transparent);
   border-radius: 10px;
 }
 
 .mod-deps-section h3 {
   font-size: 14px;
   font-weight: 600;
-  color: #F57F17;
+  color: var(--warning, #F57F17);
   margin-bottom: 10px;
 }
 
@@ -1948,10 +1948,10 @@ const totalPages = computed(() => Math.ceil(modSearchTotal.value / 20))
   color: white;
 }
 
-.java-icon-8 { background: #43A047; }
-.java-icon-17 { background: #FB8C00; }
-.java-icon-21 { background: #00897B; }
-.java-icon-26 { background: #546E7A; }
+.java-icon-8 { background: var(--java-green, #43A047); }
+.java-icon-17 { background: var(--java-orange, #FB8C00); }
+.java-icon-21 { background: var(--java-teal, #00897B); }
+.java-icon-26 { background: var(--java-gray, #546E7A); }
 
 .java-card-name {
   font-size: 16px;
@@ -1986,8 +1986,8 @@ const totalPages = computed(() => Math.ceil(modSearchTotal.value / 20))
 }
 
 .java-webpage-tag { background: color-mix(in srgb, var(--primary) 15%, transparent); color: var(--primary); }
-.java-msi-tag { background: color-mix(in srgb, #FF9800 15%, transparent); color: #E65100; }
-.java-zip-tag { background: color-mix(in srgb, #9C27B0 15%, transparent); color: #7B1FA2; }
+.java-msi-tag { background: color-mix(in srgb, var(--warning, #FF9800) 15%, transparent); color: var(--warning, #E65100); }
+.java-zip-tag { background: color-mix(in srgb, var(--accent-purple, #9C27B0) 15%, transparent); color: var(--accent-purple, #7B1FA2); }
 
 .java-card-right {
   display: flex;
