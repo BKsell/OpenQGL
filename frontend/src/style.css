@@ -26,6 +26,13 @@
   --glass-bg-light: rgba(255, 255, 255, 0.55);
   --glass-border: rgba(255, 255, 255, 0.3);
   --glass-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+
+  /* 通用 UI 颜色 */
+  --scrollbar: #CCCCCC;
+  --scrollbar-hover: #AAAAAA;
+  --tooltip-bg: #333333;
+  --toggle-off: #CCCCCC;
+  --overlay: rgba(0, 0, 0, 0.3);
 }
 
 /* 深色模式 */
@@ -47,6 +54,13 @@
   --glass-bg-light: rgba(30, 30, 30, 0.55);
   --glass-border: rgba(255, 255, 255, 0.1);
   --glass-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+
+  /* 深色 UI 颜色 */
+  --scrollbar: #555555;
+  --scrollbar-hover: #777777;
+  --tooltip-bg: #1E1E1E;
+  --toggle-off: #555555;
+  --overlay: rgba(0, 0, 0, 0.6);
 }
 
 /* 主题色方案 */
@@ -278,20 +292,12 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #CCCCCC;
+  background: var(--scrollbar);
   border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #AAAAAA;
-}
-
-[data-mode="dark"] ::-webkit-scrollbar-thumb {
-  background: #555555;
-}
-
-[data-mode="dark"] ::-webkit-scrollbar-thumb:hover {
-  background: #777777;
+  background: var(--scrollbar-hover);
 }
 
 /* Modal overlay */
@@ -301,7 +307,7 @@ body {
   left: 0;
   width: 100%;
   height: 100%;
-  background: rgba(0, 0, 0, 0.3);
+  background: var(--overlay);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -316,7 +322,7 @@ body {
   max-width: 500px;
   max-height: 80vh;
   overflow-y: auto;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15);
+  box-shadow: var(--glass-shadow);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
   border: 1px solid var(--glass-border);
@@ -342,7 +348,7 @@ body {
   bottom: calc(100% + 8px);
   left: 50%;
   transform: translateX(-50%);
-  background: #333;
+  background: var(--tooltip-bg);
   color: white;
   padding: 6px 12px;
   border-radius: 4px;
@@ -378,7 +384,7 @@ body {
   left: 0;
   right: 0;
   bottom: 0;
-  background-color: #CCCCCC;
+  background-color: var(--toggle-off);
   border-radius: 12px;
   transition: 0.2s;
 }
