@@ -5,6 +5,7 @@ import {
   GetModList, ToggleMod, ImportMod, DeleteMod,
   GetInstalledVersions
 } from '../../wailsjs/go/main/App.js'
+import { showQGLDialog } from '../composables/qglDialog.js'
 
 const emit = defineEmits(['navigate'])
 
@@ -70,7 +71,14 @@ async function handleImport() {
 }
 
 async function handleDelete(mod) {
-  if (!confirm(t('mod.confirmDelete', { name: mod.fileName }))) return
+  const btnIndex = await showQGLDialog({
+    theme: 'error',
+    title: t('mod.delete'),
+    content: t('mod.confirmDelete', { name: mod.fileName }),
+    btn1Label: t('app.cancel'),
+    btn2Label: t('mod.delete')
+  })
+  if (btnIndex !== 2) return
   try {
     await DeleteMod(mod.filePath)
     await loadModList()
