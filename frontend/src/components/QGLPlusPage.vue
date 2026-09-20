@@ -4,7 +4,7 @@ import { useI18n } from 'vue-i18n'
 import {
   GetServerList, CreateServer, StartServer, StopServer, SendServerCommand,
   GetServerStatus, GetServerLogs, GenerateConnectionCode, ParseConnectionCode,
-  DeleteServer, SetServerOnlineMode, GetVersionManifest
+  DeleteServer, GetVersionManifest
 } from '../../wailsjs/go/main/App.js'
 import { EventsOn, EventsOff } from '../../wailsjs/runtime/runtime.js'
 import { showQGLDialog } from '../composables/qglDialog.js'
