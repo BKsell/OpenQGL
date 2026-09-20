@@ -2,7 +2,7 @@
 import { ref, onMounted, computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import {
-  GetCurrentUser, GetUsers, SetCurrentUser, GetInstalledVersions, ScanVersions,
+  GetCurrentUser, SetCurrentUser, GetInstalledVersions, ScanVersions,
   GetSelectedVersion, SetSelectedVersion, LaunchGame, IsVersionIsolation,
   SetVersionIsolation, GetRecommendedJavaForVersion, AddJavaToDownloadList,
   StartDownloadList, GetLaunchCommand, GetShowExportLaunchCommand
@@ -189,7 +189,7 @@ async function handleLaunch() {
     launching.value = false
 
     // 检测是否为 Java 不兼容的错误，自动加入下载列表并开始下载
-    if (errMsg.includes('Java 选择失败') || errMsg.includes('未找到') && errMsg.includes('Java')) {
+    if (errMsg.includes('Java 选择失败') || (errMsg.includes('未找到') && errMsg.includes('Java'))) {
       try {
         const recJava = await GetRecommendedJavaForVersion(selectedVersion.value)
         if (recJava > 0) {
@@ -467,14 +467,14 @@ const userTypeLabel = computed(() => {
             v-for="ver in installedVersions"
             :key="ver.folderName"
             class="version-item"
-            :class="{ active: ver.folderName === selectedVersion.value }"
+            :class="{ active: ver.folderName === selectedVersion }"
             @click="selectVersion(ver)"
           >
             <span class="version-name">
               <span v-if="ver.name">{{ ver.name }} - </span>{{ ver.version }}
               <span v-if="ver.loader" class="version-loader-tag">{{ ver.loader }}</span>
             </span>
-            <span v-if="ver.folderName === selectedVersion.value" class="current-badge">{{ t('main.selected') }}</span>
+            <span v-if="ver.folderName === selectedVersion" class="current-badge">{{ t('main.selected') }}</span>
           </div>
         </div>
         <button class="btn btn-outline btn-block" @click="showVersionList = false" style="margin-top: 12px;">{{ t('app.cancel') }}</button>
