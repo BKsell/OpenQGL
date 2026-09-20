@@ -678,39 +678,47 @@ defineExpose({
   display: flex; align-items: center; justify-content: center;
   font-size: 14px; transition: all 0.15s;
 }
-.btn-icon-sm:hover { background: #FFEBEE; color: var(--danger); }
+.btn-icon-sm:hover { background: color-mix(in srgb, var(--danger) 15%, transparent); color: var(--danger); }
 .dl-footer { display: flex; gap: 10px; margin-top: 16px; justify-content: flex-end; }
 .loading-hint { text-align: center; color: var(--text-light); padding: 20px; font-size: 14px; }
 .empty-hint { text-align: center; color: var(--text-light); padding: 20px; font-size: 14px; }
-.error-msg { background: #FFF3F0; color: var(--danger); padding: 8px 12px; border-radius: 6px; font-size: 13px; margin-bottom: 16px; border: 1px solid #FFCDD2; }
+.error-msg {
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  color: var(--danger);
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  margin-bottom: 16px;
+  border: 1px solid color-mix(in srgb, var(--danger) 30%, transparent);
+}
 .dl-error {
   color: var(--danger);
   font-size: 12px;
   margin-top: 4px;
   padding: 6px 8px;
-  background: rgba(255, 235, 238, 0.6);
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
   border-radius: 4px;
-  border: 1px solid rgba(244, 67, 54, 0.15);
+  border: 1px solid color-mix(in srgb, var(--danger) 20%, transparent);
   word-break: break-all;
   line-height: 1.5;
   cursor: pointer;
   user-select: text;
   transition: background 0.15s;
 }
-.dl-error:hover { background: rgba(255, 235, 238, 0.95); }
+.dl-error:hover { background: color-mix(in srgb, var(--danger) 20%, transparent); }
 .form-group { margin-bottom: 16px; }
 .form-group label { display: block; font-size: 13px; font-weight: 500; color: var(--text-secondary); margin-bottom: 6px; }
 
 /* Easy QGL 橙色主题 */
 .easy-orange {
-  border-color: rgba(255, 152, 0, 0.3) !important;
+  border-color: color-mix(in srgb, var(--easy-orange, #FF9800) 30%, transparent) !important;
 }
 
 .easy-badge {
   display: inline-block;
   margin-left: 8px;
   padding: 2px 8px;
-  background: #FF9800;
+  background: var(--easy-orange, #FF9800);
   color: white;
   border-radius: 4px;
   font-size: 11px;
@@ -719,8 +727,8 @@ defineExpose({
 }
 
 .btn-easy-orange {
-  background: #FF9800;
-  border-color: #FF9800;
+  background: var(--easy-orange, #FF9800);
+  border-color: var(--easy-orange, #FF9800);
   color: white;
   padding: 8px 20px;
   border-radius: 8px;
@@ -731,7 +739,7 @@ defineExpose({
 }
 
 .btn-easy-orange:hover:not(:disabled) {
-  background: #F57C00;
+  background: var(--easy-orange-dark, #F57C00);
 }
 
 .btn-easy-orange:disabled {
@@ -740,20 +748,20 @@ defineExpose({
 }
 
 .easy-orange-btn {
-  color: #FF9800 !important;
-  border-color: rgba(255, 152, 0, 0.4) !important;
+  color: var(--easy-orange, #FF9800) !important;
+  border-color: color-mix(in srgb, var(--easy-orange, #FF9800) 40%, transparent) !important;
 }
 
 .easy-orange-btn:hover:not(:disabled) {
-  background: #FF9800 !important;
+  background: var(--easy-orange, #FF9800) !important;
   color: white !important;
 }
 
 .easy-orange .dl-progress .progress-bar-fill {
-  background: #FF9800;
+  background: var(--easy-orange, #FF9800);
 }
 
 .easy-orange .dl-progress-text {
-  color: #E65100;
+  color: var(--easy-orange-dark, #E65100);
 }
 </style>
