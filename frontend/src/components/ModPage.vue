@@ -315,11 +315,11 @@ watch(() => modList.value, () => {
 }
 
 .stat-dot.enabled {
-  background: #4CAF50;
+  background: var(--success);
 }
 
 .stat-dot.disabled {
-  background: #9E9E9E;
+  background: var(--text-light);
 }
 
 .loading-area {
@@ -366,7 +366,7 @@ watch(() => modList.value, () => {
 
 .mod-item:hover {
   border-color: var(--primary);
-  box-shadow: 0 2px 8px rgba(0, 188, 212, 0.08);
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--primary) 10%, transparent);
 }
 
 .mod-item.disabled {
@@ -399,7 +399,7 @@ watch(() => modList.value, () => {
 }
 
 .mod-item-icon.mod-disabled {
-  background: #BDBDBD;
+  background: var(--text-light);
 }
 
 .mod-item-info {
@@ -433,11 +433,11 @@ watch(() => modList.value, () => {
 }
 
 .mod-status.enabled {
-  color: #4CAF50;
+  color: var(--success);
 }
 
 .mod-status.disabled {
-  color: #9E9E9E;
+  color: var(--text-light);
 }
 
 .mod-item-actions {
@@ -448,13 +448,13 @@ watch(() => modList.value, () => {
 }
 
 .btn-danger {
-  background: #EF5350;
-  border-color: #EF5350;
+  background: var(--danger);
+  border-color: var(--danger);
   color: white;
 }
 
 .btn-danger:hover {
-  background: #E53935;
+  background: color-mix(in srgb, var(--danger) 80%, black);
 }
 
 .empty-area {
