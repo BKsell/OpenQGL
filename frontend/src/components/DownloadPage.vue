@@ -7,7 +7,7 @@ import {
   GetModDependencies, AddModToDownloadList, SelectModSaveDir,
   GetDefaultModDir, GetModrinthCategories,
   GetForgeVersions, GetFabricVersions, GetNeoForgeVersions, GetOptiFineVersions,
-  CheckLoaderInstalled, InstallForge, InstallFabric, InstallNeoForge, InstallOptiFine,
+  CheckLoaderInstalled,
   GetInstalledVersions, TranslateModName, SearchModsByChineseName,
   SearchModpacks, GetModpackVersions, AddModpackToDownloadList
 } from '../../wailsjs/go/main/App.js'
