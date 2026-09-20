@@ -331,10 +331,10 @@ const javaVersionLabel = computed(() => {
                 <input v-model="javaPath" class="input" :placeholder="t('settings.javaPathPlaceholder')" />
                 <button class="btn btn-outline btn-sm" @click="clearJavaPath" v-if="javaPath">{{ t('settings.clear') }}</button>
               </div>
-              <div class="form-hint" v-if="javaInfo" style="color: #00897B;">
+              <div class="form-hint form-hint-success" v-if="javaInfo">
                 {{ javaVersionLabel }}
               </div>
-              <div class="form-hint" v-else-if="javaPath" style="color: #e53935;">
+              <div class="form-hint form-hint-error" v-else-if="javaPath">
                 {{ t('settings.invalidJava') }}
               </div>
               <div class="form-hint" v-else>
@@ -747,6 +747,14 @@ const javaVersionLabel = computed(() => {
   margin-top: 4px;
 }
 
+.form-hint-success {
+  color: var(--success);
+}
+
+.form-hint-error {
+  color: var(--danger);
+}
+
 .form-row {
   display: flex;
   gap: 16px;
@@ -847,10 +855,10 @@ const javaVersionLabel = computed(() => {
   font-weight: 500;
 }
 
-.user-type-badge.guest { background: #FFF3E0; color: #E65100; }
-.user-type-badge.offline { background: #E8F5E9; color: #2E7D32; }
-.user-type-badge.premium { background: #E8EAF6; color: #283593; }
-.user-type-badge.external { background: #E0F7FA; color: #00695C; }
+.user-type-badge.guest { background: color-mix(in srgb, #E65100 15%, transparent); color: #E65100; }
+.user-type-badge.offline { background: color-mix(in srgb, #2E7D32 15%, transparent); color: #2E7D32; }
+.user-type-badge.premium { background: color-mix(in srgb, #283593 15%, transparent); color: #283593; }
+.user-type-badge.external { background: color-mix(in srgb, #00695C 15%, transparent); color: #00695C; }
 
 .user-list-section {
   margin-top: 8px;
@@ -916,16 +924,16 @@ const javaVersionLabel = computed(() => {
   font-weight: 500;
 }
 
-.type-tag.guest { background: #FFF3E0; color: #E65100; }
-.type-tag.offline { background: #E8F5E9; color: #2E7D32; }
-.type-tag.premium { background: #E8EAF6; color: #283593; }
-.type-tag.external { background: #E0F7FA; color: #00695C; }
+.type-tag.guest { background: color-mix(in srgb, #E65100 15%, transparent); color: #E65100; }
+.type-tag.offline { background: color-mix(in srgb, #2E7D32 15%, transparent); color: #2E7D32; }
+.type-tag.premium { background: color-mix(in srgb, #283593 15%, transparent); color: #283593; }
+.type-tag.external { background: color-mix(in srgb, #00695C 15%, transparent); color: #00695C; }
 
 .pwd-tag {
   font-size: 11px;
   padding: 1px 8px;
   border-radius: 8px;
-  background: #E3F2FD;
+  background: color-mix(in srgb, #1565C0 15%, transparent);
   color: #1565C0;
   font-weight: 500;
 }
@@ -1014,20 +1022,20 @@ const javaVersionLabel = computed(() => {
   padding: 8px 12px;
   border-radius: 8px;
   font-size: 13px;
-  background: rgba(232, 245, 233, 0.85);
+  background: color-mix(in srgb, var(--success) 15%, transparent);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
-  color: #2E7D32;
+  color: var(--success);
   margin-top: 12px;
-  border: 1px solid rgba(46, 125, 50, 0.15);
+  border: 1px solid color-mix(in srgb, var(--success) 30%, transparent);
 }
 
 .save-msg.error {
-  background: rgba(255, 243, 240, 0.85);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
   color: var(--danger);
-  border-color: rgba(244, 67, 54, 0.15);
+  border-color: color-mix(in srgb, var(--danger) 30%, transparent);
 }
 
 .java-path-row {
@@ -1308,10 +1316,10 @@ const javaVersionLabel = computed(() => {
 .portable-java-missing {
   margin-top: 8px;
   padding: 8px 12px;
-  background: #FFF3E0;
+  background: color-mix(in srgb, #E65100 12%, transparent);
   color: #E65100;
   border-radius: 6px;
   font-size: 12px;
-  border: 1px solid #FFE0B2;
+  border: 1px solid color-mix(in srgb, #E65100 30%, transparent);
 }
 </style>
