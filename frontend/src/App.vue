@@ -403,7 +403,7 @@ defineExpose({
         v-else-if="currentPage === 'download'"
         key="download"
         :currentUser="currentUser"
-        @navigate="navigate"
+        @navigate="navigateTo"
       />
       <SettingsPage
         v-else-if="currentPage === 'settings'"
