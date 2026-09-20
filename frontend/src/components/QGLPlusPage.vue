@@ -657,7 +657,7 @@ function goBack() {
 
 .choice-card:hover {
   transform: translateY(-2px);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
+  box-shadow: 0 4px 16px var(--glass-shadow);
 }
 
 .create-card {
@@ -831,7 +831,7 @@ function goBack() {
   left: 0;
   right: 0;
   bottom: 0;
-  background: rgba(0, 0, 0, 0.5);
+  background: var(--overlay);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -877,7 +877,7 @@ function goBack() {
   left: 0;
   right: 0;
   bottom: 0;
-  background: rgba(0, 0, 0, 0.6);
+  background: var(--overlay);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -967,7 +967,7 @@ function goBack() {
 .log-container {
   height: 400px;
   overflow-y: auto;
-  background: #1a1a2e;
+  background: var(--log-bg, #1a1a2e);
   border-radius: 10px;
   padding: 12px;
   font-family: 'Consolas', 'Courier New', monospace;
@@ -976,7 +976,7 @@ function goBack() {
 }
 
 .log-line {
-  color: #e0e0e0;
+  color: var(--log-text, #e0e0e0);
   white-space: pre-wrap;
   word-break: break-all;
 }
@@ -1020,7 +1020,7 @@ function goBack() {
   -webkit-backdrop-filter: blur(16px);
   border: 1px solid var(--border);
   border-radius: 10px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  box-shadow: var(--glass-shadow);
   z-index: 100;
   min-width: 120px;
   overflow: hidden;
