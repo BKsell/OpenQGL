@@ -80,7 +80,8 @@ func (a *App) SearchModpacks(query string, gameVersion string, page int, pageSiz
 
 	var facets []string
 	facets = append(facets, `["project_type:modpack"]`)
-	if gameVersion != "" {
+	// 安全校验：gameVersion 必须是合法的版本号格式
+	if gameVersion != "" && isValidMCVersion(gameVersion) {
 		facets = append(facets, fmt.Sprintf(`["versions:%s"]`, gameVersion))
 	}
 	if len(facets) > 0 {
@@ -125,6 +126,10 @@ func (a *App) SearchModpacks(query string, gameVersion string, page int, pageSiz
 
 // GetModpackVersions 获取整合包的版本列表
 func (a *App) GetModpackVersions(projectID string) ([]ModVersion, error) {
+	// 安全校验：projectID 必须是合法格式
+	if !isValidModID(projectID) {
+		return nil, fmt.Errorf("无效的项目 ID 格式")
+	}
 	apiURL := fmt.Sprintf("%s/project/%s/version", modrinthBaseURL, projectID)
 	resp, err := safeHTTPClient().Get(apiURL)
 	if err != nil {
@@ -149,6 +154,10 @@ func (a *App) GetModpackVersions(projectID string) ([]ModVersion, error) {
 
 // AddModpackToDownloadList 添加整合包到下载列表
 func (a *App) AddModpackToDownloadList(versionID string, customName string) error {
+	// 安全校验：versionID 必须是合法格式
+	if !isValidModID(versionID) {
+		return fmt.Errorf("无效的版本 ID 格式")
+	}
 	// 获取版本详情以拿到下载链接
 	apiURL := fmt.Sprintf("%s/version/%s", modrinthBaseURL, versionID)
 	resp, err := safeHTTPClient().Get(apiURL)
@@ -180,12 +189,21 @@ func (a *App) AddModpackToDownloadList(versionID string, customName string) erro
 		return fmt.Errorf("未找到整合包文件")
 	}
 
-	displayName := customName
-	if displayName == "" {
-		displayName = primaryFile.Filename
-		if displayName == "" {
-			displayName = version.Name
-		}
+	// 安全校验：下载 URL 必须是 HTTPS
+	if !isHTTPSURL(primaryFile.URL) {
+		return fmt.Errorf("不安全的下载 URL（非 HTTPS）")
+	}
+
+	// 安全：使用 filepath.Base 剥离路径遍历组件
+	displayName := filepath.Base(customName)
+	if displayName == "" || displayName == "." {
+		displayName = filepath.Base(primaryFile.Filename)
+	}
+	if displayName == "" || displayName == "." {
+		displayName = filepath.Base(version.Name)
+	}
+	if displayName == "" || displayName == "." {
+		displayName = "modpack"
 	}
 
 	a.downloadMutex.Lock()
@@ -225,6 +243,11 @@ func (a *App) installModpack(item *DownloadItem) error {
 
 	mrpackPath := filepath.Join(tmpDir, "modpack.mrpack")
 	a.emitProgress("downloading", item.CustomName, 0, 0)
+
+	// 安全校验：下载 URL 必须是 HTTPS
+	if !isHTTPSURL(item.URL) {
+		return fmt.Errorf("不安全的下载 URL（非 HTTPS）")
+	}
 
 	// 先尝试镜像源，失败再回退到官方源
 	resp, err := safeHTTPClient().Get(mirrorModURL(item.URL))
@@ -401,6 +424,10 @@ func (a *App) installModpack(item *DownloadItem) error {
 		// 尝试所有下载链接（先镜像源，失败回退官方源）
 		downloaded := false
 		for _, dlURL := range mf.Downloads {
+			// 安全校验：只允许 HTTPS
+			if !isHTTPSURL(dlURL) {
+				continue
+			}
 			// 先尝试镜像源
 			if err := a.downloadFile(mirrorModURL(dlURL), destPath, false); err == nil {
 				downloaded = true
