@@ -17,6 +17,10 @@ const emit = defineEmits(['login-success'])
 
 const { t } = useI18n()
 
+function cleanError(e) {
+  return String(e).replace('Error: ', '')
+}
+
 // 模式: 'create-guest' | 'create-offline' | 'create-premium' | 'create-external' | 'login'
 const mode = ref(props.isFirstRun ? 'create-guest' : 'login')
 
@@ -80,17 +84,13 @@ const selectedUserHasPassword = computed(() => {
 })
 
 onMounted(async () => {
-  // 加载用户列表
   await loadUsers()
 
   EventsOn('msLoginSuccess', (mcUsername) => {
     loading.value = false
     msLoginStep.value = ''
     emit('login-success', {
-      username: mcUsername,
-      hasPassword: false,
-      type: 'premium',
-      isLocked: false
+      username: mcUsername, hasPassword: false, type: 'premium', isLocked: false
     })
   })
 
@@ -114,9 +114,25 @@ onUnmounted(() => {
 async function loadUsers() {
   try {
     users.value = await GetUsers()
-  } catch (error) {
-    console.error('加载用户列表失败:', error)
+  } catch (e) {
+    console.error('加载用户列表失败:', e)
     users.value = []
+  }
+}
+
+function resetState(clearExt = false) {
+  error.value = ''
+  username.value = ''
+  password.value = ''
+  confirmPassword.value = ''
+  securityPassword.value = ''
+  msLoginStep.value = ''
+  selectedUser.value = null
+  if (clearExt) {
+    extServerURL.value = ''
+    extEmail.value = ''
+    extServerName.value = ''
+    extTemplate.value = 'custom'
   }
 }
 
@@ -145,13 +161,10 @@ async function handleCreateGuest() {
     await CreateGuestUser(username.value.trim(), securityPassword.value.trim())
     await SetCurrentUser(username.value.trim())
     emit('login-success', {
-      username: username.value.trim(),
-      hasPassword: false,
-      type: 'guest',
-      isLocked: true
+      username: username.value.trim(), hasPassword: false, type: 'guest', isLocked: true
     })
   } catch (e) {
-    error.value = String(e).replace('Error: ', '')
+    error.value = cleanError(e)
   } finally {
     loading.value = false
   }
@@ -178,13 +191,10 @@ async function handleCreateOffline() {
     await CreateOfflineUser(username.value.trim(), password.value)
     await SetCurrentUser(username.value.trim())
     emit('login-success', {
-      username: username.value.trim(),
-      hasPassword: !!password.value,
-      type: 'offline',
-      isLocked: false
+      username: username.value.trim(), hasPassword: !!password.value, type: 'offline', isLocked: false
     })
   } catch (e) {
-    error.value = String(e).replace('Error: ', '')
+    error.value = cleanError(e)
   } finally {
     loading.value = false
   }
@@ -207,7 +217,7 @@ async function handlePremiumLogin() {
   } catch (e) {
     loading.value = false
     msLoginStep.value = ''
-    error.value = String(e).replace('Error: ', '')
+    error.value = cleanError(e)
   }
 }
 
@@ -226,37 +236,21 @@ async function handleLogin() {
   try {
     if (userType === 'guest') {
       await SetCurrentUser(name)
-      emit('login-success', {
-        username: name,
-        hasPassword: false,
-        type: 'guest',
-        isLocked: true
-      })
+      emit('login-success', { username: name, hasPassword: false, type: 'guest', isLocked: true })
     } else if (userType === 'premium') {
       try {
         await LoginUser(name, '')
-        emit('login-success', {
-          username: name,
-          hasPassword: false,
-          type: 'premium',
-          isLocked: false
-        })
+        emit('login-success', { username: name, hasPassword: false, type: 'premium', isLocked: false })
       } catch (e) {
         error.value = t('login.premiumTokenExpired')
       }
     } else {
-      // 离线用户
       await LoginUser(name, password.value)
       const hasPwd = await UserHasPassword(name)
-      emit('login-success', {
-        username: name,
-        hasPassword: hasPwd,
-        type: 'offline',
-        isLocked: false
-      })
+      emit('login-success', { username: name, hasPassword: hasPwd, type: 'offline', isLocked: false })
     }
   } catch (e) {
-    error.value = String(e).replace('Error: ', '')
+    error.value = cleanError(e)
   } finally {
     loading.value = false
   }
@@ -264,47 +258,27 @@ async function handleLogin() {
 
 function switchToCreateGuest() {
   mode.value = 'create-guest'
-  error.value = ''
-  username.value = ''
-  password.value = ''
-  confirmPassword.value = ''
-  securityPassword.value = ''
-  msLoginStep.value = ''
-  selectedUser.value = null
+  resetState()
 }
 
 function switchToCreateOffline() {
   mode.value = 'create-offline'
-  error.value = ''
-  username.value = ''
-  password.value = ''
-  confirmPassword.value = ''
-  securityPassword.value = ''
-  msLoginStep.value = ''
-  selectedUser.value = null
+  resetState()
 }
 
 function switchToCreatePremium() {
   mode.value = 'create-premium'
-  error.value = ''
-  username.value = ''
-  password.value = ''
-  securityPassword.value = ''
-  msLoginStep.value = ''
-  selectedUser.value = null
+  resetState()
 }
 
 function switchToCreateExternal() {
   mode.value = 'create-external'
-  error.value = ''
-  username.value = ''
-  password.value = ''
-  extServerURL.value = ''
-  extEmail.value = ''
-  extServerName.value = ''
-  extTemplate.value = 'custom'
-  msLoginStep.value = ''
-  selectedUser.value = null
+  resetState(true)
+}
+
+function switchToLogin() {
+  mode.value = 'login'
+  resetState()
 }
 
 // 外置登录模板切换
@@ -327,8 +301,8 @@ async function fetchExtServerName() {
     if (info && info.meta && info.meta.serverName) {
       extServerName.value = info.meta.serverName
     }
-  } catch (error) {
-    console.error('获取外置登录服务器信息失败:', error)
+  } catch (e) {
+    console.error('获取外置登录服务器信息失败:', e)
   }
 }
 
@@ -351,12 +325,10 @@ async function handleExternalLogin() {
   loading.value = true
   try {
     const authData = await LoginYggdrasil(extServerURL.value.trim(), extEmail.value.trim(), password.value)
-    // 创建外置用户
     await CreateExternalUser(authData.username, authData)
     await SetCurrentUser(authData.username)
-    // 预下载 authlib-injector（不阻塞登录流程）
-    DownloadAuthlibInjector().catch((error) => {
-      console.error('预下载 authlib-injector 失败:', error)
+    DownloadAuthlibInjector().catch((e) => {
+      console.error('预下载 authlib-injector 失败:', e)
     })
     emit('login-success', {
       username: authData.username,
@@ -366,20 +338,10 @@ async function handleExternalLogin() {
       serverName: authData.serverName || extServerName.value,
     })
   } catch (e) {
-    error.value = String(e).replace('Error: ', '')
+    error.value = cleanError(e)
   } finally {
     loading.value = false
   }
-}
-
-function switchToLogin() {
-  mode.value = 'login'
-  error.value = ''
-  username.value = ''
-  password.value = ''
-  securityPassword.value = ''
-  msLoginStep.value = ''
-  selectedUser.value = null
 }
 
 // 从右下角用户列表选择用户
@@ -392,33 +354,23 @@ function selectUser(user) {
   const userType = user.type || 'offline'
 
   if (userType === 'guest') {
-    // 访客用户直接登录
     handleGuestQuickLogin(user.username)
   } else if (userType === 'premium') {
-    // 正版用户尝试刷新令牌
     handlePremiumQuickLogin(user.username)
   } else if (userType === 'external') {
-    // 外置用户尝试刷新令牌
     handleExternalQuickLogin(user.username)
   } else if (!user.hasPassword) {
-    // 无密码离线用户直接登录
     handleQuickLogin(user.username)
   }
-  // 有密码的离线用户：只设置 selectedUser，等用户输入密码
 }
 
 async function handleGuestQuickLogin(name) {
   loading.value = true
   try {
     await SetCurrentUser(name)
-    emit('login-success', {
-      username: name,
-      hasPassword: false,
-      type: 'guest',
-      isLocked: true
-    })
+    emit('login-success', { username: name, hasPassword: false, type: 'guest', isLocked: true })
   } catch (e) {
-    error.value = String(e).replace('Error: ', '')
+    error.value = cleanError(e)
   } finally {
     loading.value = false
   }
@@ -428,14 +380,8 @@ async function handlePremiumQuickLogin(name) {
   loading.value = true
   try {
     await LoginUser(name, '')
-    emit('login-success', {
-      username: name,
-      hasPassword: false,
-      type: 'premium',
-      isLocked: false
-    })
+    emit('login-success', { username: name, hasPassword: false, type: 'premium', isLocked: false })
   } catch (e) {
-    // 令牌过期，停留在登录页面让用户看到
     error.value = t('login.premiumTokenExpiredReadd')
     selectedUser.value = null
   } finally {
@@ -447,12 +393,7 @@ async function handleExternalQuickLogin(name) {
   loading.value = true
   try {
     await LoginUser(name, '')
-    emit('login-success', {
-      username: name,
-      hasPassword: false,
-      type: 'external',
-      isLocked: false
-    })
+    emit('login-success', { username: name, hasPassword: false, type: 'external', isLocked: false })
   } catch (e) {
     error.value = t('login.externalTokenExpiredReadd')
     selectedUser.value = null
@@ -465,14 +406,9 @@ async function handleQuickLogin(name) {
   loading.value = true
   try {
     await SetCurrentUser(name)
-    emit('login-success', {
-      username: name,
-      hasPassword: false,
-      type: 'offline',
-      isLocked: false
-    })
+    emit('login-success', { username: name, hasPassword: false, type: 'offline', isLocked: false })
   } catch (e) {
-    error.value = String(e).replace('Error: ', '')
+    error.value = cleanError(e)
   } finally {
     loading.value = false
   }
@@ -852,13 +788,8 @@ function getUserTypeLabel(type) {
   transition: border-color 0.15s;
 }
 
-.win11-input:focus {
-  border-color: var(--primary);
-}
-
-.win11-input::placeholder {
-  color: var(--text-light);
-}
+.win11-input:focus { border-color: var(--primary); }
+.win11-input::placeholder { color: var(--text-light); }
 
 .win11-input-block {
   width: 100%;
@@ -866,9 +797,7 @@ function getUserTypeLabel(type) {
   border: 2px solid var(--border);
 }
 
-.win11-input-block:focus {
-  border-color: var(--primary);
-}
+.win11-input-block:focus { border-color: var(--primary); }
 
 .win11-submit-btn {
   height: 40px;
@@ -943,18 +872,9 @@ function getUserTypeLabel(type) {
   border-right: 1px solid var(--border);
 }
 
-.win11-type-tab:last-child {
-  border-right: none;
-}
-
-.win11-type-tab.active {
-  background: var(--primary);
-  color: white;
-}
-
-.win11-type-tab:hover:not(.active) {
-  background: var(--glass-bg);
-}
+.win11-type-tab:last-child { border-right: none; }
+.win11-type-tab.active { background: var(--primary); color: white; }
+.win11-type-tab:hover:not(.active) { background: var(--glass-bg); }
 
 /* ===== 创建模式表单 ===== */
 .win11-form {
