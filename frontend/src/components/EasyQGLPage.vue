@@ -14,6 +14,26 @@ const emit = defineEmits(['navigate'])
 
 const { state: easyQGL, enterModFirstMode, exitMode } = useEasyQGL()
 
+function cleanError(e) {
+  return String(e).replace('Error: ', '')
+}
+
+function parseVersionNum(ver) {
+  return ver.split('.').map(n => parseInt(n, 10) || 0)
+}
+
+function compareVersionNum(a, b) {
+  const pa = parseVersionNum(a)
+  const pb = parseVersionNum(b)
+  const len = Math.max(pa.length, pb.length)
+  for (let i = 0; i < len; i++) {
+    const na = pa[i] || 0
+    const nb = pb[i] || 0
+    if (na !== nb) return na - nb
+  }
+  return 0
+}
+
 // 安装状态
 const installStep = ref(0) // 0=未开始, 1=安装游戏, 2=下载mod, 3=添加mod, 4=完成
 const installMsg = ref('')
@@ -51,6 +71,15 @@ function handleExitMode() {
   exitMode()
 }
 
+function getLoaderVersions(loaderName, gameVersion) {
+  switch (loaderName) {
+    case 'forge': return GetForgeVersions(gameVersion)
+    case 'fabric': return GetFabricVersions(gameVersion)
+    case 'neoforge': return GetNeoForgeVersions(gameVersion)
+    default: return Promise.resolve([])
+  }
+}
+
 async function handleInstall() {
   if (easyQGL.selectedMods.length === 0 || installStep.value > 0) return
   if (!easyQGL.lockedGameVersion || !easyQGL.lockedLoader) {
@@ -67,46 +96,17 @@ async function handleInstall() {
     installMsg.value = t('easyQGL.preparingInstall')
     addLog(t('easyQGL.startInstallGame'))
 
-    // 获取版本列表
     const versions = await GetVersionManifest()
     const targetVer = versions.find(v => v.id === easyQGL.lockedGameVersion)
     if (!targetVer) {
       throw new Error(t('easyQGL.versionNotFound', { version: easyQGL.lockedGameVersion }))
     }
 
-    // 查询加载器版本
     installMsg.value = t('easyQGL.queryingLoader')
     const loaderName = easyQGL.lockedLoader
-    let loaderVersions = []
-    switch (loaderName) {
-      case 'forge':
-        loaderVersions = await GetForgeVersions(easyQGL.lockedGameVersion)
-        break
-      case 'fabric':
-        loaderVersions = await GetFabricVersions(easyQGL.lockedGameVersion)
-        break
-      case 'neoforge':
-        loaderVersions = await GetNeoForgeVersions(easyQGL.lockedGameVersion)
-        break
-    }
+    const loaderVersions = await getLoaderVersions(loaderName, easyQGL.lockedGameVersion)
     if (!loaderVersions || loaderVersions.length === 0) {
       throw new Error(t('easyQGL.loaderNotFound', { loader: loaderName }))
-    }
-
-    // 按版本号数值比较，选择最高版本
-    function parseVersionNum(ver) {
-      return ver.split('.').map(n => parseInt(n, 10) || 0)
-    }
-    function compareVersionNum(a, b) {
-      const pa = parseVersionNum(a)
-      const pb = parseVersionNum(b)
-      const len = Math.max(pa.length, pb.length)
-      for (let i = 0; i < len; i++) {
-        const na = pa[i] || 0
-        const nb = pb[i] || 0
-        if (na !== nb) return na - nb
-      }
-      return 0
     }
 
     let loaderVer = loaderVersions[0]
@@ -185,15 +185,13 @@ async function handleInstall() {
       .map(m => m.versionId)
 
     let allModVersionIDs = [...versionIDs]
-    let depCount = 0
 
     if (versionIDs.length > 0) {
       addLog(t('easyQGL.resolvingDeps'))
       try {
         const deps = await ResolveModDependencies(versionIDs, easyQGL.lockedGameVersion, easyQGL.lockedLoader)
         if (deps && deps.length > 0) {
-          depCount = deps.length
-          addLog(t('easyQGL.foundDeps', { count: depCount }))
+          addLog(t('easyQGL.foundDeps', { count: deps.length }))
           for (const dep of deps) {
             addLog(`  - ${dep.projectName} (${dep.dependencyType})`)
             allModVersionIDs.push(dep.versionId)
@@ -202,7 +200,7 @@ async function handleInstall() {
           addLog(t('easyQGL.noExtraDeps'))
         }
       } catch (e) {
-        addLog(t('easyQGL.resolvingDepsFailed') + String(e).replace('Error: ', ''))
+        addLog(t('easyQGL.resolvingDepsFailed') + cleanError(e))
       }
     }
 
@@ -241,7 +239,7 @@ async function handleInstall() {
     addLog(t('easyQGL.allInstallDone'))
 
   } catch (e) {
-    installError.value = t('easyQGL.error') + String(e).replace('Error: ', '')
+    installError.value = t('easyQGL.error') + cleanError(e)
     addLog(t('easyQGL.error') + installError.value)
   }
 }
@@ -531,12 +529,8 @@ function handleReturnToNormal() {
   background: var(--primary); color: white;
   box-shadow: 0 0 12px color-mix(in srgb, var(--primary) 40%, transparent);
 }
-.flow-step.done .flow-dot {
-  background: var(--success); color: white;
-}
-.flow-step.pending .flow-dot {
-  background: var(--border); color: var(--text-light);
-}
+.flow-step.done .flow-dot { background: var(--success); color: white; }
+.flow-step.pending .flow-dot { background: var(--border); color: var(--text-light); }
 
 .flow-label {
   font-size: 12px; color: var(--text-secondary); text-align: center; white-space: nowrap;
