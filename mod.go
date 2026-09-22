@@ -55,7 +55,7 @@ type ModSearchResult struct {
 	ClientSide   string   `json:"client_side"`
 	ServerSide   string   `json:"server_side"`
 	Categories   []string `json:"categories"`
-	GameVersions []string `json:"versions"`
+	GameVersions []string `json:"game_versions"`
 	Loaders      []string `json:"loaders"`
 }
 
@@ -409,9 +409,13 @@ func (a *App) AddModToDownloadList(versionID string, savePath string) error {
 		return fmt.Errorf("创建保存目录失败: %v", err)
 	}
 
-	customName := primaryFile.Filename
-	if customName == "" {
-		customName = version.Name
+	// 安全：使用 filepath.Base 剥离路径遍历组件
+	customName := filepath.Base(primaryFile.Filename)
+	if customName == "" || customName == "." || customName == string(filepath.Separator) {
+		customName = filepath.Base(version.Name)
+	}
+	if customName == "" || customName == "." {
+		customName = "mod.jar"
 	}
 
 	a.downloadMutex.Lock()
@@ -733,8 +737,9 @@ func (a *App) downloadModItem(item *DownloadItem) error {
 		return fmt.Errorf("创建 mods 目录失败: %v", err)
 	}
 
-	fileName := item.CustomName
-	if fileName == "" {
+	// 安全：使用 filepath.Base 剥离 API 返回文件名中的路径遍历组件
+	fileName := filepath.Base(item.CustomName)
+	if fileName == "" || fileName == "." || fileName == string(filepath.Separator) {
 		fileName = filepath.Base(item.URL)
 	}
 	if !strings.HasSuffix(strings.ToLower(fileName), ".jar") {
