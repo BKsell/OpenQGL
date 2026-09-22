@@ -38,14 +38,14 @@ type ModrinthModpackFile struct {
 	FileSize  int64             `json:"fileSize"`
 }
 
-// isPathTraversal 检查路径是否包含路径遍历字符
-func isPathTraversal(path string) bool {
+// hasPathTraversalChars 检查路径是否包含路径遍历字符
+func hasPathTraversalChars(path string) bool {
 	return strings.Contains(path, "..") || strings.Contains(path, "\x00")
 }
 
 // safeJoin 安全地拼接路径，防止路径遍历
 func safeJoin(baseDir, relPath string) (string, error) {
-	if isPathTraversal(relPath) {
+	if hasPathTraversalChars(relPath) {
 		return "", fmt.Errorf("路径遍历检测: %s", relPath)
 	}
 	destPath := filepath.Join(baseDir, relPath)
