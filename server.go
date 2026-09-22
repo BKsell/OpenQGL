@@ -506,7 +506,11 @@ func (a *App) GetServerLogs() []string {
 }
 
 // getServerConfig 读取服务器配置
+// 安全加固: 校验 name 不含路径遍历字符
 func (a *App) getServerConfig(name string) (*ServerConfig, error) {
+	if err := sanitizePathComponent(name); err != nil {
+		return nil, fmt.Errorf("无效的服务器名称")
+	}
 	serverDir := a.GetServerDir()
 	configPath := filepath.Join(serverDir, name, "QGL", "config.json")
 	data, err := os.ReadFile(configPath)
