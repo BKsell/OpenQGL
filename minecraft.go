@@ -91,17 +91,17 @@ type DownloadItem struct {
 // 版本 JSON 相关结构体
 
 type VersionJSON struct {
-	ID            string            `json:"id"`
-	Type          string            `json:"type"`
-	MainClass     string            `json:"mainClass"`
-	MinecraftArgs  string            `json:"minecraftArguments"`
-	Arguments     *ArgumentsObj     `json:"arguments"`
-	Libraries     []Library         `json:"libraries"`
-	Downloads     *VersionDownloads `json:"downloads"`
+	ID            string             `json:"id"`
+	Type          string             `json:"type"`
+	MainClass     string             `json:"mainClass"`
+	MinecraftArgs string             `json:"minecraftArguments"`
+	Arguments     *ArgumentsObj      `json:"arguments"`
+	Libraries     []Library          `json:"libraries"`
+	Downloads     *VersionDownloads  `json:"downloads"`
 	AssetIndex    *AssetIndexRef    `json:"assetIndex"`
-	ReleaseTime   string            `json:"releaseTime"`
-	InheritsFrom  string            `json:"inheritsFrom"`
-	Jar           string            `json:"jar"`
+	ReleaseTime   string             `json:"releaseTime"`
+	InheritsFrom  string             `json:"inheritsFrom"`
+	Jar           string             `json:"jar"`
 }
 
 type ArgumentsObj struct {
@@ -110,12 +110,12 @@ type ArgumentsObj struct {
 }
 
 type Library struct {
-	Name      string        `json:"name"`
-	Downloads *LibDownloads `json:"downloads"`
+	Name      string            `json:"name"`
+	Downloads *LibDownloads     `json:"downloads"`
 	Natives   map[string]string `json:"natives"`
-	Rules     []Rule        `json:"rules"`
-	URL       string        `json:"url"`
-	JarPath   string        `json:"path"`
+	Rules     []Rule           `json:"rules"`
+	URL       string           `json:"url"`
+	JarPath   string           `json:"path"`
 }
 
 type LibDownloads struct {
@@ -762,7 +762,13 @@ func (a *App) DownloadVersion(versionID string, versionURL string, customName st
 		}
 		if lib.Downloads.Artifact != nil {
 			artifact := lib.Downloads.Artifact
-			libPath := filepath.Join(mcDir, "libraries", artifact.Path)
+			// Zip Slip 防护：验证库路径不逃逸
+			safePath := isSafeRelPath(artifact.Path)
+			if safePath == "" {
+				fmt.Printf("跳过不安全的库路径: %s\n", artifact.Path)
+				continue
+			}
+			libPath := filepath.Join(mcDir, "libraries", safePath)
 			libURL := replaceWithBMCLAPI(artifact.URL)
 			a.emitProgress("downloading", filepath.Base(artifact.Path), 0, artifact.Size)
 			if err := a.downloadFile(libURL, libPath, false); err != nil {
@@ -782,7 +788,13 @@ func (a *App) DownloadVersion(versionID string, versionURL string, customName st
 			if !ok || classifier == nil {
 				continue
 			}
-			nativePath := filepath.Join(mcDir, "libraries", classifier.Path)
+			// Zip Slip 防护：验证 native 路径不逃逸
+			safeClassPath := isSafeRelPath(classifier.Path)
+			if safeClassPath == "" {
+				fmt.Printf("跳过不安全的 native 路径: %s\n", classifier.Path)
+				continue
+			}
+			nativePath := filepath.Join(mcDir, "libraries", safeClassPath)
 			nativeURL := replaceWithBMCLAPI(classifier.URL)
 			a.emitProgress("downloading", filepath.Base(classifier.Path), 0, classifier.Size)
 			if err := a.downloadFile(nativeURL, nativePath, false); err != nil {
@@ -1462,7 +1474,11 @@ func (a *App) buildClasspath(mcDir string, versionID string, versionJSON *Versio
 		}
 		var libPath string
 		if lib.Downloads != nil && lib.Downloads.Artifact != nil && lib.Downloads.Artifact.Path != "" {
-			libPath = filepath.Join(libsDir, lib.Downloads.Artifact.Path)
+			safePath := isSafeRelPath(lib.Downloads.Artifact.Path)
+			if safePath == "" {
+				continue
+			}
+			libPath = filepath.Join(libsDir, safePath)
 		} else if lib.JarPath != "" {
 			libPath = filepath.Join(libsDir, lib.JarPath)
 		} else if lib.Name != "" {
