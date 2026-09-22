@@ -11,6 +11,10 @@ const emit = defineEmits(['navigate'])
 
 const { t } = useI18n()
 
+function cleanError(e) {
+  return String(e).replace('Error: ', '')
+}
+
 const selectedVersion = ref('')
 const modList = ref([])
 const loading = ref(false)
@@ -28,8 +32,8 @@ async function loadInstalledVersions() {
     if (installedVersions.value.length > 0 && !selectedVersion.value) {
       selectedVersion.value = installedVersions.value[0].folderName
     }
-  } catch (error) {
-    console.error('加载已安装版本列表失败:', error)
+  } catch (e) {
+    console.error('加载已安装版本列表失败:', e)
   }
 }
 
@@ -41,23 +45,21 @@ async function loadModList() {
     const mods = await GetModList(selectedVersion.value)
     modList.value = mods || []
   } catch (e) {
-    error.value = String(e).replace('Error: ', '')
+    error.value = cleanError(e)
     modList.value = []
   } finally {
     loading.value = false
   }
 }
 
-watch(() => selectedVersion.value, () => {
-  loadModList()
-})
+watch(() => selectedVersion.value, () => { loadModList() })
 
 async function handleToggle(mod) {
   try {
     await ToggleMod(mod.filePath, !mod.isEnabled)
     await loadModList()
   } catch (e) {
-    error.value = String(e).replace('Error: ', '')
+    error.value = cleanError(e)
   }
 }
 
@@ -66,7 +68,7 @@ async function handleImport() {
     await ImportMod(selectedVersion.value)
     await loadModList()
   } catch (e) {
-    error.value = String(e).replace('Error: ', '')
+    error.value = cleanError(e)
   }
 }
 
@@ -83,7 +85,7 @@ async function handleDelete(mod) {
     await DeleteMod(mod.filePath)
     await loadModList()
   } catch (e) {
-    error.value = String(e).replace('Error: ', '')
+    error.value = cleanError(e)
   }
 }
 
@@ -322,13 +324,8 @@ watch(() => modList.value, () => {
   border-radius: 50%;
 }
 
-.stat-dot.enabled {
-  background: var(--success);
-}
-
-.stat-dot.disabled {
-  background: var(--text-light);
-}
+.stat-dot.enabled { background: var(--success); }
+.stat-dot.disabled { background: var(--text-light); }
 
 .loading-area {
   display: flex;
@@ -377,9 +374,7 @@ watch(() => modList.value, () => {
   box-shadow: 0 2px 8px color-mix(in srgb, var(--primary) 10%, transparent);
 }
 
-.mod-item.disabled {
-  opacity: 0.65;
-}
+.mod-item.disabled { opacity: 0.65; }
 
 .mod-item-left {
   display: flex;
@@ -402,13 +397,8 @@ watch(() => modList.value, () => {
   flex-shrink: 0;
 }
 
-.mod-item-icon.mod-enabled {
-  background: var(--primary);
-}
-
-.mod-item-icon.mod-disabled {
-  background: var(--text-light);
-}
+.mod-item-icon.mod-enabled { background: var(--primary); }
+.mod-item-icon.mod-disabled { background: var(--text-light); }
 
 .mod-item-info {
   flex: 1;
@@ -430,23 +420,10 @@ watch(() => modList.value, () => {
   margin-top: 4px;
 }
 
-.mod-size {
-  font-size: 12px;
-  color: var(--text-light);
-}
-
-.mod-status {
-  font-size: 12px;
-  font-weight: 500;
-}
-
-.mod-status.enabled {
-  color: var(--success);
-}
-
-.mod-status.disabled {
-  color: var(--text-light);
-}
+.mod-size { font-size: 12px; color: var(--text-light); }
+.mod-status { font-size: 12px; font-weight: 500; }
+.mod-status.enabled { color: var(--success); }
+.mod-status.disabled { color: var(--text-light); }
 
 .mod-item-actions {
   display: flex;
@@ -479,12 +456,6 @@ watch(() => modList.value, () => {
   border: 1px dashed var(--border);
 }
 
-.empty-icon {
-  font-size: 48px;
-}
-
-.empty-hint {
-  font-size: 13px;
-  color: var(--text-light);
-}
+.empty-icon { font-size: 48px; }
+.empty-hint { font-size: 13px; color: var(--text-light); }
 </style>
