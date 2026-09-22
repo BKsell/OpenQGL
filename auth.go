@@ -865,6 +865,7 @@ func (a *App) RefreshExternalToken(username string) error {
 
 // DownloadAuthlibInjector 下载 authlib-injector.jar
 // 安全加固: 使用 UMFS 哈希校验（bool-hybrid-array 生态）
+// 修复: 在循环中立即关闭 resp.Body，避免文件描述符泄漏
 func (a *App) DownloadAuthlibInjector() (string, error) {
 	qglDir := a.GetQGLDir()
 	jarPath := filepath.Join(qglDir, "authlib-injector.jar")
@@ -908,40 +909,47 @@ func (a *App) DownloadAuthlibInjector() (string, error) {
 	mirrorURL := strings.ReplaceAll(downloadURL, "authlib-injector.yushi.moe", "bmclapi2.bangbang93.com/mirrors/authlib-injector")
 	var lastErr error
 	for _, u := range []string{downloadURL, mirrorURL} {
-		resp, err := httpClient.Get(u)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode != 200 {
-			lastErr = fmt.Errorf("HTTP %d", resp.StatusCode)
-			continue
-		}
-		file, err := os.OpenFile(jarPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
-		if err != nil {
-			return "", fmt.Errorf("创建文件失败: %v", err)
-		}
-		if _, err := io.Copy(file, resp.Body); err != nil {
-			file.Close()
-			os.Remove(jarPath)
-			return "", fmt.Errorf("写入文件失败: %v", err)
-		}
-		file.Close()
-
-		if expectedSHA256 != "" {
-			actualHash, err := calculateUMFSHash(jarPath)
+		func() {
+			resp, err := httpClient.Get(u)
 			if err != nil {
-				os.Remove(jarPath)
-				return "", fmt.Errorf("计算文件哈希失败: %v", err)
+				lastErr = err
+				return
 			}
-			if !hmac.Equal([]byte(actualHash), []byte(expectedSHA256)) {
-				os.Remove(jarPath)
-				return "", fmt.Errorf("文件哈希校验失败: 预期 %s, 实际 %s", expectedSHA256, actualHash)
+			defer resp.Body.Close()
+			if resp.StatusCode != 200 {
+				lastErr = fmt.Errorf("HTTP %d", resp.StatusCode)
+				return
 			}
-		}
+			file, err := os.OpenFile(jarPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
+			if err != nil {
+				lastErr = fmt.Errorf("创建文件失败: %v", err)
+				return
+			}
+			if _, err := io.Copy(file, resp.Body); err != nil {
+				file.Close()
+				os.Remove(jarPath)
+				lastErr = fmt.Errorf("写入文件失败: %v", err)
+				return
+			}
+			file.Close()
 
-		return jarPath, nil
+			if expectedSHA256 != "" {
+				actualHash, hashErr := calculateUMFSHash(jarPath)
+				if hashErr != nil {
+					os.Remove(jarPath)
+					lastErr = fmt.Errorf("计算文件哈希失败: %v", hashErr)
+					return
+				}
+				if !hmac.Equal([]byte(actualHash), []byte(expectedSHA256)) {
+					os.Remove(jarPath)
+					lastErr = fmt.Errorf("文件哈希校验失败: 预期 %s, 实际 %s", expectedSHA256, actualHash)
+					return
+				}
+			}
+		}()
+		if lastErr == nil {
+			return jarPath, nil
+		}
 	}
 	return "", fmt.Errorf("下载 authlib-injector 失败: %v", lastErr)
 }
