@@ -13,6 +13,8 @@ import {
 } from '../../wailsjs/go/main/App.js'
 import logoImg from '../assets/images/logo.jpg'
 
+const APP_VERSION = '1.0.0-rc.2'
+
 const props = defineProps({
   currentUser: Object
 })
@@ -33,6 +35,7 @@ const versionIsolation = ref(false)
 const minecraftDir = ref('')
 const saving = ref(false)
 const saveMsg = ref('')
+const saveError = ref(false)
 const users = ref([])
 const themeColor = ref('cyan')
 const darkMode = ref(false)
@@ -47,12 +50,10 @@ const sections = computed(() => [
   { id: 'about', label: t('settings.about'), icon: 'ℹ' },
 ])
 
-// 便携版相关
 const portableMode = ref(false)
 const portableJavaPath = ref('')
 const portableJavaInfo = ref(null)
 
-// 语言切换
 const currentLocale = ref(localStorage.getItem('qgl-locale') || 'zh-CN')
 const languageOptions = [
   { value: 'zh-CN', label: '简体中文' },
@@ -66,7 +67,6 @@ function changeLanguage(locale) {
   localStorage.setItem('qgl-locale', locale)
 }
 
-// 导出启动命令按钮
 const showExportLaunchCommand = ref(false)
 
 async function toggleExportLaunchCommand() {
@@ -78,7 +78,6 @@ async function toggleExportLaunchCommand() {
   }
 }
 
-// 深色模式切换
 function toggleDarkMode() {
   const root = document.documentElement
   if (darkMode.value) {
@@ -91,18 +90,13 @@ function toggleDarkMode() {
 }
 
 onMounted(async () => {
-  // 恢复深色模式设置
   darkMode.value = localStorage.getItem('qgl-dark-mode') === 'true'
   if (darkMode.value) {
     document.documentElement.setAttribute('data-mode', 'dark')
   }
 
   const [configResult, isolationResult, usersResult, themeResult, bgResult] = await Promise.allSettled([
-    GetGlobalConfig(),
-    IsVersionIsolation(),
-    GetUsers(),
-    GetThemeColor(),
-    GetBackgroundImageDataURL()
+    GetGlobalConfig(), IsVersionIsolation(), GetUsers(), GetThemeColor(), GetBackgroundImageDataURL()
   ])
 
   if (configResult.status === 'fulfilled' && configResult.value) {
@@ -112,40 +106,20 @@ onMounted(async () => {
     minMemory.value = config.minMemory || 1
     minecraftDir.value = config.minecraftDir || ''
   }
+  if (isolationResult.status === 'fulfilled') versionIsolation.value = isolationResult.value
+  if (usersResult.status === 'fulfilled' && usersResult.value) users.value = usersResult.value
+  if (themeResult.status === 'fulfilled') themeColor.value = themeResult.value
+  if (bgResult.status === 'fulfilled' && bgResult.value) backgroundImage.value = bgResult.value
 
-  if (isolationResult.status === 'fulfilled') {
-    versionIsolation.value = isolationResult.value
-  }
-
-  if (usersResult.status === 'fulfilled' && usersResult.value) {
-    users.value = usersResult.value
-  }
-
-  if (themeResult.status === 'fulfilled') {
-    themeColor.value = themeResult.value
-  }
-
-  if (bgResult.status === 'fulfilled' && bgResult.value) {
-    backgroundImage.value = bgResult.value
-  }
-
-  try { portableMode.value = await IsPortableMode() } catch (error) { console.error('获取便携模式状态失败:', error) }
-  try { portableJavaPath.value = await GetPortableJavaPath() } catch (error) { console.error('获取便携Java路径失败:', error) }
-  try {
-    const info = await GetPortableJavaInfo()
-    portableJavaInfo.value = info
-  } catch (error) { console.error('获取便携Java信息失败:', error) }
-
-  try { showExportLaunchCommand.value = await GetShowExportLaunchCommand() } catch (error) { console.error('获取导出启动命令设置失败:', error) }
+  try { portableMode.value = await IsPortableMode() } catch (e) { console.error('获取便携模式状态失败:', e) }
+  try { portableJavaPath.value = await GetPortableJavaPath() } catch (e) { console.error('获取便携Java路径失败:', e) }
+  try { portableJavaInfo.value = await GetPortableJavaInfo() } catch (e) { console.error('获取便携Java信息失败:', e) }
+  try { showExportLaunchCommand.value = await GetShowExportLaunchCommand() } catch (e) { console.error('获取导出启动命令设置失败:', e) }
 
   searchJavaList()
 
   if (javaPath.value) {
-    try {
-      javaInfo.value = await GetJavaInfo(javaPath.value)
-    } catch (error) {
-      console.error('获取Java信息失败:', error)
-    }
+    try { javaInfo.value = await GetJavaInfo(javaPath.value) } catch (e) { console.error('获取Java信息失败:', e) }
   }
 })
 
@@ -153,8 +127,8 @@ async function searchJavaList() {
   searchingJava.value = true
   try {
     javaList.value = await SearchJava() || []
-  } catch (error) {
-    console.error('搜索Java失败:', error)
+  } catch (e) {
+    console.error('搜索Java失败:', e)
     javaList.value = []
   } finally {
     searchingJava.value = false
@@ -164,15 +138,12 @@ async function searchJavaList() {
 async function togglePortableMode() {
   try {
     await SetPortableMode(portableMode.value)
-    try {
-      const info = await GetPortableJavaInfo()
-      portableJavaInfo.value = info
-    } catch (error) {
-      console.error('获取便携Java信息失败:', error)
+    try { portableJavaInfo.value = await GetPortableJavaInfo() } catch (e) {
+      console.error('获取便携Java信息失败:', e)
       portableJavaInfo.value = null
     }
-  } catch (error) {
-    console.error('切换便携模式失败:', error)
+  } catch (e) {
+    console.error('切换便携模式失败:', e)
     portableMode.value = !portableMode.value
   }
 }
@@ -180,9 +151,7 @@ async function togglePortableMode() {
 function selectJava(path) {
   javaPath.value = path
   const found = javaList.value.find(j => j.path === path)
-  if (found) {
-    javaInfo.value = found
-  }
+  if (found) javaInfo.value = found
 }
 
 function clearJavaPath() {
@@ -195,16 +164,15 @@ function clearMinecraftDir() {
 }
 
 async function resetMinecraftDir() {
-  try {
-    minecraftDir.value = await GetMinecraftDir()
-  } catch (error) {
-    console.error('获取默认Minecraft目录失败:', error)
+  try { minecraftDir.value = await GetMinecraftDir() } catch (e) {
+    console.error('获取默认Minecraft目录失败:', e)
   }
 }
 
 async function saveSettings() {
   saving.value = true
   saveMsg.value = ''
+  saveError.value = false
   try {
     const config = await GetGlobalConfig()
     config.javaPath = javaPath.value
@@ -215,9 +183,10 @@ async function saveSettings() {
     await SetVersionIsolation(versionIsolation.value)
     saveMsg.value = t('settings.settingsSaved')
     setTimeout(() => { saveMsg.value = '' }, 2000)
-  } catch (error) {
-    console.error('保存设置失败:', error)
-    saveMsg.value = t('settings.saveFailed') + String(error).replace('Error: ', '')
+  } catch (e) {
+    console.error('保存设置失败:', e)
+    saveError.value = true
+    saveMsg.value = t('settings.saveFailed') + String(e).replace('Error: ', '')
   } finally {
     saving.value = false
   }
@@ -238,8 +207,8 @@ async function changeThemeColor(color) {
   try {
     await SetThemeColor(color)
     document.querySelector('[data-theme]')?.setAttribute('data-theme', color)
-  } catch (error) {
-    console.error('切换主题颜色失败:', error)
+  } catch (e) {
+    console.error('切换主题颜色失败:', e)
   }
 }
 
@@ -252,25 +221,23 @@ async function selectBgImage() {
       const url = await GetBackgroundImageDataURL()
       if (url) backgroundImage.value = url
     }
-  } catch (error) {
-    console.error('选择背景图片失败:', error)
+  } catch (e) {
+    console.error('选择背景图片失败:', e)
   }
 }
 
 async function resetBgImage() {
   backgroundImage.value = ''
-  try { await SetBackgroundImage('') } catch (error) { console.error('重置背景图片失败:', error) }
+  try { await SetBackgroundImage('') } catch (e) { console.error('重置背景图片失败:', e) }
 }
 
 async function fetchBingDailyImage() {
   bingLoading.value = true
   try {
     const url = await GetBingDailyImage()
-    if (url) {
-      backgroundImage.value = url
-    }
-  } catch (error) {
-    console.error('获取Bing每日图片失败:', error)
+    if (url) backgroundImage.value = url
+  } catch (e) {
+    console.error('获取Bing每日图片失败:', e)
   } finally {
     bingLoading.value = false
   }
@@ -278,6 +245,10 @@ async function fetchBingDailyImage() {
 
 function handleLogout() {
   emit('logout')
+}
+
+function goBack() {
+  emit('navigate', 'main')
 }
 
 const currentUserType = computed(() => {
@@ -298,7 +269,7 @@ const javaVersionLabel = computed(() => {
 <template>
   <div class="settings-page">
     <div class="top-bar">
-      <button class="btn btn-outline" @click="emit('navigate', 'main')">
+      <button class="btn btn-outline" @click="goBack">
         ← {{ t('settings.backToMain') }}
       </button>
       <h2 class="page-title">{{ t('settings.title') }}</h2>
@@ -406,7 +377,7 @@ const javaVersionLabel = computed(() => {
             </div>
           </div>
 
-          <div v-if="saveMsg" class="save-msg" :class="{ error: saveMsg.includes(t('settings.saveFailed')) }">
+          <div v-if="saveMsg" class="save-msg" :class="{ error: saveError }">
             {{ saveMsg }}
           </div>
 
@@ -579,13 +550,13 @@ const javaVersionLabel = computed(() => {
             <img :src="logoImg" class="about-logo-img" alt="QingLongLuncher" />
             <div class="about-name">{{ t('settings.qinglongLuncher') }}</div>
             <div class="about-subtitle">{{ t('settings.qinglongLuncherCN') }}</div>
-            <div class="about-version">1.0.0-rc.2</div>
+            <div class="about-version">{{ APP_VERSION }}</div>
           </div>
 
           <div class="about-info-list">
             <div class="about-info-item">
               <span class="info-label">{{ t('settings.version') }}</span>
-              <span class="info-value">1.0.0-rc.2</span>
+              <span class="info-value">{{ APP_VERSION }}</span>
             </div>
             <div class="about-info-item">
               <span class="info-label">{{ t('settings.copyright') }}</span>
@@ -747,13 +718,8 @@ const javaVersionLabel = computed(() => {
   margin-top: 4px;
 }
 
-.form-hint-success {
-  color: var(--success);
-}
-
-.form-hint-error {
-  color: var(--danger);
-}
+.form-hint-success { color: var(--success); }
+.form-hint-error { color: var(--danger); }
 
 .form-row {
   display: flex;
@@ -771,9 +737,7 @@ const javaVersionLabel = computed(() => {
   padding: 10px 0;
 }
 
-.setting-text {
-  flex: 1;
-}
+.setting-text { flex: 1; }
 
 .setting-name {
   font-size: 14px;
@@ -801,9 +765,7 @@ const javaVersionLabel = computed(() => {
   min-width: 120px;
 }
 
-.language-select:hover {
-  border-color: var(--primary);
-}
+.language-select:hover { border-color: var(--primary); }
 
 .language-select:focus {
   border-color: var(--primary);
@@ -836,9 +798,7 @@ const javaVersionLabel = computed(() => {
   flex-shrink: 0;
 }
 
-.user-detail {
-  flex: 1;
-}
+.user-detail { flex: 1; }
 
 .user-name-lg {
   font-size: 18px;
@@ -860,9 +820,7 @@ const javaVersionLabel = computed(() => {
 .user-type-badge.premium { background: color-mix(in srgb, #283593 15%, transparent); color: #283593; }
 .user-type-badge.external { background: color-mix(in srgb, #00695C 15%, transparent); color: #00695C; }
 
-.user-list-section {
-  margin-top: 8px;
-}
+.user-list-section { margin-top: 8px; }
 
 .user-list {
   display: flex;
@@ -879,13 +837,8 @@ const javaVersionLabel = computed(() => {
   transition: background 0.15s;
 }
 
-.user-list-item:hover {
-  background: var(--bg-card);
-}
-
-.user-list-item.current {
-  background: var(--primary-bg);
-}
+.user-list-item:hover { background: var(--bg-card); }
+.user-list-item.current { background: var(--primary-bg); }
 
 .user-list-avatar {
   width: 40px;
@@ -901,9 +854,7 @@ const javaVersionLabel = computed(() => {
   flex-shrink: 0;
 }
 
-.user-list-info {
-  flex: 1;
-}
+.user-list-info { flex: 1; }
 
 .user-list-name {
   font-size: 14px;
@@ -1003,9 +954,7 @@ const javaVersionLabel = computed(() => {
   border-bottom: 1px solid var(--border);
 }
 
-.about-info-item:last-child {
-  border-bottom: none;
-}
+.about-info-item:last-child { border-bottom: none; }
 
 .info-label {
   font-size: 14px;
@@ -1044,9 +993,7 @@ const javaVersionLabel = computed(() => {
   align-items: center;
 }
 
-.java-path-row .input {
-  flex: 1;
-}
+.java-path-row .input { flex: 1; }
 
 .btn-sm {
   padding: 6px 12px;
@@ -1080,14 +1027,8 @@ const javaVersionLabel = computed(() => {
   transition: background 0.15s;
 }
 
-.java-item:last-child {
-  border-bottom: none;
-}
-
-.java-item:hover {
-  background: var(--primary-bg);
-}
-
+.java-item:last-child { border-bottom: none; }
+.java-item:hover { background: var(--primary-bg); }
 .java-item.selected {
   background: var(--primary-bg);
   border-left: 3px solid var(--primary);
@@ -1159,13 +1100,8 @@ const javaVersionLabel = computed(() => {
   transition: background 0.15s;
 }
 
-.theme-color-item:hover {
-  background: var(--glass-bg);
-}
-
-.theme-color-item.active {
-  background: var(--primary-bg);
-}
+.theme-color-item:hover { background: var(--glass-bg); }
+.theme-color-item.active { background: var(--primary-bg); }
 
 .theme-color-circle {
   width: 40px;
