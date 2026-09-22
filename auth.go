@@ -116,10 +116,8 @@ func aesGCMDecrypt(encoded string, key []byte) ([]byte, error) {
 	return aesGCM.Open(nil, nonce, ciphertext, nil)
 }
 
-// 安全加固: 带超时的 HTTP 客户端
-var httpClient = &http.Client{
-	Timeout: 30 * time.Second,
-}
+// 安全加固: 复用全局 safeHTTPClient（TLS 1.2+，30秒超时）
+var httpClient = safeHTTPClient()
 
 // DeviceCodeResponse 设备代码响应
 type DeviceCodeResponse struct {
@@ -137,7 +135,7 @@ type DeviceCodeResponse struct {
 type TokenResponse struct {
 	AccessToken      string `json:"access_token"`
 	RefreshToken     string `json:"refresh_token"`
-	ExpiresIn        int    `json:"expires_in"`
+	ExpiresIn       int    `json:"expires_in"`
 	TokenType        string `json:"token_type"`
 	Scope            string `json:"scope"`
 	Error            string `json:"error"`
@@ -539,6 +537,9 @@ func (a *App) getMCProfile(mcAccessToken string) (*MCProfileResponse, error) {
 
 // RefreshMicrosoftToken 刷新微软令牌
 func (a *App) RefreshMicrosoftToken(username string) error {
+	if err := validateUsername(username); err != nil {
+		return err
+	}
 	authData, err := a.GetMSAuthData(username)
 	if err != nil {
 		return fmt.Errorf("读取认证数据失败: %v", err)
@@ -593,6 +594,9 @@ func (a *App) RefreshMicrosoftToken(username string) error {
 
 // GetMSAuthData 获取微软认证数据（自动处理加密/明文兼容）
 func (a *App) GetMSAuthData(username string) (*MSAuthData, error) {
+	if err := validateUsername(username); err != nil {
+		return nil, err
+	}
 	authPath := filepath.Join(a.GetUsersDir(), username, "ms_auth.json")
 	data, err := os.ReadFile(authPath)
 	if err != nil {
@@ -621,6 +625,9 @@ func (a *App) GetMSAuthData(username string) (*MSAuthData, error) {
 
 // SaveMSAuthData 保存微软认证数据（加密存储，username 以外的字段全部加密）
 func (a *App) SaveMSAuthData(username string, authData *MSAuthData) error {
+	if err := validateUsername(username); err != nil {
+		return err
+	}
 	userDir := filepath.Join(a.GetUsersDir(), username)
 	if err := os.MkdirAll(userDir, 0700); err != nil {
 		return err
@@ -808,6 +815,9 @@ func (a *App) LoginYggdrasil(serverURL string, username string, password string)
 
 // RefreshExternalToken 刷新外置登录令牌
 func (a *App) RefreshExternalToken(username string) error {
+	if err := validateUsername(username); err != nil {
+		return err
+	}
 	authData, err := a.GetExternalAuthData(username)
 	if err != nil {
 		return fmt.Errorf("获取外置认证数据失败: %v", err)
