@@ -19,14 +19,17 @@ const emit = defineEmits(['navigate', 'logout', 'add-user'])
 
 const { t } = useI18n()
 
+function cleanError(e) {
+  return String(e).replace('Error: ', '')
+}
+
 const currentUser = ref(props.currentUser || { username: 'Player', hasPassword: false, type: 'offline', isLocked: false })
 
 // 同步父组件的 currentUser 变化（如解锁后 isLocked 更新）
 watch(() => props.currentUser, (newVal) => {
-  if (newVal) {
-    currentUser.value = { ...newVal }
-  }
+  if (newVal) currentUser.value = { ...newVal }
 }, { deep: true })
+
 const installedVersions = ref([])
 const selectedVersion = ref('')
 const showUserList = ref(false)
@@ -56,6 +59,12 @@ const { state: easyQGL, enterModFirstMode, exitMode } = useEasyQGL()
 
 const isGuestLocked = computed(() => currentUser.value.type === 'guest' && currentUser.value.isLocked)
 
+function clearLaunchMsg() {
+  launchMsg.value = ''
+  launchMsgType.value = ''
+  showTip.value = false
+}
+
 onMounted(async () => {
   await refreshData()
   EventsOn('launchStatus', (status) => {
@@ -69,7 +78,7 @@ onMounted(async () => {
       launchMsg.value = t('main.launchSuccess')
       launchMsgType.value = 'success'
       launching.value = false
-      setTimeout(() => { launchMsg.value = ''; launchMsgType.value = ''; showTip.value = false }, 3000)
+      setTimeout(clearLaunchMsg, 3000)
     } else if (status === 'timeout') {
       launchMsg.value = t('main.launchTimeout')
       launchMsgType.value = 'error'
@@ -88,12 +97,10 @@ onMounted(async () => {
     }
   })
 
-  // 加载导出启动命令按钮设置
-  try { showExportLaunchBtn.value = await GetShowExportLaunchCommand() } catch (error) { console.error('获取导出启动命令设置失败:', error) }
+  try { showExportLaunchBtn.value = await GetShowExportLaunchCommand() } catch (e) { console.error('获取导出启动命令设置失败:', e) }
 })
 
 async function refreshData() {
-  // 并行加载所有数据
   const [userResult, versionsResult, selectedResult, isolationResult] = await Promise.allSettled([
     GetCurrentUser(),
     GetInstalledVersions(),
@@ -117,7 +124,7 @@ async function refreshData() {
 
   if (!selectedVersion.value && installedVersions.value.length > 0) {
     selectedVersion.value = installedVersions.value[0].folderName
-    try { await SetSelectedVersion(selectedVersion.value) } catch (error) { console.error('设置默认版本失败:', error) }
+    try { await SetSelectedVersion(selectedVersion.value) } catch (e) { console.error('设置默认版本失败:', e) }
   }
 
   if (isolationResult.status === 'fulfilled') {
@@ -127,7 +134,6 @@ async function refreshData() {
 
 async function showSwitchUser() {
   if (isGuestLocked.value) return
-  // 直接跳转到登录页面（和设置页的切换账户一致）
   emit('logout')
 }
 
@@ -139,8 +145,8 @@ async function selectUser(user) {
     try {
       await SetCurrentUser(user.username)
       currentUser.value = user
-    } catch (error) {
-      console.error('切换用户失败:', error)
+    } catch (e) {
+      console.error('切换用户失败:', e)
     }
   }
 }
@@ -153,13 +159,12 @@ async function showVersionSelect() {
   try {
     const versions = await ScanVersions()
     installedVersions.value = versions || []
-    // 如果当前选中的版本不在列表中，选中第一个
     if (installedVersions.value.length > 0 && !installedVersions.value.find(v => v.folderName === selectedVersion.value)) {
       selectedVersion.value = installedVersions.value[0].folderName
-      try { await SetSelectedVersion(selectedVersion.value) } catch (error) { console.error('设置选中版本失败:', error) }
+      try { await SetSelectedVersion(selectedVersion.value) } catch (e) { console.error('设置选中版本失败:', e) }
     }
-  } catch (error) {
-    console.error('扫描游戏版本失败:', error)
+  } catch (e) {
+    console.error('扫描游戏版本失败:', e)
   } finally {
     versionListLoading.value = false
   }
@@ -168,7 +173,7 @@ async function showVersionSelect() {
 async function selectVersion(ver) {
   selectedVersion.value = ver.folderName
   showVersionList.value = false
-  try { await SetSelectedVersion(ver.folderName) } catch (error) { console.error('设置选中版本失败:', error) }
+  try { await SetSelectedVersion(ver.folderName) } catch (e) { console.error('设置选中版本失败:', e) }
 }
 
 async function handleLaunch() {
@@ -185,22 +190,21 @@ async function handleLaunch() {
   try {
     await LaunchGame(selectedVersion.value)
   } catch (e) {
-    const errMsg = String(e).replace('Error: ', '')
+    const errMsg = cleanError(e)
     launching.value = false
 
-    // 检测是否为 Java 不兼容的错误，自动加入下载列表并开始下载
     if (errMsg.includes('Java 选择失败') || (errMsg.includes('未找到') && errMsg.includes('Java'))) {
       try {
         const recJava = await GetRecommendedJavaForVersion(selectedVersion.value)
         if (recJava > 0) {
           await AddJavaToDownloadList(recJava)
-          try { await StartDownloadList() } catch (error) { console.error('开始下载列表失败:', error) }
+          try { await StartDownloadList() } catch (err) { console.error('开始下载列表失败:', err) }
           launchMsg.value = t('main.javaAutoDownloaded', { version: recJava })
           launchMsgType.value = 'info'
           return
         }
-      } catch (error) {
-        console.error('获取推荐Java版本失败:', error)
+      } catch (err) {
+        console.error('获取推荐Java版本失败:', err)
       }
     }
 
@@ -213,8 +217,8 @@ async function toggleVersionIsolation() {
   try {
     await SetVersionIsolation(!versionIsolation.value)
     versionIsolation.value = !versionIsolation.value
-  } catch (error) {
-    console.error('切换版本隔离失败:', error)
+  } catch (e) {
+    console.error('切换版本隔离失败:', e)
   }
 }
 
@@ -234,7 +238,6 @@ async function handleExportLaunchCommand() {
       btn2Label: t('main.exportLaunchCommandBtn2'),
     })
     if (btnIndex === 1) {
-      // 复制并关闭
       try {
         await navigator.clipboard.writeText(cmd)
       } catch {
@@ -249,7 +252,7 @@ async function handleExportLaunchCommand() {
       }
     }
   } catch (e) {
-    const errMsg = String(e).replace('Error: ', '')
+    const errMsg = cleanError(e)
     await showQGLDialog({
       theme: 'error',
       title: t('main.exportLaunchCommandTitle'),
@@ -707,17 +710,9 @@ const userTypeLabel = computed(() => {
   margin-top: 4px;
 }
 
-.launch-msg.info {
-  color: var(--primary);
-}
-
-.launch-msg.success {
-  color: var(--success);
-}
-
-.launch-msg.error {
-  color: var(--danger);
-}
+.launch-msg.info { color: var(--primary); }
+.launch-msg.success { color: var(--success); }
+.launch-msg.error { color: var(--danger); }
 
 .launch-msg-glass {
   text-align: center;
@@ -897,13 +892,8 @@ const userTypeLabel = computed(() => {
   transition: background 0.15s;
 }
 
-.user-item:hover {
-  background: var(--primary-bg);
-}
-
-.user-item.active {
-  background: var(--primary-bg);
-}
+.user-item:hover { background: var(--primary-bg); }
+.user-item.active { background: var(--primary-bg); }
 
 .user-avatar {
   width: 40px;
@@ -955,13 +945,8 @@ const userTypeLabel = computed(() => {
   transition: background 0.15s;
 }
 
-.version-item:hover {
-  background: var(--primary-bg);
-}
-
-.version-item.active {
-  background: var(--primary-bg);
-}
+.version-item:hover { background: var(--primary-bg); }
+.version-item.active { background: var(--primary-bg); }
 
 .version-name {
   font-size: 14px;
@@ -1001,9 +986,7 @@ const userTypeLabel = computed(() => {
   transition: background 0.15s;
 }
 
-.add-user-option:hover {
-  background: var(--primary-bg);
-}
+.add-user-option:hover { background: var(--primary-bg); }
 
 .add-user-icon {
   width: 32px;
