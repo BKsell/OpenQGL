@@ -397,9 +397,9 @@ func (a *App) scanVersionFolder(versionFolder string, folderName string) Install
 		loader = "fabric"
 	} else if strings.Contains(string(jsonText), "org.quiltmc:quilt-loader") {
 		loader = "quilt"
-	} else if strings.Contains(string(jsonText), "net.neoforge") {
+	} else if strings.Contains(string(jsonText), "net.neoforged") {
 		loader = "neoforge"
-	} else if strings.Contains(string(jsonText), "minecraftforge") && !strings.Contains(string(jsonText), "net.neoforge") {
+	} else if strings.Contains(string(jsonText), "minecraftforge") && !strings.Contains(string(jsonText), "net.neoforged") {
 		loader = "forge"
 	}
 	gameVersion := versionJSON.InheritsFrom
@@ -449,6 +449,11 @@ func (a *App) AddToDownloadList(versionID string, versionURL string, customName 
 func (a *App) AddToDownloadListWithLoader(versionID string, versionURL string, customName string, versionType string, loaderName string, loaderVersion string, optifineType string, optifinePatch string) error {
 	a.downloadMutex.Lock()
 	defer a.downloadMutex.Unlock()
+	// 安全：清理自定义名称中的路径遍历字符
+	customName = sanitizeVersionName(customName)
+	if customName == "" {
+		return fmt.Errorf("版本名称无效")
+	}
 	for _, item := range a.downloadList {
 		if item.CustomName == customName {
 			return fmt.Errorf("下载列表中已存在同名版本: %s", customName)
@@ -721,6 +726,11 @@ func runInstaller(filePath string, isMSI bool) error {
 
 func (a *App) DownloadVersion(versionID string, versionURL string, customName string) error {
 	mcDir := a.getMinecraftDir()
+	// 安全：清理自定义名称中的路径遍历字符
+	customName = sanitizeVersionName(customName)
+	if customName == "" {
+		return fmt.Errorf("无效的版本名称")
+	}
 	versionDir := filepath.Join(mcDir, "versions", customName)
 	if err := os.MkdirAll(versionDir, 0700); err != nil {
 		return fmt.Errorf("创建版本目录失败: %v", err)
@@ -1722,7 +1732,22 @@ func resolveGameArg(arg interface{}, repl map[string]string) []string {
 	return nil
 }
 
+// sanitizePathComponent 验证路径组件不含路径遍历字符
+func sanitizePathComponent(name string) error {
+	if name == "" || name == "." || name == ".." {
+		return fmt.Errorf("无效的路径组件: %s", name)
+	}
+	if strings.Contains(name, "..") || strings.ContainsAny(name, `/\:*?"<>|`) {
+		return fmt.Errorf("无效的路径组件: %s", name)
+	}
+	return nil
+}
+
 func (a *App) LaunchGame(versionID string) error {
+	// 安全：验证 versionID 不含路径遍历字符
+	if err := sanitizePathComponent(versionID); err != nil {
+		return fmt.Errorf("无效的版本ID: %v", err)
+	}
 	mcDir := a.getMinecraftDir()
 	versionDir := filepath.Join(mcDir, "versions", versionID)
 	a.launchLogPath = filepath.Join(versionDir, "QGL", "Logs", "qgl_launch.log")
@@ -1814,6 +1839,9 @@ func (a *App) LaunchGame(versionID string) error {
 }
 
 func (a *App) GetLaunchCommand(versionID string) (string, error) {
+	if err := sanitizePathComponent(versionID); err != nil {
+		return "", fmt.Errorf("无效的版本ID: %v", err)
+	}
 	mcDir := a.getMinecraftDir()
 	versionDir := filepath.Join(mcDir, "versions", versionID)
 	versionJSON, err := a.resolveVersionJSON(versionID)
