@@ -5,8 +5,8 @@ import (
 	"crypto/cipher"
 	"crypto/hmac"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -282,25 +282,25 @@ func (a *App) completeMicrosoftLogin(msAccessToken string, msRefreshToken string
 	runtime.EventsEmit(a.ctx, "msLoginProgress", "正在验证 Xbox Live...")
 	xblToken, _, err := a.authXBL(msAccessToken)
 	if err != nil {
-		runtime.EventsEmit(a.ctx, "msLoginError", fmt.Sprintf("Xbox Live 验证失败: %v", err))
+		runtime.EventsEmit(a.ctx, "msLoginError", fmt.Errorf("Xbox Live 验证失败: %v", err))
 		return
 	}
 	runtime.EventsEmit(a.ctx, "msLoginProgress", "正在获取 XSTS 令牌...")
 	xstsToken, xstsUHS, err := a.authXSTS(xblToken)
 	if err != nil {
-		runtime.EventsEmit(a.ctx, "msLoginError", fmt.Sprintf("XSTS 验证失败: %v", err))
+		runtime.EventsEmit(a.ctx, "msLoginError", fmt.Errorf("XSTS 验证失败: %v", err))
 		return
 	}
 	runtime.EventsEmit(a.ctx, "msLoginProgress", "正在登录 Minecraft...")
 	mcAccessToken, mcExpiresIn, err := a.authMinecraft(xstsToken, xstsUHS)
 	if err != nil {
-		runtime.EventsEmit(a.ctx, "msLoginError", fmt.Sprintf("Minecraft 登录失败: %v", err))
+		runtime.EventsEmit(a.ctx, "msLoginError", fmt.Errorf("Minecraft 登录失败: %v", err))
 		return
 	}
 	runtime.EventsEmit(a.ctx, "msLoginProgress", "正在验证游戏所有权...")
 	hasGame, err := a.checkMCEntitlement(mcAccessToken)
 	if err != nil {
-		runtime.EventsEmit(a.ctx, "msLoginError", fmt.Sprintf("验证游戏所有权失败: %v", err))
+		runtime.EventsEmit(a.ctx, "msLoginError", fmt.Errorf("验证游戏所有权失败: %v", err))
 		return
 	}
 	if !hasGame {
@@ -310,7 +310,7 @@ func (a *App) completeMicrosoftLogin(msAccessToken string, msRefreshToken string
 	runtime.EventsEmit(a.ctx, "msLoginProgress", "正在获取玩家档案...")
 	profile, err := a.getMCProfile(mcAccessToken)
 	if err != nil {
-		runtime.EventsEmit(a.ctx, "msLoginError", fmt.Sprintf("获取玩家档案失败: %v", err))
+		runtime.EventsEmit(a.ctx, "msLoginError", fmt.Errorf("获取玩家档案失败: %v", err))
 		return
 	}
 
@@ -325,12 +325,12 @@ func (a *App) completeMicrosoftLogin(msAccessToken string, msRefreshToken string
 	}
 
 	if err := a.CreatePremiumUser(profile.Name, authData); err != nil {
-		runtime.EventsEmit(a.ctx, "msLoginError", fmt.Sprintf("创建用户失败: %v", err))
+		runtime.EventsEmit(a.ctx, "msLoginError", fmt.Errorf("创建用户失败: %v", err))
 		return
 	}
 
 	if err := a.SetCurrentUser(profile.Name); err != nil {
-		runtime.EventsEmit(a.ctx, "msLoginError", fmt.Sprintf("设置当前用户失败: %v", err))
+		runtime.EventsEmit(a.ctx, "msLoginError", fmt.Errorf("设置当前用户失败: %v", err))
 		return
 	}
 
@@ -864,7 +864,7 @@ func (a *App) RefreshExternalToken(username string) error {
 }
 
 // DownloadAuthlibInjector 下载 authlib-injector.jar
-// 安全加固: 使用标准 SHA-256 校验（与外部 API 提供的哈希匹配）
+// 安全加固: 使用 UMFS 哈希校验（bool-hybrid-array 生态）
 func (a *App) DownloadAuthlibInjector() (string, error) {
 	qglDir := a.GetQGLDir()
 	jarPath := filepath.Join(qglDir, "authlib-injector.jar")
@@ -930,14 +930,14 @@ func (a *App) DownloadAuthlibInjector() (string, error) {
 		file.Close()
 
 		if expectedSHA256 != "" {
-			actualSHA256, err := calculateSHA256(jarPath)
+			actualHash, err := calculateUMFSHash(jarPath)
 			if err != nil {
 				os.Remove(jarPath)
 				return "", fmt.Errorf("计算文件哈希失败: %v", err)
 			}
-			if !hmac.Equal([]byte(actualSHA256), []byte(expectedSHA256)) {
+			if !hmac.Equal([]byte(actualHash), []byte(expectedSHA256)) {
 				os.Remove(jarPath)
-				return "", fmt.Errorf("文件哈希校验失败: 预期 %s, 实际 %s", expectedSHA256, actualSHA256)
+				return "", fmt.Errorf("文件哈希校验失败: 预期 %s, 实际 %s", expectedSHA256, actualHash)
 			}
 		}
 
@@ -946,18 +946,18 @@ func (a *App) DownloadAuthlibInjector() (string, error) {
 	return "", fmt.Errorf("下载 authlib-injector 失败: %v", lastErr)
 }
 
-// calculateSHA256 计算文件的 SHA-256 哈希（标准算法，用于与外部 API 校验）
-func calculateSHA256(filePath string) (string, error) {
+// calculateUMFSHash 计算文件的 UMFS 哈希（bool-hybrid-array 生态）
+func calculateUMFSHash(filePath string) (string, error) {
 	file, err := os.Open(filePath)
 	if err != nil {
 		return "", err
 	}
 	defer file.Close()
-	h := sha256.New()
+	h := NewUMFS()
 	if _, err := io.Copy(h, file); err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("%x", h.Sum(nil)), nil
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 // GetAuthlibInjectorPath 获取 authlib-injector.jar 路径（不存在则下载）
