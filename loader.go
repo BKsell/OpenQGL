@@ -52,6 +52,31 @@ func isSafeFileName(name string) bool {
 	return true
 }
 
+// isSafeRelPath 验证相对路径不包含路径遍历组件（Zip Slip 防护）
+// 返回清洗后的安全路径，如果不安全返回空字符串
+func isSafeRelPath(relPath string) string {
+	if relPath == "" {
+		return ""
+	}
+	cleaned := filepath.Clean(relPath)
+	// 拒绝绝对路径
+	if filepath.IsAbs(cleaned) {
+		return ""
+	}
+	// 拒绝以 .. 开头的逃逸路径
+	if strings.HasPrefix(cleaned, "..") {
+		return ""
+	}
+	// 拒绝包含 .. 段的路径
+	parts := strings.Split(cleaned, string(os.PathSeparator))
+	for _, p := range parts {
+		if p == ".." {
+			return ""
+		}
+	}
+	return cleaned
+}
+
 // ===== 日志功能 =====
 
 // writeLog 将信息写入日志文件（用户可随时查看和复制）
@@ -678,11 +703,16 @@ func (a *App) installOldForge(installerPath string, mcDir string, mcVersion stri
 		if jsonPath == "" {
 			return fmt.Errorf("install_profile.json 中缺少 json 字段")
 		}
+		// Zip Slip 防护：验证 ZIP 内路径不逃逸
 		jsonPath = strings.TrimPrefix(jsonPath, "/")
+		safeJSONPath := isSafeRelPath(jsonPath)
+		if safeJSONPath == "" {
+			return fmt.Errorf("安装器中 JSON 路径不安全: %s", jsonPath)
+		}
 
 		var versionJSONData []byte
 		for _, f := range r.File {
-			if f.Name == jsonPath {
+			if f.Name == safeJSONPath {
 				rc, err := f.Open()
 				if err != nil {
 					return fmt.Errorf("读取版本 JSON 失败: %v", err)
@@ -694,7 +724,7 @@ func (a *App) installOldForge(installerPath string, mcDir string, mcVersion stri
 		}
 
 		if versionJSONData == nil {
-			return fmt.Errorf("安装器中未找到 %s", jsonPath)
+			return fmt.Errorf("安装器中未找到 %s", safeJSONPath)
 		}
 
 		var versionJSON map[string]interface{}
@@ -722,11 +752,17 @@ func (a *App) installOldForge(installerPath string, mcDir string, mcVersion stri
 		pathStr, _ := installInfo["path"].(string)
 
 		if pathStr != "" && filePath != "" {
-			libPath := filepath.Join(mcDir, "libraries", strings.ReplaceAll(pathStr, "/", string(os.PathSeparator)))
+			// Zip Slip 防护：验证路径不逃逸
+			safePathStr := isSafeRelPath(pathStr)
+			safeFilePath := isSafeRelPath(filePath)
+			if safePathStr == "" || safeFilePath == "" {
+				return fmt.Errorf("安装器中路径不安全，跳过")
+			}
+			libPath := filepath.Join(mcDir, "libraries", safePathStr)
 			os.MkdirAll(filepath.Dir(libPath), 0700)
 
 			for _, f := range r.File {
-				if f.Name == filePath {
+				if f.Name == safeFilePath {
 					rc, err := f.Open()
 					if err != nil {
 						break
@@ -776,7 +812,13 @@ func (a *App) extractMavenFiles(installerPath string, mcDir string) error {
 	for _, f := range r.File {
 		if strings.HasPrefix(f.Name, "maven/") && !f.FileInfo().IsDir() {
 			relPath := strings.TrimPrefix(f.Name, "maven/")
-			destPath := filepath.Join(libsDir, relPath)
+			// Zip Slip 防护：验证解压路径不逃逸出 libsDir
+			safeRelPath := isSafeRelPath(relPath)
+			if safeRelPath == "" {
+				a.writeLog("跳过不安全的 ZIP 条目: %s", f.Name)
+				continue
+			}
+			destPath := filepath.Join(libsDir, safeRelPath)
 
 			os.MkdirAll(filepath.Dir(destPath), 0700)
 
@@ -866,7 +908,13 @@ func (a *App) downloadForgeLibraries(installerPath string, mcDir string, mcVersi
 		url = strings.Replace(url, "https://maven.neoforged.net/releases/", "https://bmclapi2.bangbang93.com/maven/", 1)
 		url = strings.Replace(url, "https://maven.fabricmc.net/", "https://bmclapi2.bangbang93.com/maven/", 1)
 
-		destPath := filepath.Join(libsDir, path)
+		// Zip Slip 防护：验证库路径不逃逸
+		safePath := isSafeRelPath(path)
+		if safePath == "" {
+			fmt.Printf("跳过不安全的库路径: %s\n", path)
+			continue
+		}
+		destPath := filepath.Join(libsDir, safePath)
 		if _, err := os.Stat(destPath); err == nil {
 			continue
 		}
@@ -1445,7 +1493,13 @@ func (a *App) downloadFabricLibraries(profileJSON map[string]interface{}, mcDir 
 		url = strings.Replace(url, "https://repo1.maven.org/maven2/", "https://bmclapi2.bangbang93.com/maven/", 1)
 		url = strings.Replace(url, "https://libraries.minecraft.net/", "https://bmclapi2.bangbang93.com/libraries/", 1)
 
-		destPath := filepath.Join(libsDir, path)
+		// Zip Slip 防护：验证库路径不逃逸
+		safePath := isSafeRelPath(path)
+		if safePath == "" {
+			fmt.Printf("跳过不安全的库路径: %s\n", path)
+			continue
+		}
+		destPath := filepath.Join(libsDir, safePath)
 
 		if _, err := os.Stat(destPath); err == nil {
 			continue
