@@ -23,7 +23,22 @@ const { t } = useI18n()
 
 const { state: easyQGL, setFirstMod, addSelectedMod } = useEasyQGL()
 
-// 游戏版本相关
+function cleanError(e) {
+  return String(e).replace('Error: ', '')
+}
+
+function recordEasyQGLMod(versionId, versionInfo) {
+  if (!easyQGL.active || !selectedMod.value) return
+  if (!easyQGL.firstMod) setFirstMod(selectedMod.value, versionInfo)
+  addSelectedMod({
+    title: selectedMod.value.title,
+    slug: selectedMod.value.slug,
+    description: selectedMod.value.description,
+    versionId,
+    versionName: versionInfo?.name || versionInfo?.version_number || ''
+  })
+}
+
 const versions = ref([])
 const loading = ref(false)
 const error = ref('')
@@ -33,14 +48,11 @@ const filterType = ref('release')
 const adding = ref(false)
 const addSuccess = ref(false)
 
-// Tab 切换 - 直接检查 store 状态决定初始值
 const activeTab = ref(easyQGL.active && easyQGL.mode === 'mod-first' ? 'mod' : 'game')
 
-// Java 下载相关
 const javaList = ref([])
 const installedJavaList = ref([])
 
-// Mod 下载相关
 const modQuery = ref('')
 const modSearchResults = ref([])
 const modSearching = ref(false)
@@ -57,17 +69,15 @@ const modDependencies = ref([])
 const modDepsLoading = ref(false)
 const modSavePath = ref('')
 
-// 模组加载器高级选项
 const showAdvanced = ref(false)
-const loaderTab = ref('forge') // forge, fabric, neoforge, optifine
+const loaderTab = ref('forge')
 const loaderVersions = ref([])
 const loaderLoading = ref(false)
 const loaderInstalling = ref(false)
 const loaderInstalled = ref({})
 const installedGameVersions = ref([])
-const selectedLoader = ref(null) // 选中的加载器版本
+const selectedLoader = ref(null)
 
-// 整合包相关
 const modpackQuery = ref('')
 const modpackSearchResults = ref([])
 const modpackSearching = ref(false)
@@ -85,16 +95,11 @@ onMounted(async () => {
   await loadInstalledVersions()
 })
 
-// 监听 EasyQGL 状态变化，立即响应
 watch(() => easyQGL.active, () => {
   if (easyQGL.active && easyQGL.mode === 'mod-first') {
     activeTab.value = 'mod'
-    if (easyQGL.lockedGameVersion) {
-      modGameVersion.value = easyQGL.lockedGameVersion
-    }
-    if (easyQGL.lockedLoader) {
-      modLoader.value = easyQGL.lockedLoader
-    }
+    if (easyQGL.lockedGameVersion) modGameVersion.value = easyQGL.lockedGameVersion
+    if (easyQGL.lockedLoader) modLoader.value = easyQGL.lockedLoader
   }
 })
 
@@ -104,7 +109,7 @@ async function loadVersions() {
   try {
     versions.value = await GetVersionManifest()
   } catch (e) {
-    error.value = t('download.getVersionsFailed') + String(e).replace('Error: ', '')
+    error.value = t('download.getVersionsFailed') + cleanError(e)
   } finally {
     loading.value = false
   }
@@ -114,24 +119,24 @@ async function loadJavaList() {
   try {
     javaList.value = await GetJavaDownloadList()
     installedJavaList.value = await SearchJava()
-  } catch (error) {
-    console.error('加载Java下载列表失败:', error)
+  } catch (e) {
+    console.error('加载Java下载列表失败:', e)
   }
 }
 
 async function loadModCategories() {
   try {
     modCategories.value = await GetModrinthCategories()
-  } catch (error) {
-    console.error('加载Mod分类失败:', error)
+  } catch (e) {
+    console.error('加载Mod分类失败:', e)
   }
 }
 
 async function loadInstalledVersions() {
   try {
     installedGameVersions.value = await GetInstalledVersions()
-  } catch (error) {
-    console.error('加载已安装版本失败:', error)
+  } catch (e) {
+    console.error('加载已安装版本失败:', e)
   }
 }
 
@@ -165,7 +170,6 @@ async function handleAddToList() {
 
   try {
     if (selectedLoader.value) {
-      // 带加载器，加入列表
       await AddToDownloadListWithLoader(
         selectedVersion.value.id,
         selectedVersion.value.url,
@@ -177,7 +181,6 @@ async function handleAddToList() {
         selectedLoader.value.patch || ''
       )
     } else {
-      // 仅原版，加入列表
       await AddToDownloadList(
         selectedVersion.value.id,
         selectedVersion.value.url,
@@ -186,11 +189,9 @@ async function handleAddToList() {
       )
     }
     addSuccess.value = true
-    setTimeout(() => {
-      backToList()
-    }, 1200)
+    setTimeout(() => { backToList() }, 1200)
   } catch (e) {
-    error.value = String(e).replace('Error: ', '')
+    error.value = cleanError(e)
   } finally {
     adding.value = false
   }
@@ -205,15 +206,9 @@ function updateFilter() {
   }
 }
 
-watch(() => versions.value, () => {
-  updateFilter()
-}, { immediate: true })
+watch(() => versions.value, () => { updateFilter() }, { immediate: true })
+watch(() => filterType.value, () => { updateFilter() })
 
-watch(() => filterType.value, () => {
-  updateFilter()
-})
-
-// Java 下载
 function isJavaInstalled(majorVer) {
   return installedJavaList.value.some(j => j.majorVer === majorVer)
 }
@@ -227,29 +222,24 @@ async function handleDownloadJava(majorVer) {
   try {
     await AddJavaToDownloadList(majorVer)
   } catch (e) {
-    error.value = String(e).replace('Error: ', '')
+    error.value = cleanError(e)
   }
 }
 
-// ===== Mod 搜索 =====
 async function searchMods(page = 0) {
   modSearching.value = true
   modSearchPage.value = page
   error.value = ''
   try {
-    // 支持中文搜索：检测是否包含中文字符
     const query = modQuery.value.trim()
     const isChineseQuery = /[\u4e00-\u9fa5]/.test(query)
 
     let result
     if (isChineseQuery && query) {
-      // 中文搜索：先通过翻译表查找对应的英文 slug，再用英文搜索
       const englishSlugs = await SearchModsByChineseName(query)
       if (englishSlugs && englishSlugs.length > 0) {
-        // 用找到的第一个英文 slug 搜索
         result = await SearchMods(englishSlugs[0], modGameVersion.value, modLoader.value, modCategory.value, page, 20)
       } else {
-        // 翻译表没找到，回退到原始关键词搜索（可能Modrinth也收录了中文名）
         result = await SearchMods(query, modGameVersion.value, modLoader.value, modCategory.value, page, 20)
       }
     } else {
@@ -264,14 +254,11 @@ async function searchMods(page = 0) {
       modSearchTotal.value = 0
     }
 
-    // 批量预加载中文翻译
     if (modSearchResults.value.length > 0) {
-      for (const m of modSearchResults.value) {
-        getModChineseNameCached(m)
-      }
+      for (const m of modSearchResults.value) getModChineseNameCached(m)
     }
   } catch (e) {
-    error.value = String(e).replace('Error: ', '')
+    error.value = cleanError(e)
     modSearchResults.value = []
     modSearchTotal.value = 0
   } finally {
@@ -279,29 +266,24 @@ async function searchMods(page = 0) {
   }
 }
 
-// 获取 Mod 的中文翻译名称
 async function getModChineseName(mod) {
-  // 优先使用 slug（通常是英文标识符），其次用 title
   const key = mod.slug || mod.title || ''
   if (!key) return ''
   try {
     const chinese = await TranslateModName(key)
     return chinese && chinese !== key ? chinese : ''
-  } catch (error) {
-    console.error('翻译Mod名称失败:', error)
+  } catch (e) {
+    console.error('翻译Mod名称失败:', e)
     return ''
   }
 }
 
-// 缓存翻译结果避免重复调用
 const modTranslationCache = ref({})
 
 async function getModChineseNameCached(mod) {
   const key = mod.slug || mod.project_id || ''
   if (!key) return ''
-  if (modTranslationCache.value[key] !== undefined) {
-    return modTranslationCache.value[key]
-  }
+  if (modTranslationCache.value[key] !== undefined) return modTranslationCache.value[key]
   const result = await getModChineseName(mod)
   modTranslationCache.value[key] = result
   return result
@@ -323,13 +305,12 @@ async function selectMod(mod) {
     modVersionsLoading.value = false
   }
 
-  // 加载依赖信息
   if (modVersions.value && modVersions.value.length > 0) {
     try {
       const deps = await GetModDependencies(modVersions.value[0].id)
       modDependencies.value = deps || []
-    } catch (error) {
-      console.error('加载Mod依赖失败:', error)
+    } catch (e) {
+      console.error('加载Mod依赖失败:', e)
       modDependencies.value = []
     } finally {
       modDepsLoading.value = false
@@ -347,26 +328,12 @@ function backToModList() {
 
 async function handleAddModToDownloadList(versionId) {
   try {
-    // 弹出选择保存位置对话框
     const dir = await SelectModSaveDir()
-    if (!dir) return // 用户取消
-
+    if (!dir) return
     await AddModToDownloadList(versionId, dir)
-
-    // EasyQGL 模式：记录模组到状态
-    if (easyQGL.active && selectedMod.value) {
-      if (!easyQGL.firstMod) {
-        setFirstMod(selectedMod.value)
-      }
-      addSelectedMod({
-        title: selectedMod.value.title,
-        slug: selectedMod.value.slug,
-        description: selectedMod.value.description,
-        versionId: versionId
-      })
-    }
+    recordEasyQGLMod(versionId)
   } catch (e) {
-    error.value = String(e).replace('Error: ', '')
+    error.value = cleanError(e)
   }
 }
 
@@ -374,56 +341,24 @@ async function handleAddModToDefaultDir(versionId) {
   try {
     const dir = modSavePath.value || await GetDefaultModDir(modGameVersion.value)
     await AddModToDownloadList(versionId, dir)
-
-    // EasyQGL 模式：记录模组到状态
-    if (easyQGL.active && selectedMod.value) {
-      if (!easyQGL.firstMod) {
-        setFirstMod(selectedMod.value)
-      }
-      addSelectedMod({
-        title: selectedMod.value.title,
-        slug: selectedMod.value.slug,
-        description: selectedMod.value.description,
-        versionId: versionId
-      })
-    }
+    recordEasyQGLMod(versionId)
   } catch (e) {
-    error.value = String(e).replace('Error: ', '')
+    error.value = cleanError(e)
   }
 }
 
-// EasyQGL 模式：加入下载列表（不弹选择位置对话框）
 async function handleAddModToEasyList(versionId, versionInfo) {
   try {
-    // EasyQGL 模式：只记录到状态，不加入后端下载列表
-    // 安装时由 EasyQGLPage 统一控制添加
-    if (selectedMod.value) {
-      if (!easyQGL.firstMod) {
-        setFirstMod(selectedMod.value, versionInfo)
-      }
-      addSelectedMod({
-        title: selectedMod.value.title,
-        slug: selectedMod.value.slug,
-        description: selectedMod.value.description,
-        versionId: versionId,
-        versionName: versionInfo?.name || versionInfo?.version_number || ''
-      })
-    }
+    recordEasyQGLMod(versionId, versionInfo)
 
-    // 锁定筛选器：使用第一个模组的版本和加载器
-    if (easyQGL.lockedGameVersion) {
-      modGameVersion.value = easyQGL.lockedGameVersion
-    }
-    if (easyQGL.lockedLoader) {
-      modLoader.value = easyQGL.lockedLoader
-    }
+    if (easyQGL.lockedGameVersion) modGameVersion.value = easyQGL.lockedGameVersion
+    if (easyQGL.lockedLoader) modLoader.value = easyQGL.lockedLoader
 
-    // 关闭模组详情面板，返回 mod 列表
     selectedMod.value = null
     modVersions.value = []
     modDependencies.value = []
   } catch (e) {
-    error.value = String(e).replace('Error: ', '')
+    error.value = cleanError(e)
   }
 }
 
@@ -433,7 +368,6 @@ function formatDownloads(num) {
   return String(num)
 }
 
-// ===== 整合包 =====
 const modpackTotalPages = computed(() => Math.ceil(modpackSearchTotal.value / 20))
 
 async function searchModpacks(page) {
@@ -445,7 +379,7 @@ async function searchModpacks(page) {
     modpackSearchResults.value = result.hits || []
     modpackSearchTotal.value = result.total_hits || 0
   } catch (e) {
-    error.value = String(e).replace('Error: ', '')
+    error.value = cleanError(e)
     modpackSearchResults.value = []
   } finally {
     modpackSearching.value = false
@@ -460,7 +394,7 @@ async function selectModpack(mod) {
   try {
     modpackVersions.value = await GetModpackVersions(mod.project_id)
   } catch (e) {
-    error.value = String(e).replace('Error: ', '')
+    error.value = cleanError(e)
   } finally {
     modpackVersionsLoading.value = false
   }
@@ -472,22 +406,20 @@ function backToModpackList() {
   error.value = ''
 }
 
-async function handleAddModpackToDownloadList(versionId, versionInfo) {
+async function handleAddModpackToDownloadList(versionId) {
   try {
     const name = selectedModpack.value?.title || ''
     await AddModpackToDownloadList(versionId, name)
   } catch (e) {
-    error.value = String(e).replace('Error: ', '')
+    error.value = cleanError(e)
   }
 }
 
-// ===== 模组加载器 =====
 async function loadLoaderVersions() {
   loaderLoading.value = true
   loaderVersions.value = []
   error.value = ''
   try {
-    // 使用当前选择的游戏版本
     const mcVer = selectedVersion.value?.id || ''
     if (!mcVer) {
       error.value = t('download.selectVersionFirst')
@@ -497,32 +429,23 @@ async function loadLoaderVersions() {
 
     let versions = []
     switch (loaderTab.value) {
-      case 'forge':
-        versions = await GetForgeVersions(mcVer)
-        break
-      case 'fabric':
-        versions = await GetFabricVersions(mcVer)
-        break
-      case 'neoforge':
-        versions = await GetNeoForgeVersions(mcVer)
-        break
-      case 'optifine':
-        versions = await GetOptiFineVersions(mcVer)
-        break
+      case 'forge': versions = await GetForgeVersions(mcVer); break
+      case 'fabric': versions = await GetFabricVersions(mcVer); break
+      case 'neoforge': versions = await GetNeoForgeVersions(mcVer); break
+      case 'optifine': versions = await GetOptiFineVersions(mcVer); break
     }
     loaderVersions.value = versions || []
 
-    // 检查安装状态
     for (let i = 0; i < loaderVersions.value.length; i++) {
       try {
         loaderVersions.value[i].isInstalled = await CheckLoaderInstalled(mcVer, loaderTab.value)
-      } catch (error) {
-        console.error('检查加载器安装状态失败:', error)
+      } catch (e) {
+        console.error('检查加载器安装状态失败:', e)
         loaderVersions.value[i].isInstalled = false
       }
     }
   } catch (e) {
-    error.value = String(e).replace('Error: ', '')
+    error.value = cleanError(e)
     loaderVersions.value = []
   } finally {
     loaderLoading.value = false
@@ -530,7 +453,6 @@ async function loadLoaderVersions() {
 }
 
 function selectLoader(loader) {
-  // 如果已经选中同一个，取消选择
   if (selectedLoader.value && selectedLoader.value.name === loader.name && selectedLoader.value.version === loader.version) {
     selectedLoader.value = null
   } else {
@@ -547,15 +469,11 @@ function clearLoaderSelection() {
 }
 
 watch(() => loaderTab.value, () => {
-  if (showAdvanced.value) {
-    loadLoaderVersions()
-  }
+  if (showAdvanced.value) loadLoaderVersions()
 })
 
 watch(() => showAdvanced.value, (val) => {
-  if (val && loaderVersions.value.length === 0) {
-    loadLoaderVersions()
-  }
+  if (val && loaderVersions.value.length === 0) loadLoaderVersions()
 })
 
 const totalPages = computed(() => Math.ceil(modSearchTotal.value / 20))
@@ -563,7 +481,6 @@ const totalPages = computed(() => Math.ceil(modSearchTotal.value / 20))
 
 <template>
   <div class="download-page">
-    <!-- 顶部导航栏 -->
     <div class="top-bar">
       <button class="btn btn-outline" @click="easyQGL.active ? emit('navigate', 'easyqgl') : emit('navigate', 'main')">
         &#x2190; {{ easyQGL.active ? t('download.backToEasyQGL') : t('download.backToMain') }}
@@ -572,7 +489,6 @@ const totalPages = computed(() => Math.ceil(modSearchTotal.value / 20))
       <div v-if="easyQGL.active" class="easy-mode-badge">{{ t('download.easyMode') }}</div>
     </div>
 
-    <!-- Tab 切换 -->
     <div v-if="!easyQGL.active" class="tab-bar">
       <button class="tab-btn" :class="{ active: activeTab === 'game' }" @click="activeTab = 'game'">{{ t('download.gameVersion') }}</button>
       <button class="tab-btn" :class="{ active: activeTab === 'mod' }" @click="activeTab = 'mod'">{{ t('download.mod') }}</button>
@@ -580,12 +496,10 @@ const totalPages = computed(() => Math.ceil(modSearchTotal.value / 20))
       <button class="tab-btn" :class="{ active: activeTab === 'java' }" @click="activeTab = 'java'">{{ t('download.javaRuntime') }}</button>
     </div>
 
-    <!-- 游戏版本下载 -->
     <div v-if="activeTab === 'game'" class="content-area">
       <div class="glass-container">
       <div v-if="error && activeTab === 'game'" class="error-msg">{{ error }}</div>
 
-      <!-- 版本选择界面 -->
       <div v-if="!selectedVersion">
         <div v-if="loading" class="loading-area">
           <div class="spin" style="font-size: 32px;">&#x2697;</div>
@@ -594,30 +508,13 @@ const totalPages = computed(() => Math.ceil(modSearchTotal.value / 20))
 
         <div v-else-if="versions.length > 0">
           <div class="filter-bar">
-            <button
-              class="filter-btn"
-              :class="{ active: filterType === 'release' }"
-              @click="filterType = 'release'"
-            >{{ t('download.release') }}</button>
-            <button
-              class="filter-btn"
-              :class="{ active: filterType === 'snapshot' }"
-              @click="filterType = 'snapshot'"
-            >{{ t('download.snapshot') }}</button>
-            <button
-              class="filter-btn"
-              :class="{ active: filterType === 'all' }"
-              @click="filterType = 'all'"
-            >{{ t('download.all') }}</button>
+            <button class="filter-btn" :class="{ active: filterType === 'release' }" @click="filterType = 'release'">{{ t('download.release') }}</button>
+            <button class="filter-btn" :class="{ active: filterType === 'snapshot' }" @click="filterType = 'snapshot'">{{ t('download.snapshot') }}</button>
+            <button class="filter-btn" :class="{ active: filterType === 'all' }" @click="filterType = 'all'">{{ t('download.all') }}</button>
           </div>
 
           <div class="version-grid">
-            <div
-              v-for="ver in filteredVersions"
-              :key="ver.id"
-              class="version-card"
-              @click="selectVersion(ver)"
-            >
+            <div v-for="ver in filteredVersions" :key="ver.id" class="version-card" @click="selectVersion(ver)">
               <div class="version-id">{{ ver.id }}</div>
               <div class="version-type-badge" :class="ver.type">
                 {{ ver.type === 'release' ? t('download.release') : t('download.snapshot') }}
@@ -633,7 +530,6 @@ const totalPages = computed(() => Math.ceil(modSearchTotal.value / 20))
         </div>
       </div>
 
-      <!-- 版本详情界面 -->
       <div v-else>
         <button class="back-link" @click="backToList">&#x2190; {{ t('download.backToVersionList') }}</button>
 
@@ -647,15 +543,9 @@ const totalPages = computed(() => Math.ceil(modSearchTotal.value / 20))
 
           <div class="form-group">
             <label>{{ t('download.gameName') }}</label>
-            <input
-              v-model="customName"
-              class="input"
-              :placeholder="t('download.enterGameName')"
-              :disabled="adding"
-            />
+            <input v-model="customName" class="input" :placeholder="t('download.enterGameName')" :disabled="adding" />
           </div>
 
-          <!-- 高级选项：模组加载器 -->
           <div class="advanced-section">
             <button class="advanced-toggle" @click="showAdvanced = !showAdvanced">
               {{ showAdvanced ? t('download.collapseAdvanced') : t('download.advancedOptions') }}
@@ -683,13 +573,7 @@ const totalPages = computed(() => Math.ceil(modSearchTotal.value / 20))
               </div>
 
               <div v-else-if="loaderVersions.length > 0" class="loader-list">
-                <div
-                  v-for="lv in loaderVersions"
-                  :key="lv.version"
-                  class="loader-item"
-                  :class="{ selected: isSelectedLoader(lv) }"
-                  @click="selectLoader(lv)"
-                >
+                <div v-for="lv in loaderVersions" :key="lv.version" class="loader-item" :class="{ selected: isSelectedLoader(lv) }" @click="selectLoader(lv)">
                   <div class="loader-item-info">
                     <div class="loader-item-version">{{ lv.version }}</div>
                     <div class="loader-item-meta">
@@ -698,10 +582,7 @@ const totalPages = computed(() => Math.ceil(modSearchTotal.value / 20))
                     </div>
                   </div>
                   <div class="loader-item-actions">
-                    <button
-                      class="btn btn-sm"
-                      :class="isSelectedLoader(lv) ? 'btn-primary' : 'btn-outline'"
-                    >
+                    <button class="btn btn-sm" :class="isSelectedLoader(lv) ? 'btn-primary' : 'btn-outline'">
                       {{ isSelectedLoader(lv) ? t('download.selectedTag') : t('download.selectTag') }}
                     </button>
                   </div>
@@ -721,11 +602,7 @@ const totalPages = computed(() => Math.ceil(modSearchTotal.value / 20))
 
           <div v-if="error && activeTab === 'game'" class="error-msg">{{ error }}</div>
 
-          <button
-            class="btn btn-primary btn-large"
-            :disabled="adding || !customName.trim()"
-            @click="handleAddToList"
-          >
+          <button class="btn btn-primary btn-large" :disabled="adding || !customName.trim()" @click="handleAddToList">
             {{ adding
               ? t('download.adding')
               : (selectedLoader
@@ -738,42 +615,25 @@ const totalPages = computed(() => Math.ceil(modSearchTotal.value / 20))
       </div>
     </div>
 
-    <!-- MOD 下载 -->
     <div v-if="activeTab === 'mod'" class="content-area">
       <div class="glass-container">
       <div v-if="error && activeTab === 'mod'" class="error-msg">{{ error }}</div>
 
-      <!-- Mod 搜索界面 -->
       <div v-if="!selectedMod">
         <div class="mod-search-bar">
-          <input
-            v-model="modQuery"
-            class="input mod-search-input"
-            placeholder="搜索 Mod（支持中文/英文，从 Modrinth）..."
-            @keyup.enter="searchMods(0)"
-          />
+          <input v-model="modQuery" class="input mod-search-input" placeholder="搜索 Mod（支持中文/英文，从 Modrinth）..." @keyup.enter="searchMods(0)" />
           <button class="btn btn-primary" :disabled="modSearching" @click="searchMods(0)">
             {{ modSearching ? t('download.searching') : t('download.search') }}
           </button>
         </div>
 
         <div class="mod-filters">
-          <select
-            v-model="modGameVersion"
-            class="input mod-filter-select"
-            :disabled="easyQGL.active && easyQGL.lockedGameVersion"
-            @change="searchMods(0)"
-          >
+          <select v-model="modGameVersion" class="input mod-filter-select" :disabled="easyQGL.active && easyQGL.lockedGameVersion" @change="searchMods(0)">
             <option value="">全部版本</option>
             <option v-for="v in installedGameVersions" :key="v.folderName" :value="v.version">{{ v.version }}</option>
             <option v-for="v in versions.slice(0, 30)" :key="v.id" :value="v.id">{{ v.id }}</option>
           </select>
-          <select
-            v-model="modLoader"
-            class="input mod-filter-select"
-            :disabled="easyQGL.active && easyQGL.lockedLoader"
-            @change="searchMods(0)"
-          >
+          <select v-model="modLoader" class="input mod-filter-select" :disabled="easyQGL.active && easyQGL.lockedLoader" @change="searchMods(0)">
             <option value="">{{ t('download.allLoaders') }}</option>
             <option value="forge">Forge</option>
             <option value="fabric">Fabric</option>
@@ -793,12 +653,7 @@ const totalPages = computed(() => Math.ceil(modSearchTotal.value / 20))
         <div v-else-if="modSearchResults.length > 0">
           <div class="mod-result-count">{{ t('download.modSearchResults', { total: modSearchTotal }) }}</div>
           <div class="mod-grid">
-            <div
-              v-for="mod in modSearchResults"
-              :key="mod.project_id"
-              class="mod-card"
-              @click="selectMod(mod)"
-            >
+            <div v-for="mod in modSearchResults" :key="mod.project_id" class="mod-card" @click="selectMod(mod)">
               <div class="mod-card-icon">
                 <img v-if="mod.icon_url" :src="mod.icon_url" alt="" />
                 <span v-else class="mod-icon-placeholder">{{ mod.title?.[0] || '?' }}</span>
@@ -817,7 +672,6 @@ const totalPages = computed(() => Math.ceil(modSearchTotal.value / 20))
             </div>
           </div>
 
-          <!-- 分页 -->
           <div v-if="totalPages > 1" class="pagination">
             <button class="btn btn-outline btn-sm" :disabled="modSearchPage <= 0" @click="searchMods(modSearchPage - 1)">{{ t('download.pagePrev') }}</button>
             <span class="page-info">{{ modSearchPage + 1 }} / {{ totalPages }}</span>
@@ -834,7 +688,6 @@ const totalPages = computed(() => Math.ceil(modSearchTotal.value / 20))
         </div>
       </div>
 
-      <!-- Mod 详情界面 -->
       <div v-else>
         <button class="back-link" @click="backToModList">&#x2190; {{ t('download.backToModList') }}</button>
 
@@ -855,7 +708,6 @@ const totalPages = computed(() => Math.ceil(modSearchTotal.value / 20))
 
           <p class="mod-detail-desc">{{ selectedMod.description }}</p>
 
-          <!-- 依赖信息 -->
           <div v-if="modDependencies.length > 0" class="mod-deps-section">
             <h3>{{ t('download.dependencies') }}</h3>
             <div class="mod-deps-list">
@@ -874,7 +726,6 @@ const totalPages = computed(() => Math.ceil(modSearchTotal.value / 20))
             </div>
           </div>
 
-          <!-- 版本列表 -->
           <h3>{{ t('download.versions') }}</h3>
           <div v-if="modVersionsLoading" class="loading-area" style="padding: 20px 0;">
             <div class="spin">&#x2697;</div>
@@ -914,31 +765,20 @@ const totalPages = computed(() => Math.ceil(modSearchTotal.value / 20))
       </div>
     </div>
 
-    <!-- 整合包下载 -->
     <div v-if="activeTab === 'modpack'" class="content-area">
       <div class="glass-container">
       <div v-if="error && activeTab === 'modpack'" class="error-msg">{{ error }}</div>
 
-      <!-- 整合包搜索界面 -->
       <div v-if="!selectedModpack">
         <div class="mod-search-bar">
-          <input
-            v-model="modpackQuery"
-            class="input mod-search-input"
-            :placeholder="t('download.modpackSearchPlaceholder')"
-            @keyup.enter="searchModpacks(0)"
-          />
+          <input v-model="modpackQuery" class="input mod-search-input" :placeholder="t('download.modpackSearchPlaceholder')" @keyup.enter="searchModpacks(0)" />
           <button class="btn btn-primary" :disabled="modpackSearching" @click="searchModpacks(0)">
             {{ modpackSearching ? t('download.searching') : t('download.search') }}
           </button>
         </div>
 
         <div class="mod-filters">
-          <select
-            v-model="modpackGameVersion"
-            class="input mod-filter-select"
-            @change="searchModpacks(0)"
-          >
+          <select v-model="modpackGameVersion" class="input mod-filter-select" @change="searchModpacks(0)">
             <option value="">{{ t('download.allVersions') }}</option>
             <option v-for="v in installedGameVersions" :key="v.folderName" :value="v.version">{{ v.version }}</option>
             <option v-for="v in versions.slice(0, 30)" :key="v.id" :value="v.id">{{ v.id }}</option>
@@ -953,12 +793,7 @@ const totalPages = computed(() => Math.ceil(modSearchTotal.value / 20))
         <div v-else-if="modpackSearchResults.length > 0">
           <div class="mod-result-count">{{ t('download.modSearchResults', { total: modpackSearchTotal }) }}</div>
           <div class="mod-grid">
-            <div
-              v-for="mod in modpackSearchResults"
-              :key="mod.project_id"
-              class="mod-card"
-              @click="selectModpack(mod)"
-            >
+            <div v-for="mod in modpackSearchResults" :key="mod.project_id" class="mod-card" @click="selectModpack(mod)">
               <div class="mod-card-icon">
                 <img v-if="mod.icon_url" :src="mod.icon_url" alt="" />
                 <span v-else class="mod-icon-placeholder">{{ mod.title?.[0] || '?' }}</span>
@@ -974,7 +809,6 @@ const totalPages = computed(() => Math.ceil(modSearchTotal.value / 20))
             </div>
           </div>
 
-          <!-- 分页 -->
           <div v-if="modpackTotalPages > 1" class="pagination">
             <button class="btn btn-outline btn-sm" :disabled="modpackSearchPage <= 0" @click="searchModpacks(modpackSearchPage - 1)">{{ t('download.pagePrev') }}</button>
             <span class="page-info">{{ modpackSearchPage + 1 }} / {{ modpackTotalPages }}</span>
@@ -991,7 +825,6 @@ const totalPages = computed(() => Math.ceil(modSearchTotal.value / 20))
         </div>
       </div>
 
-      <!-- 整合包详情界面 -->
       <div v-else>
         <button class="back-link" @click="backToModpackList">&#x2190; {{ t('download.backToModpackList') }}</button>
 
@@ -1011,7 +844,6 @@ const totalPages = computed(() => Math.ceil(modSearchTotal.value / 20))
 
           <p class="mod-detail-desc">{{ selectedModpack.description }}</p>
 
-          <!-- 版本列表 -->
           <h3>{{ t('download.versions') }}</h3>
           <div v-if="modpackVersionsLoading" class="loading-area" style="padding: 20px 0;">
             <div class="spin">&#x2697;</div>
@@ -1041,7 +873,6 @@ const totalPages = computed(() => Math.ceil(modSearchTotal.value / 20))
       </div>
     </div>
 
-    <!-- Java 下载 -->
     <div v-if="activeTab === 'java'" class="content-area">
       <div class="glass-container">
       <div v-if="error && activeTab === 'java'" class="error-msg">{{ error }}</div>
@@ -1050,11 +881,7 @@ const totalPages = computed(() => Math.ceil(modSearchTotal.value / 20))
         <div class="java-hint">{{ t('download.javaHint') }}</div>
 
         <div class="java-download-list">
-          <div
-            v-for="j in javaList"
-            :key="j.majorVer"
-            class="java-download-card"
-          >
+          <div v-for="j in javaList" :key="j.majorVer" class="java-download-card">
             <div class="java-card-left">
               <div class="java-card-icon" :class="'java-icon-' + j.majorVer">{{ j.majorVer }}</div>
               <div class="java-card-info">
@@ -1072,11 +899,7 @@ const totalPages = computed(() => Math.ceil(modSearchTotal.value / 20))
             </div>
 
             <div class="java-card-right">
-              <button
-                class="btn btn-primary btn-sm"
-                :disabled="isJavaInstalled(j.majorVer)"
-                @click="handleDownloadJava(j.majorVer)"
-              >
+              <button class="btn btn-primary btn-sm" :disabled="isJavaInstalled(j.majorVer)" @click="handleDownloadJava(j.majorVer)">
                 <template v-if="isJavaInstalled(j.majorVer)">{{ t('download.installed') }}</template>
                 <template v-else>{{ t('download.downloadJava') }}</template>
               </button>
@@ -1139,7 +962,6 @@ const totalPages = computed(() => Math.ceil(modSearchTotal.value / 20))
   border-color: var(--easy-orange-dark, #F57C00);
 }
 
-/* Tab 切换 */
 .tab-bar {
   display: flex;
   gap: 0;
@@ -1162,9 +984,7 @@ const totalPages = computed(() => Math.ceil(modSearchTotal.value / 20))
   transition: all 0.15s;
 }
 
-.tab-btn:hover {
-  color: var(--primary);
-}
+.tab-btn:hover { color: var(--primary); }
 
 .tab-btn.active {
   color: var(--primary);
@@ -1344,9 +1164,7 @@ const totalPages = computed(() => Math.ceil(modSearchTotal.value / 20))
   margin-bottom: 16px;
 }
 
-.back-link:hover {
-  text-decoration: underline;
-}
+.back-link:hover { text-decoration: underline; }
 
 .download-detail {
   max-width: 600px;
@@ -1370,9 +1188,7 @@ const totalPages = computed(() => Math.ceil(modSearchTotal.value / 20))
   color: var(--text);
 }
 
-.form-group {
-  margin-bottom: 20px;
-}
+.form-group { margin-bottom: 20px; }
 
 .form-group label {
   display: block;
@@ -1382,7 +1198,6 @@ const totalPages = computed(() => Math.ceil(modSearchTotal.value / 20))
   margin-bottom: 6px;
 }
 
-/* 高级选项 */
 .advanced-section {
   margin-bottom: 20px;
   border: 1px solid var(--border);
@@ -1404,9 +1219,7 @@ const totalPages = computed(() => Math.ceil(modSearchTotal.value / 20))
   transition: background 0.15s;
 }
 
-.advanced-toggle:hover {
-  background: var(--bg-secondary);
-}
+.advanced-toggle:hover { background: var(--bg-secondary); }
 
 .advanced-content {
   padding: 16px;
@@ -1469,10 +1282,7 @@ const totalPages = computed(() => Math.ceil(modSearchTotal.value / 20))
   -webkit-backdrop-filter: blur(8px);
 }
 
-.loader-item:hover {
-  border-color: var(--primary);
-}
-
+.loader-item:hover { border-color: var(--primary); }
 .loader-item.selected {
   border-color: var(--primary);
   background: var(--glass-bg-heavy);
@@ -1544,16 +1354,13 @@ const totalPages = computed(() => Math.ceil(modSearchTotal.value / 20))
   gap: 6px;
 }
 
-/* Mod 搜索 */
 .mod-search-bar {
   display: flex;
   gap: 10px;
   margin-bottom: 16px;
 }
 
-.mod-search-input {
-  flex: 1;
-}
+.mod-search-input { flex: 1; }
 
 .mod-filters {
   display: flex;
@@ -1621,13 +1428,8 @@ const totalPages = computed(() => Math.ceil(modSearchTotal.value / 20))
   color: var(--primary);
 }
 
-.mod-icon-placeholder.small {
-  font-size: 14px;
-}
-
-.mod-icon-placeholder.large {
-  font-size: 28px;
-}
+.mod-icon-placeholder.small { font-size: 14px; }
+.mod-icon-placeholder.large { font-size: 28px; }
 
 .mod-card-info {
   flex: 1;
@@ -1694,7 +1496,6 @@ const totalPages = computed(() => Math.ceil(modSearchTotal.value / 20))
   font-weight: 500;
 }
 
-/* Mod 详情 */
 .mod-detail {
   max-width: 800px;
   background: var(--glass-bg);
@@ -1750,7 +1551,6 @@ const totalPages = computed(() => Math.ceil(modSearchTotal.value / 20))
   line-height: 1.5;
 }
 
-/* 依赖信息 */
 .mod-deps-section {
   margin-bottom: 20px;
   padding: 14px;
@@ -1832,7 +1632,6 @@ const totalPages = computed(() => Math.ceil(modSearchTotal.value / 20))
   color: var(--danger);
 }
 
-/* 版本列表 */
 .mod-version-list {
   display: flex;
   flex-direction: column;
@@ -1876,7 +1675,6 @@ const totalPages = computed(() => Math.ceil(modSearchTotal.value / 20))
   margin-left: 12px;
 }
 
-/* 分页 */
 .pagination {
   display: flex;
   align-items: center;
@@ -1891,10 +1689,7 @@ const totalPages = computed(() => Math.ceil(modSearchTotal.value / 20))
   color: var(--text-secondary);
 }
 
-/* Java 下载区域 */
-.java-section {
-  max-width: 700px;
-}
+.java-section { max-width: 700px; }
 
 .java-hint {
   font-size: 13px;
@@ -1926,9 +1721,7 @@ const totalPages = computed(() => Math.ceil(modSearchTotal.value / 20))
   -webkit-backdrop-filter: blur(8px);
 }
 
-.java-download-card:hover {
-  border-color: var(--primary);
-}
+.java-download-card:hover { border-color: var(--primary); }
 
 .java-card-left {
   display: flex;
@@ -1972,9 +1765,7 @@ const totalPages = computed(() => Math.ceil(modSearchTotal.value / 20))
   font-weight: 500;
 }
 
-.java-not-installed {
-  color: var(--text-light);
-}
+.java-not-installed { color: var(--text-light); }
 
 .java-webpage-tag,
 .java-msi-tag,
