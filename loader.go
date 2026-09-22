@@ -37,6 +37,21 @@ func readLimited(r io.Reader, maxSize int64) ([]byte, error) {
 	return io.ReadAll(io.LimitReader(r, maxSize))
 }
 
+// isSafeFileName 验证版本名/文件名只包含安全字符
+// 防止路径遍历攻击（../, /, \ 等），只允许字母、数字、点、下划线、短横线
+func isSafeFileName(name string) bool {
+	if len(name) == 0 || len(name) > 100 {
+		return false
+	}
+	for _, r := range name {
+		if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
+			r == '.' || r == '-' || r == '_') {
+			return false
+		}
+	}
+	return true
+}
+
 // ===== 日志功能 =====
 
 // writeLog 将信息写入日志文件（用户可随时查看和复制）
@@ -530,6 +545,9 @@ func isOldForge(versionStr string) bool {
 func (a *App) InstallForge(mcVersion string, forgeVersion string) error {
 	if !isValidMCVersion(mcVersion) {
 		return fmt.Errorf("无效的 Minecraft 版本格式")
+	}
+	if !isSafeFileName(forgeVersion) {
+		return fmt.Errorf("无效的 Forge 版本格式")
 	}
 
 	a.writeLog("========== 开始安装 Forge: MC=%s, Forge=%s ==========", mcVersion, forgeVersion)
@@ -1326,6 +1344,9 @@ func (a *App) InstallFabric(mcVersion string, loaderVersion string) error {
 	if !isValidMCVersion(mcVersion) {
 		return fmt.Errorf("无效的 Minecraft 版本格式")
 	}
+	if !isSafeFileName(loaderVersion) {
+		return fmt.Errorf("无效的 Fabric Loader 版本格式")
+	}
 
 	mcDir := a.GetMinecraftDir()
 
@@ -1447,6 +1468,9 @@ func (a *App) InstallNeoForge(mcVersion string, neoForgeVersion string) error {
 	if !isValidMCVersion(mcVersion) {
 		return fmt.Errorf("无效的 Minecraft 版本格式")
 	}
+	if !isSafeFileName(neoForgeVersion) {
+		return fmt.Errorf("无效的 NeoForge 版本格式")
+	}
 
 	apiName := neoForgeVersion
 	if !strings.Contains(neoForgeVersion, mcVersion+"-") && mcVersion == "1.20.1" {
@@ -1520,6 +1544,9 @@ func (a *App) InstallNeoForge(mcVersion string, neoForgeVersion string) error {
 func (a *App) InstallOptiFine(mcVersion string, optifineType string, optifinePatch string) error {
 	if !isValidMCVersion(mcVersion) {
 		return fmt.Errorf("无效的 Minecraft 版本格式")
+	}
+	if !isSafeFileName(optifineType) || !isSafeFileName(optifinePatch) {
+		return fmt.Errorf("无效的 OptiFine 版本格式")
 	}
 
 	mcDir := a.GetMinecraftDir()
@@ -1733,7 +1760,8 @@ func (a *App) downloadLoaderItem(item *DownloadItem) error {
 		tempDir = filepath.Join(os.Getenv("USERPROFILE"), "AppData", "Local", "Temp")
 	}
 
-	fileName := item.CustomName
+	// 安全：使用 filepath.Base 防止路径遍历（../ 等目录组件被剥离）
+	fileName := filepath.Base(item.CustomName)
 	if strings.HasSuffix(strings.ToLower(item.URL), ".jar") {
 		if !strings.HasSuffix(strings.ToLower(fileName), ".jar") {
 			fileName += ".jar"
