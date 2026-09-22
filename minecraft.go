@@ -3,6 +3,7 @@ package main
 import (
 	"archive/zip"
 	"bufio"
+	"crypto/sha1"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -200,7 +201,6 @@ func (a *App) emitProgress(status string, currentFile string, downloaded, total 
 }
 
 func (a *App) downloadFile(url string, destPath string, reportProgress bool) error {
-	// 纵深防御：强制 HTTPS
 	if !isHTTPSURL(url) {
 		return fmt.Errorf("拒绝不安全的下载 URL（非 HTTPS）: %s", url)
 	}
@@ -261,7 +261,6 @@ func (a *App) downloadFile(url string, destPath string, reportProgress bool) err
 }
 
 // GetVersionManifest 获取版本清单
-// 修复: 在循环中立即关闭 resp.Body，避免文件描述符泄漏
 func (a *App) GetVersionManifest() ([]MCVersion, error) {
 	urls := []string{
 		"https://bmclapi2.bangbang93.com/mc/game/version_manifest_v2.json",
@@ -449,7 +448,6 @@ func (a *App) AddToDownloadList(versionID string, versionURL string, customName 
 func (a *App) AddToDownloadListWithLoader(versionID string, versionURL string, customName string, versionType string, loaderName string, loaderVersion string, optifineType string, optifinePatch string) error {
 	a.downloadMutex.Lock()
 	defer a.downloadMutex.Unlock()
-	// 安全：清理自定义名称中的路径遍历字符
 	customName = sanitizeVersionName(customName)
 	if customName == "" {
 		return fmt.Errorf("版本名称无效")
@@ -726,7 +724,6 @@ func runInstaller(filePath string, isMSI bool) error {
 
 func (a *App) DownloadVersion(versionID string, versionURL string, customName string) error {
 	mcDir := a.getMinecraftDir()
-	// 安全：清理自定义名称中的路径遍历字符
 	customName = sanitizeVersionName(customName)
 	if customName == "" {
 		return fmt.Errorf("无效的版本名称")
@@ -839,8 +836,7 @@ func (a *App) DownloadVersion(versionID string, versionURL string, customName st
 	return nil
 }
 
-// checkFileHash 校验文件完整性。
-// 使用 UMFS 哈希（bool-hybrid-array 生态）
+// checkFileHash 校验文件完整性（SHA1，用于验证 Mojang manifest 提供的哈希）
 func (a *App) checkFileHash(filePath string, expectedSHA1 string) bool {
 	info, err := os.Stat(filePath)
 	if err != nil || info.Size() == 0 {
@@ -854,12 +850,12 @@ func (a *App) checkFileHash(filePath string, expectedSHA1 string) bool {
 		return false
 	}
 	defer f.Close()
-	h := NewUMFSHash()
+	h := sha1.New()
 	if _, err := io.Copy(h, f); err != nil {
 		return false
 	}
 	actualHash := fmt.Sprintf("%x", h.Sum(nil))
-	return len(actualHash) == len(expectedSHA1)
+	return actualHash == expectedSHA1
 }
 
 func (a *App) getMirrorURLs(originalURL string) []string {
@@ -1744,7 +1740,6 @@ func sanitizePathComponent(name string) error {
 }
 
 func (a *App) LaunchGame(versionID string) error {
-	// 安全：验证 versionID 不含路径遍历字符
 	if err := sanitizePathComponent(versionID); err != nil {
 		return fmt.Errorf("无效的版本ID: %v", err)
 	}
@@ -1783,11 +1778,13 @@ func (a *App) LaunchGame(versionID string) error {
 			if injErr == nil {
 				serverURL := extData.ServerURL
 				prefetched := ""
-				resp, err := safeHTTPClient().Get(serverURL)
-				if err == nil {
-					body, _ := io.ReadAll(resp.Body)
-					resp.Body.Close()
-					prefetched = base64.StdEncoding.EncodeToString(body)
+				if isHTTPSURL(serverURL) {
+					resp, err := safeHTTPClient().Get(serverURL)
+					if err == nil {
+						body, _ := io.ReadAll(resp.Body)
+						resp.Body.Close()
+						prefetched = base64.StdEncoding.EncodeToString(body)
+					}
 				}
 				injectorArgs := []string{"-javaagent:" + injectorPath + "=" + serverURL, "-Dauthlibinjector.side=client"}
 				if prefetched != "" {
