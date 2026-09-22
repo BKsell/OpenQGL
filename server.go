@@ -72,9 +72,13 @@ func isValidMemory(mem int) bool {
 }
 
 // sanitizeServerName 清理服务器名称，防止路径遍历和特殊字符注入
+// 安全加固: 同时过滤换行符和回车符，防止 server.properties 配置注入
 func sanitizeServerName(name string) string {
 	name = strings.TrimSpace(name)
-	replacer := strings.NewReplacer("..", "", "/", "", "\\", "", ":", "", "*", "", "?", "", '"', "", "<", "", ">", "", "|", "")
+	replacer := strings.NewReplacer(
+		"..", "", "/", "", "\\", "", ":", "", "*", "", "?", "",
+		"\"", "", "<", "", ">", "", "|", "", "\n", "", "\r", "",
+	)
 	return replacer.Replace(name)
 }
 
@@ -605,6 +609,7 @@ func (a *App) GenerateConnectionCode(serverName string) (map[string]string, erro
 }
 
 // ParseConnectionCode 解析连接码
+// 安全加固: 校验每个 IP 段在 0-255 范围内，防止无效 IP
 func (a *App) ParseConnectionCode(code string) (string, error) {
 	parts := strings.Split(code, "-")
 	if len(parts) != 5 {
@@ -633,15 +638,15 @@ func (a *App) ParseConnectionCode(code string) (string, error) {
 		}
 	}
 	seg2, err := strconv.ParseInt(parts[1], 16, 64)
-	if err != nil {
+	if err != nil || seg2 < 0 || seg2 > 255 {
 		return "", fmt.Errorf("连接码第2段解析失败")
 	}
 	seg3, err := strconv.ParseInt(parts[2], 16, 64)
-	if err != nil {
+	if err != nil || seg3 < 0 || seg3 > 255 {
 		return "", fmt.Errorf("连接码第3段解析失败")
 	}
 	seg4, err := strconv.ParseInt(parts[3], 16, 64)
-	if err != nil {
+	if err != nil || seg4 < 0 || seg4 > 255 {
 		return "", fmt.Errorf("连接码第4段解析失败")
 	}
 	port, err := strconv.ParseInt(parts[4], 16, 64)
