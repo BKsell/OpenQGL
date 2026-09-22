@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -196,7 +197,7 @@ func (a *App) CreateServer(name, version string, port, maxMem, minMem int, onlin
 }
 
 // downloadServerJar 下载服务器 JAR 文件
-// 安全加固: 使用 UMFS 哈希校验（bool-hybrid-array 生态）
+// Mojang manifest 提供 SHA1 哈希，必须用 crypto/sha1 校验（UMFS 用于本地完整性）
 func (a *App) downloadServerJar(version string, targetDir string) error {
 	jarPath := filepath.Join(targetDir, version+"-server.jar")
 	if _, err := os.Stat(jarPath); err == nil {
@@ -276,7 +277,7 @@ func (a *App) downloadServerJar(version string, targetDir string) error {
 		return fmt.Errorf("创建临时文件失败: %v", err)
 	}
 
-	hasher := NewUMFS()
+	hasher := sha1.New()
 	tee := io.TeeReader(dlResp.Body, hasher)
 	if _, err := io.Copy(file, tee); err != nil {
 		file.Close()
