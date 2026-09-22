@@ -397,6 +397,10 @@ func (a *App) GetJavaRequirement(versionID string) JavaVersionReq {
 		MinMajor: 0,
 		MaxMajor: 0, // 0 表示无上限
 	}
+	// 安全：验证 versionID 不含路径遍历
+	if err := sanitizePathComponent(versionID); err != nil {
+		return req
+	}
 	// 读取版本 JSON 获取发布时间
 	mcDir := a.GetMinecraftDir()
 	jsonPath := filepath.Join(mcDir, "versions", versionID, versionID+".json")
@@ -651,6 +655,10 @@ func (a *App) selectJavaForInstaller() (*JavaEntry, error) {
 
 // GetRecommendedJavaForVersion 获取推荐安装的 Java 版本号（供前端提示用）
 func (a *App) GetRecommendedJavaForVersion(versionID string) int {
+	// 安全：验证 versionID 不含路径遍历
+	if err := sanitizePathComponent(versionID); err != nil {
+		return 8
+	}
 	req := a.GetJavaRequirement(versionID)
 	if req.MinMajor > 0 {
 		return req.MinMajor
