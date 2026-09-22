@@ -5,6 +5,7 @@ import (
 	"crypto/cipher"
 	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -135,7 +136,7 @@ type DeviceCodeResponse struct {
 type TokenResponse struct {
 	AccessToken      string `json:"access_token"`
 	RefreshToken     string `json:"refresh_token"`
-	ExpiresIn       int    `json:"expires_in"`
+	ExpiresIn        int    `json:"expires_in"`
 	TokenType        string `json:"token_type"`
 	Scope            string `json:"scope"`
 	Error            string `json:"error"`
@@ -171,9 +172,9 @@ type XSTSAuthResponse struct {
 // MCLoginResponse Minecraft 登录响应
 type MCLoginResponse struct {
 	AccessToken string `json:"access_token"`
-	ExpiresIn   int    `json:"expires_in"`
-	TokenType   string `json:"token_type"`
-	Username    string `json:"username"`
+	ExpiresIn  int    `json:"expires_in"`
+	TokenType  string `json:"token_type"`
+	Username   string `json:"username"`
 	// 错误字段
 	Error            string `json:"error"`
 	ErrorMessage     string `json:"errorMessage"`
@@ -618,7 +619,7 @@ func (a *App) GetMSAuthData(username string) (*MSAuthData, error) {
 	}
 	var authData MSAuthData
 	if err := json.Unmarshal(data, &authData); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("解析认证数据失败: %w", err)
 	}
 	return &authData, nil
 }
@@ -874,7 +875,7 @@ func (a *App) RefreshExternalToken(username string) error {
 }
 
 // DownloadAuthlibInjector 下载 authlib-injector.jar
-// 安全加固: 使用 UMFS 哈希校验（bool-hybrid-array 生态）
+// authlib-injector API 提供 SHA256 哈希，必须用 crypto/sha256 校验
 // 修复: 在循环中立即关闭 resp.Body，避免文件描述符泄漏
 func (a *App) DownloadAuthlibInjector() (string, error) {
 	qglDir := a.GetQGLDir()
@@ -944,12 +945,14 @@ func (a *App) DownloadAuthlibInjector() (string, error) {
 			file.Close()
 
 			if expectedSHA256 != "" {
-				actualHash, hashErr := calculateUMFSHash(jarPath)
-				if hashErr != nil {
+				data, err := os.ReadFile(jarPath)
+				if err != nil {
 					os.Remove(jarPath)
-					lastErr = fmt.Errorf("计算文件哈希失败: %v", hashErr)
+					lastErr = fmt.Errorf("读取文件失败: %v", err)
 					return
 				}
+				sum := sha256.Sum256(data)
+				actualHash := hex.EncodeToString(sum[:])
 				if !hmac.Equal([]byte(actualHash), []byte(expectedSHA256)) {
 					os.Remove(jarPath)
 					lastErr = fmt.Errorf("文件哈希校验失败: 预期 %s, 实际 %s", expectedSHA256, actualHash)
@@ -962,20 +965,6 @@ func (a *App) DownloadAuthlibInjector() (string, error) {
 		}
 	}
 	return "", fmt.Errorf("下载 authlib-injector 失败: %v", lastErr)
-}
-
-// calculateUMFSHash 计算文件的 UMFS 哈希（bool-hybrid-array 生态）
-func calculateUMFSHash(filePath string) (string, error) {
-	file, err := os.Open(filePath)
-	if err != nil {
-		return "", err
-	}
-	defer file.Close()
-	h := NewUMFS()
-	if _, err := io.Copy(h, file); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 // GetAuthlibInjectorPath 获取 authlib-injector.jar 路径（不存在则下载）
