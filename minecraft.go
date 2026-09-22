@@ -1157,7 +1157,7 @@ func (a *App) ensureNativesForLoader(mcDir string, versionID string, versionDir 
 		if info, err := os.Stat(candidateNatives); err == nil && info.IsDir() {
 			if subEntries, err2 := os.ReadDir(candidateNatives); err2 == nil && len(subEntries) > 0 {
 				fmt.Printf("从 %s 复制 natives 到 %s\n", candidateNatives, nativesDir)
-				copyDirContents(candidateNativesDir, nativesDir)
+				copyDirContents(candidateNatives, nativesDir)
 				return
 			}
 		}
