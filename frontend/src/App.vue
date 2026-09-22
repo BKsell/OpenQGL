@@ -24,6 +24,10 @@ import defaultBg from './assets/images/background.jpg'
 
 const { t } = useI18n()
 
+function cleanError(e) {
+  return String(e).replace('Error: ', '')
+}
+
 const currentPage = ref('login')
 const currentUser = ref(null)
 const isFirstRun = ref(false)
@@ -115,7 +119,6 @@ function copyError(msg) {
   navigator.clipboard.writeText(msg).then(() => {
     showToast(t('app.errorCopied'), 2000)
   }).catch(() => {
-    // fallback: 用 textarea 复制
     const ta = document.createElement('textarea')
     ta.value = msg
     ta.style.position = 'fixed'
@@ -129,7 +132,6 @@ function copyError(msg) {
 }
 
 async function loadThemeAndBg() {
-  // 主题和背景并行加载
   const [themeResult, bgResult] = await Promise.allSettled([
     GetThemeColor(),
     GetBackgroundImageDataURL()
@@ -145,20 +147,16 @@ async function loadThemeAndBg() {
 
 // 初始化深色模式
 function initDarkMode() {
-  // 优先使用用户手动设置
   const saved = localStorage.getItem('qgl-dark-mode')
   if (saved !== null) {
     applyDarkMode(saved === 'true')
     return
   }
 
-  // 否则跟随系统主题
   mediaQuery = window.matchMedia('(prefers-color-scheme: dark)')
   applyDarkMode(mediaQuery.matches)
 
-  // 监听系统主题变化
   mediaQueryHandler = (e) => {
-    // 只有用户没有手动设置时才跟随系统
     if (localStorage.getItem('qgl-dark-mode') === null) {
       applyDarkMode(e.matches)
     }
@@ -167,35 +165,24 @@ function initDarkMode() {
 }
 
 onMounted(async () => {
-  // 设置全局弹窗引用
   nextTick(() => {
     if (qglDialog.value) {
       setQGLDialogRef(qglDialog.value)
     }
   })
 
-  // 初始化深色模式
   initDarkMode()
 
-  // 注册事件监听（不阻塞启动）
   EventsOn('launchStatus', (status) => {
-    if (status === 'fixing') {
-      showToast(t('app.fixing'), 5000)
-    } else if (status === 'launching') {
-      showToast(t('app.launching'), 5000)
-    } else if (status === 'success') {
-      showToast(t('app.launchSuccess'))
-    } else if (status === 'timeout') {
-      showToast(t('app.launchTimeout'), 5000)
-    } else if (status === 'crashed') {
-      showToast(t('app.crashed'), 5000)
-    }
+    if (status === 'fixing') showToast(t('app.fixing'), 5000)
+    else if (status === 'launching') showToast(t('app.launching'), 5000)
+    else if (status === 'success') showToast(t('app.launchSuccess'))
+    else if (status === 'timeout') showToast(t('app.launchTimeout'), 5000)
+    else if (status === 'crashed') showToast(t('app.crashed'), 5000)
   })
 
   EventsOn('crashInfo', (info) => {
-    if (info) {
-      showToast(t('app.crashReason') + info, 8000)
-    }
+    if (info) showToast(t('app.crashReason') + info, 8000)
   })
 
   EventsOn('downloadListUpdated', (items) => {
@@ -217,8 +204,8 @@ onMounted(async () => {
     try {
       const url = await GetBackgroundImageDataURL()
       backgroundImageURL.value = url || ''
-    } catch (error) {
-      console.error('加载背景图片失败:', error)
+    } catch (e) {
+      console.error('加载背景图片失败:', e)
     }
   })
 
@@ -226,7 +213,6 @@ onMounted(async () => {
     isDownloading.value = false
   })
 
-  // 并行加载：主题+背景 与 用户检查 同时进行
   const [, userCheckResult] = await Promise.allSettled([
     loadThemeAndBg(),
     (async () => {
@@ -257,29 +243,27 @@ onMounted(async () => {
     })()
   ])
 
-  // 延迟加载下载计数（非关键，不阻塞首屏）
   refreshDownloadCount()
 })
 
 onUnmounted(() => {
   if (toastTimer) clearTimeout(toastTimer)
-  // 移除系统主题监听
   if (mediaQuery && mediaQueryHandler) {
     mediaQuery.removeEventListener('change', mediaQueryHandler)
   }
 })
 
 async function refreshDownloadCount() {
-  try { downloadCount.value = await GetDownloadListCount() } catch (error) {
-    console.error('获取下载计数失败:', error)
+  try { downloadCount.value = await GetDownloadListCount() } catch (e) {
+    console.error('获取下载计数失败:', e)
     downloadCount.value = 0
   }
 }
 
 async function refreshDownloadList() {
   if (!showDownloadList.value) return
-  try { downloadList.value = await GetDownloadList() || [] } catch (error) {
-    console.error('获取下载列表失败:', error)
+  try { downloadList.value = await GetDownloadList() || [] } catch (e) {
+    console.error('获取下载列表失败:', e)
   }
 }
 
@@ -292,13 +276,11 @@ function onLoginSuccess(user) {
 }
 
 function navigateTo(page) {
-  // 根据目标页面决定过渡方向
   if (page === 'main' || page === 'login') {
     transitionName.value = 'page-right'
   } else {
     transitionName.value = 'page-left'
   }
-
   currentPage.value = page
 }
 
@@ -328,11 +310,10 @@ async function openDownloadList() {
   if (isGuestLocked.value) return
   showDownloadList.value = true
   downloadListLoading.value = true
-  try { downloadList.value = await GetDownloadList() || [] } catch (error) {
-    console.error('获取下载列表失败:', error)
+  try { downloadList.value = await GetDownloadList() || [] } catch (e) {
+    console.error('获取下载列表失败:', e)
     downloadList.value = []
-  }
-  finally { downloadListLoading.value = false }
+  } finally { downloadListLoading.value = false }
 }
 
 async function removeDownloadItem(item) {
@@ -340,14 +321,19 @@ async function removeDownloadItem(item) {
     await RemoveFromDownloadList(item.customName)
     downloadList.value = await GetDownloadList() || []
     downloadCount.value = await GetDownloadListCount()
-  } catch (error) {
-    console.error('移除下载项失败:', error)
+  } catch (e) {
+    console.error('移除下载项失败:', e)
   }
 }
 
 async function startDownload() {
-  try { await StartDownloadList(); isDownloading.value = true; showToast(t('app.downloadStarted')) }
-  catch (e) { showToast(t('app.downloadFailed') + String(e).replace('Error: ', '')) }
+  try {
+    await StartDownloadList()
+    isDownloading.value = true
+    showToast(t('app.downloadStarted'))
+  } catch (e) {
+    showToast(t('app.downloadFailed') + cleanError(e))
+  }
 }
 
 function openUnlockModal() {
@@ -365,11 +351,11 @@ async function handleUnlock() {
     currentUser.value.isLocked = false
     showUnlockModal.value = false
     showToast(t('app.unlocked'))
-  } catch (e) { unlockError.value = String(e).replace('Error: ', '') }
-  finally { unlockLoading.value = false }
+  } catch (e) {
+    unlockError.value = cleanError(e)
+  } finally { unlockLoading.value = false }
 }
 
-// 导出深色模式控制函数供 SettingsPage 使用
 defineExpose({
   toggleDarkMode: () => applyDarkMode(!darkMode.value),
   darkMode
