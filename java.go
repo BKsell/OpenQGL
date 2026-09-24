@@ -537,7 +537,7 @@ func (a *App) SelectJavaForVersion(versionID string) (*JavaEntry, error) {
 	}
 	// 3. 搜索系统中所有 Java
 	javaList := a.SearchJava()
-	// 3. 过滤出兼容的 Java
+	// 4. 过滤出兼容的 Java
 	var compatible []JavaEntry
 	for _, j := range javaList {
 		if isJavaCompatible(&j, req) {
@@ -547,7 +547,7 @@ func (a *App) SelectJavaForVersion(versionID string) (*JavaEntry, error) {
 	if len(compatible) > 0 {
 		return &compatible[0], nil
 	}
-	// 4. 没有找到兼容的 Java
+	// 5. 没有找到兼容的 Java
 	displayMin := req.MinMajor
 	if displayMin <= 0 {
 		displayMin = 8
@@ -602,35 +602,32 @@ type JavaDownloadInfo struct {
 }
 
 // GetJavaDownloadList 获取 Java 下载列表
+// 使用 Adoptium Temurin（开源 GPLv2+CE，无商业许可风险，自动获取最新安全补丁）
 func (a *App) GetJavaDownloadList() []JavaDownloadInfo {
 	return []JavaDownloadInfo{
 		{
-			MajorVer: 26,
-			Name:     "Java 26",
-			URL:      "https://download.oracle.com/java/26/latest/jdk-26_windows-x64_bin.msi",
-			FileName: "jdk-26_windows-x64_bin.msi",
-			IsMSI:    true,
-		},
-		{
 			MajorVer: 21,
-			Name:     "Java 21",
-			URL:      "https://download.oracle.com/java/21/latest/jdk-21_windows-x64_bin.msi",
-			FileName: "jdk-21_windows-x64_bin.msi",
-			IsMSI:    true,
+			Name:     "Java 21 (LTS)",
+			URL:      "https://api.adoptium.net/v3/binary/latest/21/ga/windows/x64/jdk/hotspot/normal/eclipse",
+			FileName: "OpenJDK21U-jdk_x64_windows_hotstack.zip",
+			IsMSI:    false,
+			IsZip:    true,
 		},
 		{
 			MajorVer: 17,
-			Name:     "Java 17",
-			URL:      "https://download.oracle.com/java/17/archive/jdk-17.0.12_windows-x64_bin.msi",
-			FileName: "jdk-17.0.12_windows-x64_bin.msi",
-			IsMSI:    true,
+			Name:     "Java 17 (LTS)",
+			URL:      "https://api.adoptium.net/v3/binary/latest/17/ga/windows/x64/jdk/hotspot/normal/eclipse",
+			FileName: "OpenJDK17U-jdk_x64_windows_hotstack.zip",
+			IsMSI:    false,
+			IsZip:    true,
 		},
 		{
 			MajorVer: 8,
-			Name:     "Java 8",
-			URL:      "https://javadl.oracle.com/webapps/download/AutoDL?BundleId=253195_f7fe8e644f724108bdb54139381e29a7",
-			FileName: "jre-8u491-windows-x64.exe",
+			Name:     "Java 8 (旧版兼容)",
+			URL:      "https://api.adoptium.net/v3/binary/latest/8/ga/windows/x64/jre/hotspot/normal/eclipse",
+			FileName: "OpenJDK8U-jre_x64_windows_hotstack.zip",
 			IsMSI:    false,
+			IsZip:    true,
 		},
 	}
 }
