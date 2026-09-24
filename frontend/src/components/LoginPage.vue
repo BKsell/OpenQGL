@@ -949,7 +949,6 @@ function getUserTypeLabel(type) {
 /* ===== 正版登录 ===== */
 .premium-info {
   text-align: center;
-  padding: 8px 0;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -977,7 +976,6 @@ function getUserTypeLabel(type) {
 
 .ms-login-box {
   text-align: center;
-  padding: 12px 0;
   display: flex;
   flex-direction: column;
   align-items: center;
