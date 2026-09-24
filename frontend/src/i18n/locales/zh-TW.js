@@ -413,6 +413,7 @@ export default {
     backToMain: '← 返回主頁',
     back: '← 返回',
     serverMode: '開服模式',
+    loadFailed: 'QGLPlus 載入失敗，請返回重試',
     iWantToCreate: '我要建立',
     iWantToJoin: '我要加入',
     createDesc: '一鍵建立 Minecraft 伺服器，輕鬆聯機',
