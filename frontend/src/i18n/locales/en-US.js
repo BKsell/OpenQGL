@@ -420,6 +420,7 @@ export default {
     backToMain: '← Back to Main',
     back: '← Back',
     serverMode: 'Server Mode',
+    loadFailed: 'QGLPlus failed to load, please go back and retry',
     iWantToCreate: 'I Want to Create',
     iWantToJoin: 'I Want to Join',
     createDesc: 'Create a Minecraft server with one click',
