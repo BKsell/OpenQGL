@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import {
   GetModList, ToggleMod, ImportMod, DeleteMod,
@@ -95,13 +95,8 @@ function formatSize(bytes) {
   return bytes + ' B'
 }
 
-const enabledCount = ref(0)
-const disabledCount = ref(0)
-
-watch(() => modList.value, () => {
-  enabledCount.value = modList.value.filter(m => m.isEnabled).length
-  disabledCount.value = modList.value.filter(m => !m.isEnabled).length
-}, { immediate: true })
+const enabledCount = computed(() => modList.value.filter(m => m.isEnabled).length)
+const disabledCount = computed(() => modList.value.filter(m => !m.isEnabled).length)
 </script>
 
 <template>
