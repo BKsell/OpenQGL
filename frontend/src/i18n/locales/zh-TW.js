@@ -183,6 +183,9 @@ export default {
     saveFailed: '儲存失敗: ',
     saving: '儲存中...',
     saveSettings: '儲存設定',
+    appearance: '外觀模式',
+    darkMode: '深色模式',
+    darkModeDesc: '切換淺色/深色主題',
     themeColor: '主題色',
     blue: '藍色',
     cyan: '青色',
@@ -226,6 +229,7 @@ export default {
     copyrightValue: '© 2026 热土工作室',
     edition: '開源版',
     javaNotDetected: '未偵測到',
+    openSourceLicense: '開源協議',
   },
   // ===== DownloadPage.vue =====
   download: {
