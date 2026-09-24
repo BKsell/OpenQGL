@@ -390,11 +390,11 @@ const javaVersionLabel = computed(() => {
           <h3 class="panel-title">{{ t('settings.personalize') }}</h3>
 
           <div class="setting-group">
-            <div class="group-header">外观模式</div>
+            <div class="group-header">{{ t('settings.appearance') || '外观模式' }}</div>
             <div class="setting-row">
               <div class="setting-text">
-                <div class="setting-name">深色模式</div>
-                <div class="setting-desc">切换浅色/深色主题</div>
+                <div class="setting-name">{{ t('settings.darkMode') || '深色模式' }}</div>
+                <div class="setting-desc">{{ t('settings.darkModeDesc') || '切换浅色/深色主题' }}</div>
               </div>
               <label class="toggle">
                 <input type="checkbox" v-model="darkMode" @change="toggleDarkMode" />
@@ -547,7 +547,7 @@ const javaVersionLabel = computed(() => {
           <h3 class="panel-title">{{ t('settings.aboutTitle') }}</h3>
 
           <div class="about-card">
-            <img :src="logoImg" class="about-logo-img" alt="QingLongLuncher" />
+            <img :src="logoImg" class="about-logo-img" alt="QinglongLuncher" />
             <div class="about-name">{{ t('settings.qinglongLuncher') }}</div>
             <div class="about-subtitle">{{ t('settings.qinglongLuncherCN') }}</div>
             <div class="about-version">{{ APP_VERSION }}</div>
