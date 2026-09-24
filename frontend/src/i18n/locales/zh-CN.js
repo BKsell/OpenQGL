@@ -420,6 +420,7 @@ export default {
     backToMain: '← 返回主页',
     back: '← 返回',
     serverMode: '开服模式',
+    loadFailed: 'QGLPlus 加载失败，请返回重试',
     iWantToCreate: '我要创建',
     iWantToJoin: '我要加入',
     createDesc: '一键创建 Minecraft 服务器，轻松联机',
