@@ -186,6 +186,9 @@ export default {
     saveFailed: 'Save failed: ',
     saving: 'Saving...',
     saveSettings: 'Save Settings',
+    appearance: 'Appearance',
+    darkMode: 'Dark Mode',
+    darkModeDesc: 'Toggle light/dark theme',
     themeColor: 'Theme Color',
     blue: 'Blue',
     cyan: 'Cyan',
@@ -229,6 +232,7 @@ export default {
     copyrightValue: '© 2026 RTStudio',
     edition: 'Open Source Edition',
     javaNotDetected: 'Not detected',
+    openSourceLicense: 'Open Source License',
   },
 
   // ===== DownloadPage.vue =====
