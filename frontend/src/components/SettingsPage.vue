@@ -23,6 +23,10 @@ const emit = defineEmits(['navigate', 'logout', 'show-license'])
 
 const { t } = useI18n()
 
+function cleanError(e) {
+  return String(e).replace('Error: ', '')
+}
+
 const activeSection = ref('general')
 
 const javaPath = ref('')
@@ -186,7 +190,7 @@ async function saveSettings() {
   } catch (e) {
     console.error('保存设置失败:', e)
     saveError.value = true
-    saveMsg.value = t('settings.saveFailed') + String(e).replace('Error: ', '')
+    saveMsg.value = t('settings.saveFailed') + cleanError(e)
   } finally {
     saving.value = false
   }
