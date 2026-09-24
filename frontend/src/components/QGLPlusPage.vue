@@ -17,6 +17,10 @@ const emit = defineEmits(['navigate'])
 
 const { t } = useI18n()
 
+function cleanError(e) {
+  return String(e).replace(/^Error:\s*/, '')
+}
+
 // 错误捕获 - 防止生产模式下组件静默渲染为空
 const hasError = ref(false)
 onErrorCaptured((err) => {
@@ -138,7 +142,6 @@ async function handleCreateServer() {
     createStep.value = ''
     creating.value = false
 
-    // 返回主页面并刷新列表
     pageState.value = 'main'
     await loadServers()
 
@@ -146,7 +149,7 @@ async function handleCreateServer() {
   } catch (e) {
     creating.value = false
     createStep.value = ''
-    showQGLDialog({ title: t('qglplus.error'), content: t('qglplus.createFailed') + ': ' + e, theme: 'error', btn1Label: t('qglplus.close') })
+    showQGLDialog({ title: t('qglplus.error'), content: t('qglplus.createFailed') + ': ' + cleanError(e), theme: 'error', btn1Label: t('qglplus.close') })
   }
 }
 
@@ -173,7 +176,7 @@ async function handleStartServer() {
     await StartServer(selectedServer.value)
     startStatusPolling()
   } catch (e) {
-    showQGLDialog({ title: t('qglplus.error'), content: String(e), theme: 'error', btn1Label: t('qglplus.close') })
+    showQGLDialog({ title: t('qglplus.error'), content: cleanError(e), theme: 'error', btn1Label: t('qglplus.close') })
   }
 }
 
@@ -182,7 +185,7 @@ async function handleStopServer() {
   try {
     await StopServer()
   } catch (e) {
-    showQGLDialog({ title: t('qglplus.error'), content: String(e), theme: 'error', btn1Label: t('qglplus.close') })
+    showQGLDialog({ title: t('qglplus.error'), content: cleanError(e), theme: 'error', btn1Label: t('qglplus.close') })
   }
 }
 
@@ -197,7 +200,7 @@ async function handleSendCommand() {
     await SendServerCommand(cmd)
     commandInput.value = ''
   } catch (e) {
-    showQGLDialog({ title: t('qglplus.error'), content: String(e), theme: 'error', btn1Label: t('qglplus.close') })
+    showQGLDialog({ title: t('qglplus.error'), content: cleanError(e), theme: 'error', btn1Label: t('qglplus.close') })
   }
 }
 
@@ -218,7 +221,7 @@ async function handleGenerateCode() {
     connectionCode.value = result.code || ''
     directAddress.value = result.directAddr || ''
   } catch (e) {
-    showQGLDialog({ title: t('qglplus.error'), content: String(e), theme: 'error', btn1Label: t('qglplus.close') })
+    showQGLDialog({ title: t('qglplus.error'), content: cleanError(e), theme: 'error', btn1Label: t('qglplus.close') })
   }
 }
 
@@ -243,7 +246,7 @@ async function handleParseCode() {
     parsedAddress.value = await ParseConnectionCode(joinCode.value.trim())
     await copyToClipboard(parsedAddress.value)
   } catch (e) {
-    showQGLDialog({ title: t('qglplus.error'), content: String(e), theme: 'error', btn1Label: t('qglplus.close') })
+    showQGLDialog({ title: t('qglplus.error'), content: cleanError(e), theme: 'error', btn1Label: t('qglplus.close') })
   }
 }
 
@@ -341,8 +344,8 @@ function goBack() {
   <div class="qglplus-page" :class="{ 'server-mode': isServerMode }">
     <!-- 错误状态 -->
     <div v-if="hasError" class="error-fallback">
-      <p>QGLPlus 加载失败，请返回重试</p>
-      <button class="btn btn-outline" @click="emit('navigate', 'main')">返回主页</button>
+      <p>{{ t('qglplus.loadFailed') }}</p>
+      <button class="btn btn-outline" @click="emit('navigate', 'main')">{{ t('qglplus.backToMain') }}</button>
     </div>
 
     <template v-else>
