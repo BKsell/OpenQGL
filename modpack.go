@@ -12,27 +12,25 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 // ===== Modrinth 整合包 API 结构体 =====
 
-// ModpackSearchResult 整合包搜索结果（复用 Mod 搜索结构）
 type ModpackSearchResult = ModSearchResult
 type ModpackSearchResponse = ModSearchResponse
 
-// ModrinthModpackManifest Modrinth 整合包 manifest.json
 type ModrinthModpackManifest struct {
-	FormatVersion int                  `json:"formatVersion"`
-	Game          string               `json:"game"`
-	VersionID     string               `json:"versionId"`
-	Name          string               `json:"name"`
+	FormatVersion int                   `json:"formatVersion"`
+	Game          string                `json:"game"`
+	VersionID     string                `json:"versionId"`
+	Name          string                `json:"name"`
 	Files         []ModrinthModpackFile `json:"files"`
-	Dependencies  map[string]string    `json:"dependencies"`
+	Dependencies  map[string]string     `json:"dependencies"`
 }
 
-// ModrinthModpackFile 整合包中的文件条目
 type ModrinthModpackFile struct {
 	Path      string            `json:"path"`
 	Hashes    map[string]string `json:"hashes"`
@@ -79,12 +77,94 @@ func sha1File(path string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// verifyManifestHashes 优先用 SHA-512 校验（抗碰撞），缺失时才回退 SHA-1。
-// 任一给定算法不匹配即删除文件并返回错误；两种摘要都未提供则跳过校验。
-func verifyManifestHashes(path string, hashes map[string]string) error {
+// ===== UMFS 本地完整性缓存 =====
+// 首次下载用 Modrinth 给的 sha512 验完后，把文件的 UMFS-256 指纹缓存到本地；
+// 以后再遇到同一文件（用 Modrinth 的 sha512/sha1 当 key）就优先比对 UMFS。
+// 优先级：缓存 UMFS → manifest sha512 → manifest sha1。
+
+type umfsCache struct {
+	mu   sync.Mutex
+	path string
+	data map[string]string
+}
+
+var globalUMFSCache *umfsCache
+var umfsCacheOnce sync.Once
+
+func getUMFSCache(cachePath string) *umfsCache {
+	umfsCacheOnce.Do(func() {
+		globalUMFSCache = &umfsCache{path: cachePath, data: map[string]string{}}
+		if raw, err := os.ReadFile(cachePath); err == nil {
+			_ = json.Unmarshal(raw, &globalUMFSCache.data)
+		}
+	})
+	return globalUMFSCache
+}
+
+func (c *umfsCache) keyFor(hashes map[string]string) string {
+	if v := strings.ToLower(strings.TrimSpace(hashes["sha512"])); v != "" {
+		return "sha512:" + v
+	}
+	if v := strings.ToLower(strings.TrimSpace(hashes["sha1"])); v != "" {
+		return "sha1:" + v
+	}
+	return ""
+}
+
+func (c *umfsCache) get(key string) (string, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	v, ok := c.data[key]
+	return v, ok
+}
+
+func (c *umfsCache) set(key, umfsHex string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.data[key] = umfsHex
+	raw, _ := json.MarshalIndent(c.data, "", "  ")
+	os.MkdirAll(filepath.Dir(c.path), 0700)
+	os.WriteFile(c.path, raw, 0600)
+}
+
+// verifyDownloadedFile 按优先级校验：缓存 UMFS → sha512 → sha1。
+// 任一可信算法通过后会把 UMFS 指纹写回缓存。
+func verifyDownloadedFile(path string, hashes map[string]string, cache *umfsCache) error {
 	want512 := strings.ToLower(strings.TrimSpace(hashes["sha512"]))
 	want1 := strings.ToLower(strings.TrimSpace(hashes["sha1"]))
 
+	pinUMFS := func() {
+		if cache == nil {
+			return
+		}
+		key := cache.keyFor(hashes)
+		if key == "" {
+			return
+		}
+		if u, err := umfsFile(path); err == nil {
+			cache.set(key, u)
+		}
+	}
+
+	// 1) 缓存命中：优先 UMFS
+	if cache != nil {
+		if key := cache.keyFor(hashes); key != "" {
+			if want, ok := cache.get(key); ok {
+				got, err := umfsFile(path)
+				if err != nil {
+					return err
+				}
+				if got == want {
+					return nil
+				}
+				// UMFS 不匹配：可能是文件被换过，继续走下面的官方摘要校验
+				os.Remove(path)
+				return fmt.Errorf("UMFS 缓存校验失败 (期望 %s, 实际 %s)", want, got)
+			}
+		}
+	}
+
+	// 2) sha512
 	if want512 != "" {
 		got, err := sha512File(path)
 		if err != nil {
@@ -94,9 +174,11 @@ func verifyManifestHashes(path string, hashes map[string]string) error {
 			os.Remove(path)
 			return fmt.Errorf("SHA-512 校验失败 (期望 %s, 实际 %s)", want512, got)
 		}
+		pinUMFS()
 		return nil
 	}
 
+	// 3) sha1 回退
 	if want1 != "" {
 		got, err := sha1File(path)
 		if err != nil {
@@ -106,8 +188,10 @@ func verifyManifestHashes(path string, hashes map[string]string) error {
 			os.Remove(path)
 			return fmt.Errorf("SHA-1 校验失败 (期望 %s, 实际 %s)", want1, got)
 		}
+		pinUMFS()
 		return nil
 	}
+
 	return nil
 }
 
@@ -170,7 +254,7 @@ func (a *App) SearchModpacks(query string, gameVersion string, page int, pageSiz
 	return &result, nil
 }
 
-// GetModpackVersions 获取整合包的版本列表
+// GetModpackVersions 获取整合包版本列表
 func (a *App) GetModpackVersions(projectID string) ([]ModVersion, error) {
 	if !isValidModID(projectID) {
 		return nil, fmt.Errorf("无效的项目 ID 格式")
@@ -373,6 +457,10 @@ func (a *App) installModpack(item *DownloadItem) error {
 		return fmt.Errorf("整合包未指定 Minecraft 版本")
 	}
 
+	// 初始化 UMFS 本地缓存
+	cachePath := filepath.Join(mcDir, "QGL", "umfs_cache.json")
+	cache := getUMFSCache(cachePath)
+
 	a.emitProgress("downloading", "下载游戏 "+mcVersion, 0, 0)
 	versionURL := ""
 	mcManifest, err2 := a.GetVersionManifest()
@@ -454,7 +542,7 @@ func (a *App) installModpack(item *DownloadItem) error {
 			if err := a.downloadFile(dlURL, destPath, false); err != nil {
 				return false
 			}
-			if err := verifyManifestHashes(destPath, mf.Hashes); err != nil {
+			if err := verifyDownloadedFile(destPath, mf.Hashes, cache); err != nil {
 				fmt.Printf("文件完整性校验失败，尝试下一源: %s, %v\n", mf.Path, err)
 				return false
 			}
@@ -544,7 +632,6 @@ func (a *App) installModpack(item *DownloadItem) error {
 	return nil
 }
 
-// listVersionFolders 列出 versions 目录下的所有子文件夹名
 func listVersionFolders(versionsDir string) []string {
 	entries, err := os.ReadDir(versionsDir)
 	if err != nil {
@@ -559,7 +646,6 @@ func listVersionFolders(versionsDir string) []string {
 	return folders
 }
 
-// containsStr 检查字符串是否在切片中
 func containsStr(slice []string, s string) bool {
 	for _, v := range slice {
 		if v == s {
