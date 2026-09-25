@@ -22,10 +22,10 @@ import (
 )
 
 const (
-	minPort       = 1
-	maxPort       = 65535
-	minMemoryMB   = 128
-	maxMemoryMB   = 32768
+	minPort         = 1
+	maxPort         = 65535
+	minMemoryMB     = 128
+	maxMemoryMB     = 32768
 	allowedDirPerm  = 0700
 	allowedFilePerm = 0600
 )
@@ -206,9 +206,6 @@ func (a *App) downloadServerJar(version string, targetDir string) error {
 		return fmt.Errorf("无效的版本号: %v", err)
 	}
 	jarPath := filepath.Join(targetDir, version+"-server.jar")
-	if !isPathTraversal(targetDir, jarPath) == false {
-		// jarPath 仍在 targetDir 内，无需额外处理
-	}
 	if _, err := os.Stat(jarPath); err == nil {
 		return nil
 	}
