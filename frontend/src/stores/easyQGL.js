@@ -54,7 +54,10 @@ export function useEasyQGL() {
   }
 
   function addSelectedMod(mod) {
-    easyQGLState.selectedMods.push(mod)
+    // 同一 versionId 只保留一份，避免重复点击导致重复下载
+    if (mod && mod.versionId && !easyQGLState.selectedMods.some(m => m.versionId === mod.versionId)) {
+      easyQGLState.selectedMods.push(mod)
+    }
   }
 
   function exitMode() {
