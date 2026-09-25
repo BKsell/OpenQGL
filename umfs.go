@@ -3,12 +3,14 @@ package main
 import (
 	"bytes"
 	"crypto/rand"
-	"crypto/tls"
 	"crypto/sha512"
+	"crypto/tls"
 	"encoding/hex"
 	"hash"
+	"io"
 	"math/big"
 	"net/http"
+	"os"
 	"time"
 )
 
@@ -224,7 +226,6 @@ func (h *UMFSHash) Write(p []byte) (n int, err error) {
 }
 
 func (h *UMFSHash) Sum(in []byte) []byte {
-	// 复制状态，保证 Sum 可重复调用
 	savedR := new(big.Int).Set(h.umfs.r)
 	savedC := new(big.Int).Set(h.umfs.c)
 	savedLen := h.umfs.totalLen
@@ -266,13 +267,13 @@ var _ hash.Hash = (*UMFSHash)(nil)
 
 // sha512File 计算文件 SHA-512 十六进制摘要
 func sha512File(path string) (string, error) {
-	f, err := osOpen(path)
+	f, err := os.Open(path)
 	if err != nil {
 		return "", err
 	}
 	defer f.Close()
 	h := sha512.New()
-	if _, err := ioCopy(h, f); err != nil {
+	if _, err := io.Copy(h, f); err != nil {
 		return "", err
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
