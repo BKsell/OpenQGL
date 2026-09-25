@@ -65,7 +65,7 @@ func safeJoin(baseDir, relPath string) (string, error) {
 	return destPath, nil
 }
 
-// sha1File 计算文件的 SHA1 十六进制摘要（用于 Modrinth manifest 校验）
+// sha1File 计算文件 SHA1（仅作 sha512 缺失时的回退）
 func sha1File(path string) (string, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -79,19 +79,34 @@ func sha1File(path string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// verifyFileSHA1 校验文件 SHA1；expected 为空则跳过。不匹配时删除文件并返回错误。
-func verifyFileSHA1(path, expected string) error {
-	expected = strings.ToLower(strings.TrimSpace(expected))
-	if expected == "" {
+// verifyManifestHashes 优先用 SHA-512 校验（抗碰撞），缺失时才回退 SHA-1。
+// 任一给定算法不匹配即删除文件并返回错误；两种摘要都未提供则跳过校验。
+func verifyManifestHashes(path string, hashes map[string]string) error {
+	want512 := strings.ToLower(strings.TrimSpace(hashes["sha512"]))
+	want1 := strings.ToLower(strings.TrimSpace(hashes["sha1"]))
+
+	if want512 != "" {
+		got, err := sha512File(path)
+		if err != nil {
+			return err
+		}
+		if got != want512 {
+			os.Remove(path)
+			return fmt.Errorf("SHA-512 校验失败 (期望 %s, 实际 %s)", want512, got)
+		}
 		return nil
 	}
-	actual, err := sha1File(path)
-	if err != nil {
-		return err
-	}
-	if actual != expected {
-		os.Remove(path)
-		return fmt.Errorf("SHA1 校验失败 (期望 %s, 实际 %s)", expected, actual)
+
+	if want1 != "" {
+		got, err := sha1File(path)
+		if err != nil {
+			return err
+		}
+		if got != want1 {
+			os.Remove(path)
+			return fmt.Errorf("SHA-1 校验失败 (期望 %s, 实际 %s)", want1, got)
+		}
+		return nil
 	}
 	return nil
 }
@@ -255,8 +270,7 @@ func (a *App) AddModpackToDownloadList(versionID string, customName string) erro
 	return nil
 }
 
-// installModpack 安装整合包（参考 PCL ModModpack 逻辑）
-// 流程：下载 .mrpack → 解析 manifest → 下载游戏 → 安装 loader → 下载所有 mod → 解压 overrides
+// installModpack 安装整合包
 func (a *App) installModpack(item *DownloadItem) error {
 	mcDir := a.GetMinecraftDir()
 
@@ -436,16 +450,12 @@ func (a *App) installModpack(item *DownloadItem) error {
 		fileName := filepath.Base(mf.Path)
 		a.emitProgress("downloading", fmt.Sprintf("Mod %d/%d: %s", i+1, totalFiles, fileName), 0, mf.FileSize)
 
-		expectedSHA1 := strings.ToLower(strings.TrimSpace(mf.Hashes["sha1"]))
 		tryOne := func(dlURL string) bool {
 			if err := a.downloadFile(dlURL, destPath, false); err != nil {
 				return false
 			}
-			if expectedSHA1 == "" {
-				return true
-			}
-			if err := verifyFileSHA1(destPath, expectedSHA1); err != nil {
-				fmt.Printf("文件 SHA1 校验失败，尝试下一源: %s, %v\n", mf.Path, err)
+			if err := verifyManifestHashes(destPath, mf.Hashes); err != nil {
+				fmt.Printf("文件完整性校验失败，尝试下一源: %s, %v\n", mf.Path, err)
 				return false
 			}
 			return true
