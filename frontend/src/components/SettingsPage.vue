@@ -14,6 +14,8 @@ import {
 import logoImg from '../assets/images/logo.jpg'
 
 const APP_VERSION = '1.0.0-rc.2'
+const MIN_MEM = 1
+const MAX_MEM = 32
 
 const props = defineProps({
   currentUser: Object
@@ -173,15 +175,27 @@ async function resetMinecraftDir() {
   }
 }
 
+function clampMem(v, fallback) {
+  const n = Number(v)
+  if (!Number.isFinite(n) || n < MIN_MEM) return fallback
+  return Math.min(Math.floor(n), MAX_MEM)
+}
+
 async function saveSettings() {
   saving.value = true
   saveMsg.value = ''
   saveError.value = false
   try {
+    let minMem = clampMem(minMemory.value, 1)
+    let maxMem = clampMem(maxMemory.value, 2)
+    if (minMem > maxMem) [minMem, maxMem] = [maxMem, minMem]
+    minMemory.value = minMem
+    maxMemory.value = maxMem
+
     const config = await GetGlobalConfig()
     config.javaPath = javaPath.value
-    config.maxMemory = maxMemory.value
-    config.minMemory = minMemory.value
+    config.maxMemory = maxMem
+    config.minMemory = minMem
     config.minecraftDir = minecraftDir.value
     await SaveGlobalConfig(config)
     await SetVersionIsolation(versionIsolation.value)
@@ -348,11 +362,11 @@ const javaVersionLabel = computed(() => {
             <div class="form-row">
               <div class="form-group half">
                 <label>{{ t('settings.maxMemory') }}</label>
-                <input v-model.number="maxMemory" class="input" type="number" min="1" max="32" />
+                <input v-model.number="maxMemory" class="input" type="number" :min="MIN_MEM" :max="MAX_MEM" />
               </div>
               <div class="form-group half">
                 <label>{{ t('settings.minMemory') }}</label>
-                <input v-model.number="minMemory" class="input" type="number" min="1" max="32" />
+                <input v-model.number="minMemory" class="input" type="number" :min="MIN_MEM" :max="MAX_MEM" />
               </div>
             </div>
           </div>
