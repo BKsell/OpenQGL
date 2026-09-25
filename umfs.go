@@ -16,8 +16,6 @@ import (
 
 // UMFS (Ultra Mersenne Fractal Sponge) — 与 bool-hybrid-array core.py 对齐。
 // M = 2^2281 - 1（梅森素数），十阶模幂 + 海绵结构。
-// 注意：与 Python 版一致，absorb 每次调用把整块 data 当作一个大整数吸收，
-// 不再按 8 字节分块；Write() 走缓冲路径，Sum 时一次性吸收。
 var (
 	umfsM   = new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 2281), big.NewInt(1))
 	umfsE1  = big.NewInt(11)
@@ -65,7 +63,7 @@ func umfsPow(x, e *big.Int) *big.Int {
 	return new(big.Int).Exp(x, e, umfsM)
 }
 
-// tenthOrderMapping 十阶模幂置换，与 Python 版 tenth_order_mapping 严格对齐
+// tenthOrderMapping 十阶模幂置换
 func tenthOrderMapping(x *big.Int) *big.Int {
 	p1 := umfsPow(x, umfs210)
 	p2 := umfsPow(umfs210, x)
@@ -94,7 +92,6 @@ func tenthOrderMapping(x *big.Int) *big.Int {
 	return new(big.Int).Mod(x, umfsM)
 }
 
-// UMFS 海绵状态
 type UMFS struct {
 	r        *big.Int
 	c        *big.Int
@@ -103,8 +100,6 @@ type UMFS struct {
 	pending  bytes.Buffer
 }
 
-// NewUMFS 创建实例；data 等价于 Python 版 __init__(data) 里的 _bts，
-// 在第一次 squeeze 时才整体吸收。
 func NewUMFS(data []byte) *UMFS {
 	u := &UMFS{
 		r:        new(big.Int).Set(umfsIVR),
@@ -118,7 +113,6 @@ func NewUMFS(data []byte) *UMFS {
 	return u
 }
 
-// Absorb 直接把整块 data 作为一个大整数吸收（对应 Python absorb）。
 func (u *UMFS) Absorb(data []byte) *UMFS {
 	if len(data) == 0 {
 		return u
@@ -132,7 +126,6 @@ func (u *UMFS) Absorb(data []byte) *UMFS {
 	return u
 }
 
-// flushPending 把缓冲的写入一次性吸收（对应 Python hexdigest 里的 absorb(self._bts)）
 func (u *UMFS) flushPending() {
 	if u.pending.Len() > 0 {
 		u.Absorb(u.pending.Bytes())
@@ -157,10 +150,8 @@ func (u *UMFS) foldRecursive(arr []*big.Int) *big.Int {
 	return tenthOrderMapping(cross)
 }
 
-// HexDigest 输出 bitn 位十六进制串。bitn 最大 4562（2*2281）。
 func (u *UMFS) HexDigest(bitn int) string {
 	u.flushPending()
-
 	if bitn <= 0 || bitn > 4562 {
 		bitn = 256
 	}
@@ -183,7 +174,6 @@ func (u *UMFS) HexDigest(bitn int) string {
 		u.c = new(big.Int).Mod(new(big.Int).Xor(cross, oldR), umfsM)
 	}
 
-	// res = (r << max(0, bitn-2281)) ^ c，再 mask 到 bitn 位
 	shift := bitn - 2281
 	if shift < 0 {
 		shift = 0
@@ -200,7 +190,6 @@ func (u *UMFS) HexDigest(bitn int) string {
 	return hexStr
 }
 
-// Digest 返回 32 字节（256 bit）摘要
 func (u *UMFS) Digest() []byte {
 	hx := u.HexDigest(256)
 	b, _ := hex.DecodeString(hx)
@@ -211,7 +200,6 @@ func umfsHash(data []byte) string {
 	return NewUMFS(data).HexDigest(256)
 }
 
-// UMFSHash 实现 hash.Hash 接口
 type UMFSHash struct {
 	umfs *UMFS
 }
@@ -260,12 +248,11 @@ func generateUMFSToken() string {
 	return umfsHash(b)
 }
 
-// 编译时断言 UMFSHash 实现 hash.Hash 接口
 var _ hash.Hash = (*UMFSHash)(nil)
 
-// ===== 文件完整性校验：优先 sha512（抗碰撞），sha1 仅作回退 =====
+// ===== 文件完整性校验辅助 =====
 
-// sha512File 计算文件 SHA-512 十六进制摘要
+// sha512File 计算文件 SHA-512
 func sha512File(path string) (string, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -273,6 +260,22 @@ func sha512File(path string) (string, error) {
 	}
 	defer f.Close()
 	h := sha512.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// umfsFile 流式计算文件 UMFS-256 十六进制摘要（bool-hybrid-array 生态）。
+// 注意：UMFS 是整块吸收的海绵，这里把文件分块喂给 hash.Hash 接口的 Write，
+// 在 Sum 时一次性 squeeze，与 Python 版对整文件 hexdigest 等价。
+func umfsFile(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := NewUMFSHash()
 	if _, err := io.Copy(h, f); err != nil {
 		return "", err
 	}
