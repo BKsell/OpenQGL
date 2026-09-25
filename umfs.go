@@ -1,16 +1,23 @@
 package main
 
 import (
+	"bytes"
 	"crypto/rand"
 	"crypto/tls"
+	"crypto/sha512"
+	"encoding/hex"
 	"hash"
 	"math/big"
 	"net/http"
 	"time"
 )
 
+// UMFS (Ultra Mersenne Fractal Sponge) — 与 bool-hybrid-array core.py 对齐。
+// M = 2^2281 - 1（梅森素数），十阶模幂 + 海绵结构。
+// 注意：与 Python 版一致，absorb 每次调用把整块 data 当作一个大整数吸收，
+// 不再按 8 字节分块；Write() 走缓冲路径，Sum 时一次性吸收。
 var (
-	umfsM   = new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 521), big.NewInt(1))
+	umfsM   = new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 2281), big.NewInt(1))
 	umfsE1  = big.NewInt(11)
 	umfsE2  = big.NewInt(13)
 	umfsE3  = big.NewInt(17)
@@ -32,13 +39,11 @@ var (
 	umfs210 = big.NewInt(210)
 	umfs7   = big.NewInt(7)
 	umfs3   = big.NewInt(3)
-	umfs128 = big.NewInt(128)
 )
 
 const umfsBlockSize = 8
 
 // safeHTTPClient 创建安全的 HTTP 客户端
-// 配置 30 秒超时，TLS 1.2 最低版本，防止资源耗尽和降级攻击
 func safeHTTPClient() *http.Client {
 	return &http.Client{
 		Timeout: 30 * time.Second,
@@ -58,6 +63,7 @@ func umfsPow(x, e *big.Int) *big.Int {
 	return new(big.Int).Exp(x, e, umfsM)
 }
 
+// tenthOrderMapping 十阶模幂置换，与 Python 版 tenth_order_mapping 严格对齐
 func tenthOrderMapping(x *big.Int) *big.Int {
 	p1 := umfsPow(x, umfs210)
 	p2 := umfsPow(umfs210, x)
@@ -86,13 +92,17 @@ func tenthOrderMapping(x *big.Int) *big.Int {
 	return new(big.Int).Mod(x, umfsM)
 }
 
+// UMFS 海绵状态
 type UMFS struct {
 	r        *big.Int
 	c        *big.Int
 	totalLen int
 	dataPool []*big.Int
+	pending  bytes.Buffer
 }
 
+// NewUMFS 创建实例；data 等价于 Python 版 __init__(data) 里的 _bts，
+// 在第一次 squeeze 时才整体吸收。
 func NewUMFS(data []byte) *UMFS {
 	u := &UMFS{
 		r:        new(big.Int).Set(umfsIVR),
@@ -100,27 +110,32 @@ func NewUMFS(data []byte) *UMFS {
 		totalLen: 0,
 		dataPool: make([]*big.Int, 0),
 	}
-	if data != nil {
-		u.Absorb(data)
+	if len(data) > 0 {
+		u.pending.Write(data)
 	}
 	return u
 }
 
+// Absorb 直接把整块 data 作为一个大整数吸收（对应 Python absorb）。
 func (u *UMFS) Absorb(data []byte) *UMFS {
-	u.totalLen += len(data)
-	for i := 0; i < len(data); i += umfsBlockSize {
-		end := i + umfsBlockSize
-		if end > len(data) {
-			end = len(data)
-		}
-		chunk := data[i:end]
-		num := new(big.Int).SetBytes(chunk)
-		u.dataPool = append(u.dataPool, num)
-		u.r = tenthOrderMapping(new(big.Int).Xor(u.r, num))
-		term := umfsMod(new(big.Int).Mul(umfsPow(num, umfs7), u.r))
-		u.c = new(big.Int).Mod(new(big.Int).Add(new(big.Int).Xor(u.c, u.r), term), umfsM)
+	if len(data) == 0 {
+		return u
 	}
+	u.totalLen += len(data)
+	num := new(big.Int).SetBytes(data)
+	u.dataPool = append(u.dataPool, num)
+	u.r = tenthOrderMapping(new(big.Int).Xor(u.r, num))
+	term := umfsMod(new(big.Int).Mul(umfsPow(num, umfs7), u.r))
+	u.c = new(big.Int).Mod(new(big.Int).Add(new(big.Int).Xor(u.c, u.r), term), umfsM)
 	return u
+}
+
+// flushPending 把缓冲的写入一次性吸收（对应 Python hexdigest 里的 absorb(self._bts)）
+func (u *UMFS) flushPending() {
+	if u.pending.Len() > 0 {
+		u.Absorb(u.pending.Bytes())
+		u.pending.Reset()
+	}
 }
 
 func (u *UMFS) foldRecursive(arr []*big.Int) *big.Int {
@@ -140,7 +155,14 @@ func (u *UMFS) foldRecursive(arr []*big.Int) *big.Int {
 	return tenthOrderMapping(cross)
 }
 
+// HexDigest 输出 bitn 位十六进制串。bitn 最大 4562（2*2281）。
 func (u *UMFS) HexDigest(bitn int) string {
+	u.flushPending()
+
+	if bitn <= 0 || bitn > 4562 {
+		bitn = 256
+	}
+
 	len3 := umfsPow(big.NewInt(int64(u.totalLen)), umfs3)
 	u.r = new(big.Int).Xor(u.r, len3)
 	u.c = new(big.Int).Mod(new(big.Int).Add(u.c, new(big.Int).Mul(len3, u.r)), umfsM)
@@ -159,51 +181,35 @@ func (u *UMFS) HexDigest(bitn int) string {
 		u.c = new(big.Int).Mod(new(big.Int).Xor(cross, oldR), umfsM)
 	}
 
-	res := new(big.Int).Mod(new(big.Int).Add(new(big.Int).Lsh(u.r, 128), u.c), umfsM)
-	if bitn <= 0 || bitn > 521 {
-		bitn = 256
+	// res = (r << max(0, bitn-2281)) ^ c，再 mask 到 bitn 位
+	shift := bitn - 2281
+	if shift < 0 {
+		shift = 0
 	}
+	res := new(big.Int).Xor(new(big.Int).Lsh(u.r, uint(shift)), u.c)
 	mask := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), uint(bitn)), big.NewInt(1))
-	res = new(big.Int).And(res, mask)
+	res.And(res, mask)
+
 	hexLen := (bitn + 3) / 4
-	return fmtSprintf(hexLen, res)
+	hexStr := res.Text(16)
+	for len(hexStr) < hexLen {
+		hexStr = "0" + hexStr
+	}
+	return hexStr
 }
 
+// Digest 返回 32 字节（256 bit）摘要
 func (u *UMFS) Digest() []byte {
-	hex := u.HexDigest(256)
-	result := make([]byte, 0, len(hex)/2)
-	for i := 0; i < len(hex); i += 2 {
-		b := hexToByte(hex[i])<<4 | hexToByte(hex[i+1])
-		result = append(result, b)
-	}
-	return result
-}
-
-func hexToByte(c byte) byte {
-	if c >= '0' && c <= '9' {
-		return c - '0'
-	}
-	if c >= 'a' && c <= 'f' {
-		return c - 'a' + 10
-	}
-	if c >= 'A' && c <= 'F' {
-		return c - 'A' + 10
-	}
-	return 0
-}
-
-func fmtSprintf(hexLen int, x *big.Int) string {
-	hex := x.Text(16)
-	for len(hex) < hexLen {
-		hex = "0" + hex
-	}
-	return hex
+	hx := u.HexDigest(256)
+	b, _ := hex.DecodeString(hx)
+	return b
 }
 
 func umfsHash(data []byte) string {
 	return NewUMFS(data).HexDigest(256)
 }
 
+// UMFSHash 实现 hash.Hash 接口
 type UMFSHash struct {
 	umfs *UMFS
 }
@@ -213,22 +219,27 @@ func NewUMFSHash() *UMFSHash {
 }
 
 func (h *UMFSHash) Write(p []byte) (n int, err error) {
-	h.umfs.Absorb(p)
+	h.umfs.pending.Write(p)
 	return len(p), nil
 }
 
 func (h *UMFSHash) Sum(in []byte) []byte {
-	originalData := h.umfs.dataPool
-	originalR := h.umfs.r
-	originalC := h.umfs.c
-	originalLen := h.umfs.totalLen
+	// 复制状态，保证 Sum 可重复调用
+	savedR := new(big.Int).Set(h.umfs.r)
+	savedC := new(big.Int).Set(h.umfs.c)
+	savedLen := h.umfs.totalLen
+	savedPool := append([]*big.Int{}, h.umfs.dataPool...)
+	savedPending := make([]byte, h.umfs.pending.Len())
+	copy(savedPending, h.umfs.pending.Bytes())
 
 	result := h.umfs.Digest()
 
-	h.umfs.dataPool = originalData
-	h.umfs.r = originalR
-	h.umfs.c = originalC
-	h.umfs.totalLen = originalLen
+	h.umfs.r = savedR
+	h.umfs.c = savedC
+	h.umfs.totalLen = savedLen
+	h.umfs.dataPool = savedPool
+	h.umfs.pending.Reset()
+	h.umfs.pending.Write(savedPending)
 
 	return append(in, result...)
 }
@@ -237,8 +248,8 @@ func (h *UMFSHash) Reset() {
 	h.umfs = NewUMFS(nil)
 }
 
-func (h *UMFSHash) Size() int       { return 32 }
-func (h *UMFSHash) BlockSize() int  { return umfsBlockSize }
+func (h *UMFSHash) Size() int      { return 32 }
+func (h *UMFSHash) BlockSize() int { return umfsBlockSize }
 
 func generateUMFSToken() string {
 	b := make([]byte, 32)
@@ -250,3 +261,19 @@ func generateUMFSToken() string {
 
 // 编译时断言 UMFSHash 实现 hash.Hash 接口
 var _ hash.Hash = (*UMFSHash)(nil)
+
+// ===== 文件完整性校验：优先 sha512（抗碰撞），sha1 仅作回退 =====
+
+// sha512File 计算文件 SHA-512 十六进制摘要
+func sha512File(path string) (string, error) {
+	f, err := osOpen(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha512.New()
+	if _, err := ioCopy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
