@@ -233,14 +233,23 @@ func (a *App) StartMicrosoftLogin() (string, error) {
 	return result, nil
 }
 
-// pollMicrosoftToken 轮询微软令牌
+// pollMicrosoftToken 轮询微软令牌，到达设备码过期时间后自动退出
 func (a *App) pollMicrosoftToken(dc DeviceCodeResponse) {
 	interval := 5
 	if dc.Interval > 0 {
 		interval = dc.Interval
 	}
+	ttl := time.Duration(dc.ExpiresIn) * time.Second
+	if ttl <= 0 {
+		ttl = 5 * time.Minute
+	}
+	deadline := time.Now().Add(ttl)
 	for {
 		time.Sleep(time.Duration(interval) * time.Second)
+		if time.Now().After(deadline) {
+			runtime.EventsEmit(a.ctx, "msLoginError", "登录已过期，请重新尝试")
+			return
+		}
 		data := url.Values{
 			"client_id":   {oauthClientID},
 			"grant_type":  {"urn:ietf:params:oauth:grant-type:device_code"},
