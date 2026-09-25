@@ -160,7 +160,7 @@ func recordModHashes(fileURL string, f ModFile) {
 }
 
 // verifyModDownloaded 用 Modrinth 给的哈希校验刚下载的 mod jar。
-// 优先 sha512，缺了再 sha1；都没有就跳过（不阻塞老版本 API 响应）。
+// 优先全长 sha512，缺了再 sha1；都没有就跳过（不阻塞老版本 API 响应）。
 func verifyModDownloaded(destPath, fileURL string) error {
 	hashes, ok := modExpectedHashes[fileURL]
 	if !ok {
@@ -173,7 +173,7 @@ func verifyModDownloaded(destPath, fileURL string) error {
 	defer f.Close()
 
 	if want, ok := hashes["sha512"]; ok && want != "" {
-		h := sha512.New512_256()
+		h := sha512.New()
 		if _, err := io.Copy(h, f); err != nil {
 			return err
 		}
@@ -883,7 +883,6 @@ func (a *App) downloadModItem(item *DownloadItem) error {
 	out.Close()
 
 	// 关键修复：下载完先用 Modrinth 给的哈希校验，再原子改名。
-	// 之前直接 os.Rename 到 destPath，镜像源被投毒/MITM 都不会被发现。
 	if err := verifyModDownloaded(destPath+".part", item.URL); err != nil {
 		os.Remove(destPath + ".part")
 		return fmt.Errorf("Mod 完整性校验失败: %w", err)
