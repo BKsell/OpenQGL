@@ -25,15 +25,15 @@ import (
 // ===== Win32 API 用于窗口检测 =====
 
 var (
-	user32DLL         = syscall.NewLazyDLL("user32.dll")
-	kernel32DLL       = syscall.NewLazyDLL("kernel32.dll")
-	procEnumWindows   = user32DLL.NewProc("EnumWindows")
-	procGetClassName  = user32DLL.NewProc("GetClassNameA")
-	procGetWindowText = user32DLL.NewProc("GetWindowTextA")
-	procGetWindowPID  = user32DLL.NewProc("GetWindowThreadProcessId")
-	procOpenProcess   = kernel32DLL.NewProc("OpenProcess")
+	user32DLL           = syscall.NewLazyDLL("user32.dll")
+	kernel32DLL         = syscall.NewLazyDLL("kernel32.dll")
+	procEnumWindows     = user32DLL.NewProc("EnumWindows")
+	procGetClassName    = user32DLL.NewProc("GetClassNameA")
+	procGetWindowText   = user32DLL.NewProc("GetWindowTextA")
+	procGetWindowPID    = user32DLL.NewProc("GetWindowThreadProcessId")
+	procOpenProcess     = kernel32DLL.NewProc("OpenProcess")
 	procGetProcessTimes = kernel32DLL.NewProc("GetProcessTimes")
-	procCloseHandle   = kernel32DLL.NewProc("CloseHandle")
+	procCloseHandle     = kernel32DLL.NewProc("CloseHandle")
 )
 
 // MCVersion 表示一个 Minecraft 版本
@@ -91,17 +91,17 @@ type DownloadItem struct {
 // 版本 JSON 相关结构体
 
 type VersionJSON struct {
-	ID            string             `json:"id"`
-	Type          string             `json:"type"`
-	MainClass     string             `json:"mainClass"`
-	MinecraftArgs string             `json:"minecraftArguments"`
-	Arguments     *ArgumentsObj      `json:"arguments"`
-	Libraries     []Library          `json:"libraries"`
-	Downloads     *VersionDownloads  `json:"downloads"`
+	ID            string            `json:"id"`
+	Type          string            `json:"type"`
+	MainClass     string            `json:"mainClass"`
+	MinecraftArgs string            `json:"minecraftArguments"`
+	Arguments     *ArgumentsObj     `json:"arguments"`
+	Libraries     []Library         `json:"libraries"`
+	Downloads     *VersionDownloads `json:"downloads"`
 	AssetIndex    *AssetIndexRef    `json:"assetIndex"`
-	ReleaseTime   string             `json:"releaseTime"`
-	InheritsFrom  string             `json:"inheritsFrom"`
-	Jar           string             `json:"jar"`
+	ReleaseTime   string            `json:"releaseTime"`
+	InheritsFrom  string            `json:"inheritsFrom"`
+	Jar           string            `json:"jar"`
 }
 
 type ArgumentsObj struct {
@@ -113,9 +113,9 @@ type Library struct {
 	Name      string            `json:"name"`
 	Downloads *LibDownloads     `json:"downloads"`
 	Natives   map[string]string `json:"natives"`
-	Rules     []Rule           `json:"rules"`
-	URL       string           `json:"url"`
-	JarPath   string           `json:"path"`
+	Rules     []Rule            `json:"rules"`
+	URL       string            `json:"url"`
+	JarPath   string            `json:"path"`
 }
 
 type LibDownloads struct {
@@ -256,6 +256,25 @@ func (a *App) downloadFile(url string, destPath string, reportProgress bool) err
 		if err != nil {
 			return fmt.Errorf("写入文件失败 %s: %v", destPath, err)
 		}
+	}
+	return nil
+}
+
+// downloadVerifiedFile 下载并校验 SHA1；已有文件校验通过则跳过，失败则删除重下一次
+func (a *App) downloadVerifiedFile(url string, destPath string, expectedSHA1 string, reportProgress bool) error {
+	if expectedSHA1 == "" {
+		return a.downloadFile(url, destPath, reportProgress)
+	}
+	if info, err := os.Stat(destPath); err == nil && info.Size() > 0 && a.checkFileHash(destPath, expectedSHA1) {
+		return nil
+	}
+	os.Remove(destPath)
+	if err := a.downloadFile(url, destPath, reportProgress); err != nil {
+		return err
+	}
+	if !a.checkFileHash(destPath, expectedSHA1) {
+		os.Remove(destPath)
+		return fmt.Errorf("SHA1 校验失败: %s", destPath)
 	}
 	return nil
 }
@@ -751,7 +770,7 @@ func (a *App) DownloadVersion(versionID string, versionURL string, customName st
 		clientURL := replaceWithBMCLAPI(client.URL)
 		jarPath := filepath.Join(versionDir, customName+".jar")
 		a.emitProgress("downloading", customName+".jar", 0, client.Size)
-		if err := a.downloadFile(clientURL, jarPath, true); err != nil {
+		if err := a.downloadVerifiedFile(clientURL, jarPath, client.SHA1, true); err != nil {
 			return fmt.Errorf("下载客户端 jar 失败: %v", err)
 		}
 	}
@@ -771,7 +790,7 @@ func (a *App) DownloadVersion(versionID string, versionURL string, customName st
 			libPath := filepath.Join(mcDir, "libraries", safePath)
 			libURL := replaceWithBMCLAPI(artifact.URL)
 			a.emitProgress("downloading", filepath.Base(artifact.Path), 0, artifact.Size)
-			if err := a.downloadFile(libURL, libPath, false); err != nil {
+			if err := a.downloadVerifiedFile(libURL, libPath, artifact.SHA1, false); err != nil {
 				fmt.Printf("下载库文件失败(跳过): %s, %v\n", artifact.Path, err)
 			}
 		}
@@ -797,7 +816,7 @@ func (a *App) DownloadVersion(versionID string, versionURL string, customName st
 			nativePath := filepath.Join(mcDir, "libraries", safeClassPath)
 			nativeURL := replaceWithBMCLAPI(classifier.URL)
 			a.emitProgress("downloading", filepath.Base(classifier.Path), 0, classifier.Size)
-			if err := a.downloadFile(nativeURL, nativePath, false); err != nil {
+			if err := a.downloadVerifiedFile(nativeURL, nativePath, classifier.SHA1, false); err != nil {
 				fmt.Printf("下载 native 失败: %s, %v\n", classifier.Path, err)
 			}
 		}
@@ -1546,7 +1565,6 @@ func (a *App) buildLaunchArgs(versionID string, versionJSON *VersionJSON, mcDir 
 			"-Dlog4j2.formatMsgNoLookups=true",
 			fmt.Sprintf("-Djava.library.path=%s", nativesDir),
 			fmt.Sprintf("-Dorg.lwjgl.librarypath=%s", nativesDir),
-			"-Dorg.lwjgl.util.Debug=true",
 		}
 		if versionJSON.Arguments != nil {
 			for _, arg := range versionJSON.Arguments.JVM {
@@ -1816,14 +1834,9 @@ func (a *App) LaunchGame(versionID string) error {
 	javaEntry, _ := a.SelectJavaForVersion(versionID)
 	javaPath := javaEntry.Path
 
-	var cmdParts []string
-	cmdParts = append(cmdParts, "\""+javaPath+"\"")
+	cmdParts := []string{syscall.EscapeArg(javaPath)}
 	for _, arg := range allArgs {
-		if strings.Contains(arg, " ") {
-			cmdParts = append(cmdParts, "\""+arg+"\"")
-		} else {
-			cmdParts = append(cmdParts, arg)
-		}
+		cmdParts = append(cmdParts, syscall.EscapeArg(arg))
 	}
 	fullCmdLine := strings.Join(cmdParts, " ")
 	a.writeLog("命令行长度: %d 字符", len(fullCmdLine))
@@ -1872,14 +1885,9 @@ func (a *App) GetLaunchCommand(versionID string) (string, error) {
 	javaEntry, _ := a.SelectJavaForVersion(versionID)
 	javaPath := javaEntry.Path
 
-	var cmdParts []string
-	cmdParts = append(cmdParts, "\""+javaPath+"\"")
+	cmdParts := []string{syscall.EscapeArg(javaPath)}
 	for _, arg := range allArgs {
-		if strings.Contains(arg, " ") || strings.Contains(arg, "\"") {
-			cmdParts = append(cmdParts, "\""+strings.ReplaceAll(arg, "\"", "\\\"")+"\"")
-		} else {
-			cmdParts = append(cmdParts, arg)
-		}
+		cmdParts = append(cmdParts, syscall.EscapeArg(arg))
 	}
 	return strings.Join(cmdParts, " "), nil
 }
