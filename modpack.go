@@ -2,6 +2,8 @@ package main
 
 import (
 	"archive/zip"
+	"crypto/sha1"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -22,12 +24,12 @@ type ModpackSearchResponse = ModSearchResponse
 
 // ModrinthModpackManifest Modrinth 整合包 manifest.json
 type ModrinthModpackManifest struct {
-	FormatVersion int                          `json:"formatVersion"`
-	Game          string                       `json:"game"`
-	VersionID     string                       `json:"versionId"`
-	Name          string                        `json:"name"`
-	Files         []ModrinthModpackFile         `json:"files"`
-	Dependencies  map[string]string            `json:"dependencies"`
+	FormatVersion int                  `json:"formatVersion"`
+	Game          string               `json:"game"`
+	VersionID     string               `json:"versionId"`
+	Name          string               `json:"name"`
+	Files         []ModrinthModpackFile `json:"files"`
+	Dependencies  map[string]string    `json:"dependencies"`
 }
 
 // ModrinthModpackFile 整合包中的文件条目
@@ -49,7 +51,6 @@ func safeJoin(baseDir, relPath string) (string, error) {
 		return "", fmt.Errorf("路径遍历检测: %s", relPath)
 	}
 	destPath := filepath.Join(baseDir, relPath)
-	// 验证最终路径是否在 baseDir 内
 	absBase, err := filepath.Abs(baseDir)
 	if err != nil {
 		return "", err
@@ -62,6 +63,37 @@ func safeJoin(baseDir, relPath string) (string, error) {
 		return "", fmt.Errorf("路径越界: %s", relPath)
 	}
 	return destPath, nil
+}
+
+// sha1File 计算文件的 SHA1 十六进制摘要（用于 Modrinth manifest 校验）
+func sha1File(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha1.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// verifyFileSHA1 校验文件 SHA1；expected 为空则跳过。不匹配时删除文件并返回错误。
+func verifyFileSHA1(path, expected string) error {
+	expected = strings.ToLower(strings.TrimSpace(expected))
+	if expected == "" {
+		return nil
+	}
+	actual, err := sha1File(path)
+	if err != nil {
+		return err
+	}
+	if actual != expected {
+		os.Remove(path)
+		return fmt.Errorf("SHA1 校验失败 (期望 %s, 实际 %s)", expected, actual)
+	}
+	return nil
 }
 
 // SearchModpacks 搜索 Modrinth 整合包
@@ -80,7 +112,6 @@ func (a *App) SearchModpacks(query string, gameVersion string, page int, pageSiz
 
 	var facets []string
 	facets = append(facets, `["project_type:modpack"]`)
-	// 安全校验：gameVersion 必须是合法的版本号格式
 	if gameVersion != "" && isValidMCVersion(gameVersion) {
 		facets = append(facets, fmt.Sprintf(`["versions:%s"]`, gameVersion))
 	}
@@ -126,7 +157,6 @@ func (a *App) SearchModpacks(query string, gameVersion string, page int, pageSiz
 
 // GetModpackVersions 获取整合包的版本列表
 func (a *App) GetModpackVersions(projectID string) ([]ModVersion, error) {
-	// 安全校验：projectID 必须是合法格式
 	if !isValidModID(projectID) {
 		return nil, fmt.Errorf("无效的项目 ID 格式")
 	}
@@ -154,11 +184,9 @@ func (a *App) GetModpackVersions(projectID string) ([]ModVersion, error) {
 
 // AddModpackToDownloadList 添加整合包到下载列表
 func (a *App) AddModpackToDownloadList(versionID string, customName string) error {
-	// 安全校验：versionID 必须是合法格式
 	if !isValidModID(versionID) {
 		return fmt.Errorf("无效的版本 ID 格式")
 	}
-	// 获取版本详情以拿到下载链接
 	apiURL := fmt.Sprintf("%s/version/%s", modrinthBaseURL, versionID)
 	resp, err := safeHTTPClient().Get(apiURL)
 	if err != nil {
@@ -189,12 +217,10 @@ func (a *App) AddModpackToDownloadList(versionID string, customName string) erro
 		return fmt.Errorf("未找到整合包文件")
 	}
 
-	// 安全校验：下载 URL 必须是 HTTPS
 	if !isHTTPSURL(primaryFile.URL) {
 		return fmt.Errorf("不安全的下载 URL（非 HTTPS）")
 	}
 
-	// 安全：使用 filepath.Base 剥离路径遍历组件
 	displayName := filepath.Base(customName)
 	if displayName == "" || displayName == "." {
 		displayName = filepath.Base(primaryFile.Filename)
@@ -234,7 +260,6 @@ func (a *App) AddModpackToDownloadList(versionID string, customName string) erro
 func (a *App) installModpack(item *DownloadItem) error {
 	mcDir := a.GetMinecraftDir()
 
-	// 1. 下载整合包文件到临时目录
 	tmpDir := filepath.Join(os.TempDir(), "qgl-modpack")
 	if err := os.MkdirAll(tmpDir, 0700); err != nil {
 		return fmt.Errorf("创建临时目录失败: %v", err)
@@ -244,12 +269,10 @@ func (a *App) installModpack(item *DownloadItem) error {
 	mrpackPath := filepath.Join(tmpDir, "modpack.mrpack")
 	a.emitProgress("downloading", item.CustomName, 0, 0)
 
-	// 安全校验：下载 URL 必须是 HTTPS
 	if !isHTTPSURL(item.URL) {
 		return fmt.Errorf("不安全的下载 URL（非 HTTPS）")
 	}
 
-	// 先尝试镜像源，失败再回退到官方源
 	resp, err := safeHTTPClient().Get(mirrorModURL(item.URL))
 	if err != nil || resp.StatusCode != http.StatusOK {
 		if resp != nil {
@@ -294,7 +317,6 @@ func (a *App) installModpack(item *DownloadItem) error {
 	}
 	out.Close()
 
-	// 2. 打开 zip 并解析 modrinth.index.json
 	r, err := zip.OpenReader(mrpackPath)
 	if err != nil {
 		return fmt.Errorf("打开整合包失败: %v", err)
@@ -327,7 +349,6 @@ func (a *App) installModpack(item *DownloadItem) error {
 		return fmt.Errorf("解析 manifest 失败: %v", err)
 	}
 
-	// 3. 从 dependencies 获取游戏版本和 loader
 	mcVersion := manifest.Dependencies["minecraft"]
 	fabricVersion := manifest.Dependencies["fabric-loader"]
 	forgeVersion := manifest.Dependencies["forge"]
@@ -338,7 +359,6 @@ func (a *App) installModpack(item *DownloadItem) error {
 		return fmt.Errorf("整合包未指定 Minecraft 版本")
 	}
 
-	// 4. 下载游戏版本（使用现有 DownloadVersion 逻辑 + 进度）
 	a.emitProgress("downloading", "下载游戏 "+mcVersion, 0, 0)
 	versionURL := ""
 	mcManifest, err2 := a.GetVersionManifest()
@@ -357,7 +377,6 @@ func (a *App) installModpack(item *DownloadItem) error {
 		return fmt.Errorf("下载游戏版本失败: %v", err)
 	}
 
-	// 5. 安装 loader
 	versionsDir := filepath.Join(mcDir, "versions")
 	oldFolders := listVersionFolders(versionsDir)
 
@@ -380,7 +399,6 @@ func (a *App) installModpack(item *DownloadItem) error {
 		return fmt.Errorf("Quilt 加载器暂不支持，请手动安装")
 	}
 
-	// 找到 loader 创建的新版本文件夹
 	newFolders := listVersionFolders(versionsDir)
 	versionDir := ""
 	for _, f := range newFolders {
@@ -393,7 +411,6 @@ func (a *App) installModpack(item *DownloadItem) error {
 		versionDir = filepath.Join(versionsDir, mcVersion)
 	}
 
-	// 6. 下载所有 mod 文件
 	modsDir := filepath.Join(versionDir, "mods")
 	if err := os.MkdirAll(modsDir, 0700); err != nil {
 		return fmt.Errorf("创建 mods 目录失败: %v", err)
@@ -401,7 +418,6 @@ func (a *App) installModpack(item *DownloadItem) error {
 
 	totalFiles := len(manifest.Files)
 	for i, mf := range manifest.Files {
-		// 安全检查：防止路径遍历
 		destPath, err := safeJoin(versionDir, mf.Path)
 		if err != nil {
 			fmt.Printf("跳过不安全的文件路径(Zip Slip防护): %s, 错误: %v\n", mf.Path, err)
@@ -413,7 +429,6 @@ func (a *App) installModpack(item *DownloadItem) error {
 			continue
 		}
 
-		// 如果文件已存在则跳过
 		if _, err := os.Stat(destPath); err == nil {
 			continue
 		}
@@ -421,20 +436,31 @@ func (a *App) installModpack(item *DownloadItem) error {
 		fileName := filepath.Base(mf.Path)
 		a.emitProgress("downloading", fmt.Sprintf("Mod %d/%d: %s", i+1, totalFiles, fileName), 0, mf.FileSize)
 
-		// 尝试所有下载链接（先镜像源，失败回退官方源）
+		expectedSHA1 := strings.ToLower(strings.TrimSpace(mf.Hashes["sha1"]))
+		tryOne := func(dlURL string) bool {
+			if err := a.downloadFile(dlURL, destPath, false); err != nil {
+				return false
+			}
+			if expectedSHA1 == "" {
+				return true
+			}
+			if err := verifyFileSHA1(destPath, expectedSHA1); err != nil {
+				fmt.Printf("文件 SHA1 校验失败，尝试下一源: %s, %v\n", mf.Path, err)
+				return false
+			}
+			return true
+		}
+
 		downloaded := false
 		for _, dlURL := range mf.Downloads {
-			// 安全校验：只允许 HTTPS
 			if !isHTTPSURL(dlURL) {
 				continue
 			}
-			// 先尝试镜像源
-			if err := a.downloadFile(mirrorModURL(dlURL), destPath, false); err == nil {
+			if tryOne(mirrorModURL(dlURL)) {
 				downloaded = true
 				break
 			}
-			// 镜像失败，回退到官方源
-			if err := a.downloadFile(dlURL, destPath, false); err == nil {
+			if tryOne(dlURL) {
 				downloaded = true
 				break
 			}
@@ -444,10 +470,8 @@ func (a *App) installModpack(item *DownloadItem) error {
 		}
 	}
 
-	// 7. 解压 overrides 目录到版本目录（Zip Slip 防护）
 	a.emitProgress("downloading", "解压覆写文件", 0, 0)
 	for _, f := range r.File {
-		// 处理 overrides/ 和 client-overrides/
 		var relPath string
 		if strings.HasPrefix(f.Name, "overrides/") {
 			relPath = strings.TrimPrefix(f.Name, "overrides/")
@@ -461,7 +485,6 @@ func (a *App) installModpack(item *DownloadItem) error {
 			continue
 		}
 
-		// 安全检查：防止 Zip Slip 路径遍历
 		destPath, err := safeJoin(versionDir, relPath)
 		if err != nil {
 			fmt.Printf("跳过不安全的解压路径(Zip Slip防护): %s, 错误: %v\n", f.Name, err)
@@ -488,7 +511,6 @@ func (a *App) installModpack(item *DownloadItem) error {
 		rc.Close()
 	}
 
-	// 8. 写入 QGL/config.json 标记为整合包
 	configDir := filepath.Join(versionDir, "QGL")
 	if err := os.MkdirAll(configDir, 0700); err == nil {
 		loaderType := ""
