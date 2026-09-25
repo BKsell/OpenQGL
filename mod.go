@@ -1,6 +1,9 @@
 package main
 
 import (
+	"crypto/sha1"
+	"crypto/sha512"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -79,11 +82,12 @@ type ModVersion struct {
 }
 
 type ModFile struct {
-	Filename string `json:"filename"`
-	URL      string `json:"url"`
-	Size     int64  `json:"size"`
-	Primary  bool   `json:"primary"`
-	SHA1     string `json:"sha1"`
+	Filename string            `json:"filename"`
+	URL      string            `json:"url"`
+	Size     int64             `json:"size"`
+	Primary  bool              `json:"primary"`
+	SHA1     string            `json:"sha1"`
+	Hashes   map[string]string `json:"hashes"`
 }
 
 type ModDependency struct {
@@ -129,6 +133,73 @@ type ModFileInfo struct {
 }
 
 const modrinthBaseURL = "https://api.modrinth.com/v2"
+
+// modExpectedHashes 缓存 Modrinth 给的文件哈希，key 是下载 URL。
+// 之前 downloadModItem 下载完根本不校验哈希，镜像源被投毒或 CDN 被中间人替换都不会被发现。
+var modExpectedHashes = map[string]map[string]string{}
+
+// recordModHashes 把 Modrinth 给的哈希登记到待校验集合。
+func recordModHashes(fileURL string, f ModFile) {
+	if fileURL == "" {
+		return
+	}
+	hashes := map[string]string{}
+	for k, v := range f.Hashes {
+		if v != "" {
+			hashes[strings.ToLower(k)] = strings.ToLower(v)
+		}
+	}
+	if f.SHA1 != "" {
+		if _, ok := hashes["sha1"]; !ok {
+			hashes["sha1"] = strings.ToLower(f.SHA1)
+		}
+	}
+	if len(hashes) > 0 {
+		modExpectedHashes[fileURL] = hashes
+	}
+}
+
+// verifyModDownloaded 用 Modrinth 给的哈希校验刚下载的 mod jar。
+// 优先 sha512，缺了再 sha1；都没有就跳过（不阻塞老版本 API 响应）。
+func verifyModDownloaded(destPath, fileURL string) error {
+	hashes, ok := modExpectedHashes[fileURL]
+	if !ok {
+		return nil
+	}
+	f, err := os.Open(destPath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	if want, ok := hashes["sha512"]; ok && want != "" {
+		h := sha512.New512_256()
+		if _, err := io.Copy(h, f); err != nil {
+			return err
+		}
+		got := hex.EncodeToString(h.Sum(nil))
+		if got != want {
+			return fmt.Errorf("sha512 校验失败（可能下载被篡改）: got %s want %s", got, want)
+		}
+		return nil
+	}
+
+	if want, ok := hashes["sha1"]; ok && want != "" {
+		if _, err := f.Seek(0, io.SeekStart); err != nil {
+			return err
+		}
+		h := sha1.New()
+		if _, err := io.Copy(h, f); err != nil {
+			return err
+		}
+		got := hex.EncodeToString(h.Sum(nil))
+		if got != want {
+			return fmt.Errorf("sha1 校验失败（可能下载被篡改）: got %s want %s", got, want)
+		}
+		return nil
+	}
+	return nil
+}
 
 // mirrorModURL 将 Mod 下载 URL 替换为中国镜像源
 func mirrorModURL(original string) string {
@@ -399,6 +470,9 @@ func (a *App) AddModToDownloadList(versionID string, savePath string) error {
 	if !isHTTPSURL(primaryFile.URL) {
 		return fmt.Errorf("不安全的下载 URL（非 HTTPS）")
 	}
+
+	// 登记 Modrinth 给的哈希，下载完会校验
+	recordModHashes(primaryFile.URL, *primaryFile)
 
 	if savePath == "" {
 		mcDir := a.GetMinecraftDir()
@@ -777,11 +851,10 @@ func (a *App) downloadModItem(item *DownloadItem) error {
 		return fmt.Errorf("下载 Mod 失败: HTTP %d", resp.StatusCode)
 	}
 
-	out, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
+	out, err := os.OpenFile(destPath+".part", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
 	if err != nil {
 		return fmt.Errorf("创建文件失败: %v", err)
 	}
-	defer out.Close()
 
 	total := resp.ContentLength
 	var downloaded int64
@@ -791,6 +864,8 @@ func (a *App) downloadModItem(item *DownloadItem) error {
 		n, readErr := resp.Body.Read(buf)
 		if n > 0 {
 			if _, werr := out.Write(buf[:n]); werr != nil {
+				out.Close()
+				os.Remove(destPath + ".part")
 				return werr
 			}
 			downloaded += int64(n)
@@ -800,8 +875,23 @@ func (a *App) downloadModItem(item *DownloadItem) error {
 			break
 		}
 		if readErr != nil {
+			out.Close()
+			os.Remove(destPath + ".part")
 			return readErr
 		}
+	}
+	out.Close()
+
+	// 关键修复：下载完先用 Modrinth 给的哈希校验，再原子改名。
+	// 之前直接 os.Rename 到 destPath，镜像源被投毒/MITM 都不会被发现。
+	if err := verifyModDownloaded(destPath+".part", item.URL); err != nil {
+		os.Remove(destPath + ".part")
+		return fmt.Errorf("Mod 完整性校验失败: %w", err)
+	}
+
+	if err := os.Rename(destPath+".part", destPath); err != nil {
+		os.Remove(destPath + ".part")
+		return fmt.Errorf("重命名临时文件失败: %v", err)
 	}
 
 	return nil
