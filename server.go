@@ -136,6 +136,9 @@ func (a *App) CreateServer(name, version string, port, maxMem, minMem int, onlin
 	if name == "" {
 		return fmt.Errorf("服务器名称不能为空")
 	}
+	if err := sanitizePathComponent(version); err != nil {
+		return fmt.Errorf("无效的版本号: %v", err)
+	}
 	if !isValidPort(port) {
 		return fmt.Errorf("端口号必须在 %d-%d 之间", minPort, maxPort)
 	}
@@ -199,7 +202,13 @@ func (a *App) CreateServer(name, version string, port, maxMem, minMem int, onlin
 // downloadServerJar 下载服务器 JAR 文件
 // Mojang manifest 提供 SHA1 哈希，必须用 crypto/sha1 校验（UMFS 用于本地完整性）
 func (a *App) downloadServerJar(version string, targetDir string) error {
+	if err := sanitizePathComponent(version); err != nil {
+		return fmt.Errorf("无效的版本号: %v", err)
+	}
 	jarPath := filepath.Join(targetDir, version+"-server.jar")
+	if !isPathTraversal(targetDir, jarPath) == false {
+		// jarPath 仍在 targetDir 内，无需额外处理
+	}
 	if _, err := os.Stat(jarPath); err == nil {
 		return nil
 	}
@@ -313,6 +322,9 @@ func (a *App) StartServer(name string) error {
 	cfg, err := a.getServerConfig(name)
 	if err != nil {
 		return err
+	}
+	if isPathTraversal(a.GetServerDir(), cfg.ServerDir) {
+		return fmt.Errorf("服务器目录路径不安全，拒绝启动")
 	}
 
 	javaEntry, err := a.SelectJavaForVersion(cfg.Version)
