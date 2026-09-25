@@ -180,21 +180,23 @@ async function handleInstall() {
     const modDir = await GetDefaultModDir(installedVersionName)
     addLog(t('easyQGL.modDirLog', { dir: modDir }))
 
-    const versionIDs = easyQGL.selectedMods
+    // 同时保留 mod 引用，避免 selectedMods 与 versionIDs 过滤后索引错位
+    const selectedPairs = easyQGL.selectedMods
       .filter(m => m.versionId)
-      .map(m => m.versionId)
+      .map(m => ({ versionId: m.versionId, mod: m }))
 
-    let allModVersionIDs = [...versionIDs]
+    let allMods = [...selectedPairs]
 
-    if (versionIDs.length > 0) {
+    if (selectedPairs.length > 0) {
       addLog(t('easyQGL.resolvingDeps'))
       try {
+        const versionIDs = selectedPairs.map(p => p.versionId)
         const deps = await ResolveModDependencies(versionIDs, easyQGL.lockedGameVersion, easyQGL.lockedLoader)
         if (deps && deps.length > 0) {
           addLog(t('easyQGL.foundDeps', { count: deps.length }))
           for (const dep of deps) {
             addLog(`  - ${dep.projectName} (${dep.dependencyType})`)
-            allModVersionIDs.push(dep.versionId)
+            allMods.push({ versionId: dep.versionId, mod: null, dep })
           }
         } else {
           addLog(t('easyQGL.noExtraDeps'))
@@ -204,18 +206,14 @@ async function handleInstall() {
       }
     }
 
-    const totalMods = allModVersionIDs.length
+    const totalMods = allMods.length
     for (let i = 0; i < totalMods; i++) {
-      const vid = allModVersionIDs[i]
-      const isDep = i >= versionIDs.length
+      const { versionId, mod, dep } = allMods[i]
+      const isDep = !mod
       installMsg.value = t('easyQGL.addingMod', { current: i + 1, total: totalMods })
-      if (isDep) {
-        addLog(t('easyQGL.addingDepMod') + vid)
-      } else {
-        const mod = easyQGL.selectedMods[i]
-        addLog(t('easyQGL.addingModLog', { name: mod.title || mod.slug }))
-      }
-      await AddModToDownloadList(vid, modDir)
+      if (isDep) addLog(t('easyQGL.addingDepMod') + dep.projectName)
+      else addLog(t('easyQGL.addingModLog', { name: mod.title || mod.slug }))
+      await AddModToDownloadList(versionId, modDir)
     }
 
     installMsg.value = t('easyQGL.downloadingMods')
