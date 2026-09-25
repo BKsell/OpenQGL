@@ -436,14 +436,15 @@ async function loadLoaderVersions() {
     }
     loaderVersions.value = versions || []
 
-    for (let i = 0; i < loaderVersions.value.length; i++) {
-      try {
-        loaderVersions.value[i].isInstalled = await CheckLoaderInstalled(mcVer, loaderTab.value)
-      } catch (e) {
-        console.error('检查加载器安装状态失败:', e)
-        loaderVersions.value[i].isInstalled = false
-      }
+    // CheckLoaderInstalled 只依赖 (mcVer, loaderTab)，与具体版本号无关，查一次即可
+    let installed = false
+    try {
+      installed = await CheckLoaderInstalled(mcVer, loaderTab.value)
+    } catch (e) {
+      console.error('检查加载器安装状态失败:', e)
+      installed = false
     }
+    loaderVersions.value.forEach(v => { v.isInstalled = installed })
   } catch (e) {
     error.value = cleanError(e)
     loaderVersions.value = []
