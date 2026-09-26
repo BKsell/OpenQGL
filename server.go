@@ -557,6 +557,10 @@ func (a *App) getServerConfig(name string) (*ServerConfig, error) {
 	}
 	serverDir := a.GetServerDir()
 	configPath := filepath.Join(serverDir, name, "QGL", "config.json")
+	info, statErr := os.Stat(configPath)
+	if statErr == nil && info.Size() > (1<<20) {
+		return nil, fmt.Errorf("服务器配置文件过大（>1 MiB），拒绝加载")
+	}
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		list, listErr := a.GetServerList()
