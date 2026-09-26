@@ -821,42 +821,40 @@ func (a *App) GetBackgroundImage() string {
 	return config.BackgroundImage
 }
 
+// allowedBackgroundRoots 列出允许作为背景图来源的根目录。
+func (a *App) allowedBackgroundRoots() []string {
+	roots := []string{filepath.Join(a.GetQGLDir(), "cache")}
+	if home, err := os.UserHomeDir(); err == nil {
+		roots = append(roots,
+			filepath.Join(home, "Pictures"),
+			filepath.Join(home, "Videos"),
+		)
+	}
+	return roots
+}
+
 // isSafeBackgroundPath 校验背景图片路径：
 //  1. 文件必须存在且是普通文件；
-//  2. 扩展名必须是图片类型；
-//  3. 路径必须落在 QGL/cache 或用户 Pictures 目录下。
-//
-// 防的是：renderer 通过 SetBackgroundImage 把 C:\Users\xxx\.ssh\id_rsa 这种
-// 任意文件塞进来，再调 GetBackgroundImageDataURL 把它 base64 读走。
+//  2. 扩展名必须是图片类型（走 sanitize.go 的白名单）；
+//  3. 路径不能是符号链接；
+//  4. 路径必须落在 QGL/cache 或用户 Pictures/Videos 目录下。
 func (a *App) isSafeBackgroundPath(p string) bool {
-	if p == "" {
+	if p == "" || IsSymlink(p) {
 		return false
 	}
 	info, err := os.Stat(p)
 	if err != nil || info.IsDir() || info.Size() > maxBackgroundImageBytes {
 		return false
 	}
-	switch strings.ToLower(filepath.Ext(p)) {
-	case ".jpg", ".jpeg", ".png", ".bmp", ".webp":
-	default:
+	if !IsSafeImageExt(p) {
 		return false
 	}
 	abs, err := filepath.Abs(p)
 	if err != nil {
 		return false
 	}
-	allowedRoots := []string{
-		filepath.Join(a.GetQGLDir(), "cache"),
-	}
-	if home, err := os.UserHomeDir(); err == nil {
-		allowedRoots = append(allowedRoots,
-			filepath.Join(home, "Pictures"),
-			filepath.Join(home, "Videos"),
-		)
-	}
-	for _, root := range allowedRoots {
-		rel, err := filepath.Rel(root, abs)
-		if err == nil && !strings.HasPrefix(rel, "..") && rel != "." {
+	for _, root := range a.allowedBackgroundRoots() {
+		if _, ok := PathWithin(root, abs); ok {
 			return true
 		}
 	}
@@ -965,8 +963,8 @@ func (a *App) GetBingDailyImage() (string, error) {
 	if imageURL == "" {
 		return "", fmt.Errorf("未获取到图片地址，状态码: %d", resp.StatusCode)
 	}
-	// 安全加固: 校验图片 URL 协议
-	if !strings.HasPrefix(imageURL, "http://") && !strings.HasPrefix(imageURL, "https://") {
+	// 安全加固: 用 ValidateURL 统一校验
+	if !ValidateURL(imageURL) {
 		return "", fmt.Errorf("无效的图片 URL 协议")
 	}
 	// 下载实际图片
@@ -1017,7 +1015,7 @@ func (a *App) fileToDataURL(path string) (string, error) {
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return "", err
+		return err
 	}
 	ext := strings.ToLower(filepath.Ext(path))
 	mimeMap := map[string]string{
