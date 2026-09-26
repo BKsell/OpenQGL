@@ -583,6 +583,9 @@ func (a *App) SetServerOnlineMode(name string, onlineMode bool) error {
 	if err != nil {
 		return err
 	}
+	if isPathTraversal(a.GetServerDir(), cfg.ServerDir) {
+		return fmt.Errorf("服务器目录路径不安全，拒绝修改")
+	}
 	propPath := filepath.Join(cfg.ServerDir, "server.properties")
 	content := ""
 	if data, err := os.ReadFile(propPath); err == nil {
