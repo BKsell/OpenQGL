@@ -11,13 +11,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
@@ -173,7 +172,7 @@ type XSTSAuthResponse struct {
 type MCLoginResponse struct {
 	AccessToken string `json:"access_token"`
 	ExpiresIn  int    `json:"expires_in"`
-	TokenType  string `json:"token_type"`
+	TokenType   string `json:"token_type"`
 	Username   string `json:"username"`
 	// 错误字段
 	Error            string `json:"error"`
@@ -217,13 +216,15 @@ func (a *App) StartMicrosoftLogin() (string, error) {
 		return "", fmt.Errorf("设备代码错误: %s - %s", dcResp.Error, dcResp.ErrorDescription)
 	}
 
+	// 只允许 https，避免协议被篡改成 file:// / javascript: 等
 	if !strings.HasPrefix(dcResp.VerificationURL, "https://") {
 		return "", fmt.Errorf("无效的验证 URL 协议")
 	}
 
-	openCmd := exec.Command("cmd", "/c", "start", "", dcResp.VerificationURL)
-	openCmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-	openCmd.Start()
+	// 安全修复：不要走 cmd.exe /c start，那会把 URL 拼进 shell 命令行，
+	// 一旦 VerificationURL 含 & 或 ^ 等 cmd 元字符就可能被解析成命令。
+	// runtime.BrowserOpenURL 直接交给系统默认浏览器，不经过 shell。
+	runtime.BrowserOpenURL(a.ctx, dcResp.VerificationURL)
 
 	runtime.ClipboardSetText(a.ctx, dcResp.UserCode)
 
@@ -702,13 +703,39 @@ type YggdrasilServerInfo struct {
 	Links YggdrasilServerLinks `json:"links"`
 }
 
+// isLoopbackOrPrivateHost 判断 host 是否为回环/私网地址
+func isLoopbackOrPrivateHost(host string) bool {
+	host = strings.TrimPrefix(host, "[")
+	host = strings.TrimSuffix(host, "]")
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast()
+	}
+	return false
+}
+
 // normalizeYggdrasilURL 规范化 Yggdrasil 服务器地址
+//
+// 安全要求：默认强制 HTTPS，因为 LoginYggdrasil 会明文 POST 用户密码。
+// 仅当 host 是回环/私网（127.x / 10.x / 192.168.x / 172.16-31.x / ::1）时
+// 才允许 http://，用于本地调试皮肤站。
 func normalizeYggdrasilURL(serverURL string) (string, error) {
 	serverURL = strings.TrimSpace(serverURL)
 	serverURL = strings.TrimSuffix(serverURL, "/")
 
 	if !strings.HasPrefix(serverURL, "http://") && !strings.HasPrefix(serverURL, "https://") {
 		return "", fmt.Errorf("无效的服务器地址协议，只支持 http/https")
+	}
+
+	// 解析 host，决定是否允许 http
+	u, err := url.Parse(serverURL)
+	if err != nil {
+		return "", fmt.Errorf("无法解析服务器地址: %v", err)
+	}
+	if u.Scheme == "http://" && !isLoopbackOrPrivateHost(u.Hostname()) {
+		return "", fmt.Errorf("禁止通过明文 HTTP 连接公网 Yggdrasil 服务器（密码会被窃听），请使用 https://")
 	}
 
 	if !strings.HasSuffix(serverURL, "/api/yggdrasil") {
