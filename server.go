@@ -28,6 +28,11 @@ const (
 	maxMemoryMB     = 32768
 	allowedDirPerm  = 0700
 	allowedFilePerm = 0600
+	// maxServerJarBytes 限制服务端 JAR 最大 2GB，防止畸形 Content-Length 把磁盘打爆。
+	// Mojang 官方服务端目前最大也就 ~70MB，2GB 留足余量。
+	maxServerJarBytes = 2 << 30
+	// httpTimeout 所有对 Mojang / BMCLAPI 的 HTTP 调用统一 5 分钟超时，避免卡死。
+	httpTimeout = 5 * time.Minute
 )
 
 // ServerConfig 服务器配置
@@ -70,6 +75,35 @@ func isValidPort(port int) bool {
 
 func isValidMemory(mem int) bool {
 	return mem >= minMemoryMB && mem <= maxMemoryMB
+}
+
+// safeGet 带超时和大小限制的 GET 封装。
+//   - ctx 用 context.WithTimeout 包一层，防止对端挂死连接；
+//   - maxBytes > 0 时用 http.MaxBytesReader 包 response body，
+//     防止服务端返回超大 body 把内存/磁盘打爆。
+func safeGet(client *http.Client, url string, maxBytes int64) (*http.Response, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), httpTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	// 明确 UA，避免被 CDN 当爬虫直接 403
+	req.Header.Set("User-Agent", "OpenQGL/1.0 (+https://github.com/CN-RTStudio/OpenQGL)")
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	if maxBytes > 0 {
+		resp.Body = struct {
+			io.Reader
+			io.Closer
+		}{
+			Reader: http.MaxBytesReader(nil, resp.Body, maxBytes),
+			Closer: resp.Body,
+		}
+	}
+	return resp, nil
 }
 
 // sanitizeServerName 清理服务器名称，防止路径遍历和特殊字符注入
@@ -232,7 +266,8 @@ func (a *App) downloadServerJar(version string, targetDir string) error {
 	versionURL = strings.Replace(versionURL, "https://piston-meta.mojang.com", "https://bmclapi2.bangbang93.com", 1)
 	versionURL = strings.Replace(versionURL, "https://launcher.mojang.com", "https://bmclapi2.bangbang93.com", 1)
 
-	resp, err := httpClient.Get(versionURL)
+	// 版本 JSON 很小，限制 8MB 足够
+	resp, err := safeGet(httpClient, versionURL, 8<<20)
 	if err != nil {
 		return fmt.Errorf("下载版本 JSON 失败: %v", err)
 	}
@@ -268,7 +303,7 @@ func (a *App) downloadServerJar(version string, targetDir string) error {
 	jarURL = strings.Replace(jarURL, "https://piston-data.mojang.com", "https://bmclapi2.bangbang93.com", 1)
 	jarURL = strings.Replace(jarURL, "https://launcher.mojang.com", "https://bmclapi2.bangbang93.com", 1)
 
-	dlResp, err := httpClient.Get(jarURL)
+	dlResp, err := safeGet(httpClient, jarURL, maxServerJarBytes)
 	if err != nil {
 		return fmt.Errorf("下载服务端 JAR 失败: %v", err)
 	}
@@ -527,7 +562,7 @@ func (a *App) getServerConfig(name string) (*ServerConfig, error) {
 	if err != nil {
 		list, listErr := a.GetServerList()
 		if listErr != nil {
-			return nil, fmt.Errorf("读取配置失败: %v", err)
+			return nil, fmt.Errorf("读取配置失败: %v", listErr)
 		}
 		for _, s := range list {
 			if s.Name == name {
