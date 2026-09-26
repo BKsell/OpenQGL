@@ -689,6 +689,9 @@ func (a *App) downloadJavaItem(majorVer int, url string) error {
 	if tempDir == "" {
 		tempDir = filepath.Join(os.Getenv("USERPROFILE"), "AppData", "Local", "Temp")
 	}
+	if strings.ContainsAny(target.FileName, `/\\`) || strings.HasPrefix(target.FileName, `..`) {
+		return fmt.Errorf(`不安全的 Java 安装文件名: %s`, target.FileName)
+	}
 	destPath := filepath.Join(tempDir, target.FileName)
 	if _, err := os.Stat(destPath); err == nil {
 		return runInstaller(destPath, target.IsMSI)
