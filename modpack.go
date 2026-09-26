@@ -227,12 +227,12 @@ func (a *App) SearchModpacks(query string, gameVersion string, page int, pageSiz
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		return nil, fmt.Errorf("搜索整合包失败: HTTP %d, %s", resp.StatusCode, string(body))
 	}
 
 	var result ModpackSearchResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := readAPIJSON(resp, &result); err != nil {
 		return nil, fmt.Errorf("解析搜索结果失败: %v", err)
 	}
 
@@ -271,7 +271,7 @@ func (a *App) GetModpackVersions(projectID string) ([]ModVersion, error) {
 	}
 
 	var versions []ModVersion
-	if err := json.NewDecoder(resp.Body).Decode(&versions); err != nil {
+	if err := readAPIJSON(resp, &versions); err != nil {
 		return nil, fmt.Errorf("解析版本列表失败: %v", err)
 	}
 
@@ -298,7 +298,7 @@ func (a *App) AddModpackToDownloadList(versionID string, customName string) erro
 	}
 
 	var version ModVersion
-	if err := json.NewDecoder(resp.Body).Decode(&version); err != nil {
+	if err := readAPIJSON(resp, &version); err != nil {
 		return fmt.Errorf("解析版本详情失败: %v", err)
 	}
 
