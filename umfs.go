@@ -315,6 +315,75 @@ func generateUMFSToken() string {
 	return umfsHash(b)
 }
 
+// ===== MT-XOR25 PRNG（bool-hybrid-array core.py _real_generator 移植）=====
+//
+// 与 Python 版一致：MT19937 状态 + twist 时用 os.urandom(1) 再随机化一次，
+// 输出时对 temper 结果再异或接下来 24 个状态字（共 25 字参与异或，故名 XOR25）。
+// 种子熵来自 crypto/rand（对应 Python 的 os.urandom(8)）+ UMFS 吸收。
+
+type mtXOR25 struct {
+	state [624]uint32
+	idx   int
+}
+
+func newMTXOR25() *mtXOR25 {
+	m := &mtXOR25{idx: 624}
+	entropy := make([]byte, 32)
+	_, _ = rand.Read(entropy)
+	seedBuf := NewUMFS(entropy).Absorb([]byte(time.Now().Format(time.RFC3339Nano))).Digest()
+	seed := uint32(seedBuf[0]) | uint32(seedBuf[1])<<8 | uint32(seedBuf[2])<<16 | uint32(seedBuf[3])<<24
+	m.state[0] = seed
+	for i := 1; i < 624; i++ {
+		m.state[i] = 1812433253*(m.state[i-1]^(m.state[i-1]>>30)) + uint32(i)
+	}
+	return m
+}
+
+func (m *mtXOR25) twist() {
+	for i := 0; i < 624; i++ {
+		y := (m.state[i] & 0x80000000) + (m.state[(i+1)%624] & 0x7FFFFFFF)
+		m.state[i] = m.state[(i+397)%624] ^ (y >> 1)
+		if y&1 == 1 {
+			m.state[i] ^= 0x9908B0DF
+			var b [1]byte
+			_, _ = rand.Read(b[:])
+			m.state[i] += uint32(b[0])
+		}
+	}
+	m.idx = 0
+}
+
+func (m *mtXOR25) next() uint32 {
+	if m.idx >= 624 {
+		m.twist()
+	}
+	y := m.state[m.idx]
+	m.idx++
+	y ^= y >> 11
+	y ^= (y << 7) & 0x9D2C5680
+	y ^= (y << 15) & 0xEFC60000
+	y ^= y >> 18
+	xorResult := y
+	for i := 1; i <= 25; i++ {
+		xorResult ^= m.state[(m.idx+i-1)%624]
+	}
+	return xorResult
+}
+
+func (m *mtXOR25) bytes(n int) []byte {
+	out := make([]byte, 0, n)
+	for len(out) < n {
+		v := m.next()
+		out = append(out, byte(v), byte(v>>8), byte(v>>16), byte(v>>24))
+	}
+	return out[:n]
+}
+
+// mtXOR25Bytes 返回 n 字节 mt_xor25 随机流（bool-hybrid-array 生态）。
+func mtXOR25Bytes(n int) []byte {
+	return newMTXOR25().bytes(n)
+}
+
 var _ hash.Hash = (*UMFSHash)(nil)
 
 // ===== 文件完整性校验辅助 =====
