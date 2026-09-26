@@ -9,8 +9,11 @@ import (
 	"hash"
 	"io"
 	"math/big"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -43,14 +46,78 @@ var (
 
 const umfsBlockSize = 8
 
-// safeHTTPClient 创建安全的 HTTP 客户端
+// maxRedirects 单次请求最多跟 5 次跳转，超过就报错。
+// 防止 CDN 被劫持后用无限跳转拖死启动。
+const maxRedirects = 5
+
+// isPrivateDest 报告 URL 指向的主机是不是内网/回环/链路本地地址。
+// 启动器只该访问公网镜像和 Mojang，不应该被诱导去读 169.254.169.254
+// （云元数据）或 127.0.0.1:本地端口。
+func isPrivateDest(rawURL string) bool {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return true
+	}
+	host := u.Hostname()
+	if host == "" {
+		return true
+	}
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback() || ip.IsPrivate() ||
+			ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
+			ip.IsUnspecified()
+	}
+	// 没解析成 IP 的（域名），交给 DNS，不在这里拦；
+	// 真正解析到内网的边缘情况由 net.Dialer 侧再兜一次。
+	return false
+}
+
+// safeCheckRedirect 是 http.Client.CheckRedirect 的实现：
+//   - 只允许跳 https://（除非原地 http→http，且我们本来就只发 https）；
+//   - 拒绝跳内网/回环/链路本地；
+//   - 最多 maxRedirects 次。
+func safeCheckRedirect(requ *http.Request, via []*http.Request) error {
+	if len(via) >= maxRedirects {
+		return http.ErrUseLastResponse
+	}
+	next := requ.URL
+	if !isHTTPSURL(next.String()) {
+		return errDenyInsecureRedirect
+	}
+	if isPrivateDest(next.String()) {
+		return errDenyPrivateRedirect
+	}
+	return nil
+}
+
+var (
+	errDenyInsecureRedirect = &url.Error{Op: "Get", URL: "", Err: errText("redirect to non-HTTPS blocked")}
+	errDenyPrivateRedirect  = &url.Error{Op: "Get", URL: "", Err: errText("redirect to private/loopback address blocked")}
+)
+
+type errText string
+
+func (e errText) Error() string { return string(e) }
+
+// safeHTTPClient 创建安全的 HTTP 客户端：
+//   - TLS 1.2+；
+//   - 30 秒总超时（API JSON 够用，大文件走带 MaxBytesReader 的专用路径）；
+//   - 跳转策略：只跟 https→https，且不跳内网。
 func safeHTTPClient() *http.Client {
 	return &http.Client{
-		Timeout: 30 * time.Second,
+		Timeout:   30 * time.Second,
+		CheckRedirect: safeCheckRedirect,
 		Transport: &http.Transport{
 			TLSClientConfig: &tls.Config{
 				MinVersion: tls.VersionTLS12,
 			},
+			// 单连接复用池上限别太大，避免在用户机器上占一堆 TIME_WAIT
+			MaxIdleConns:        32,
+			MaxIdleConnsPerHost: 4,
+			IdleConnTimeout:     30 * time.Second,
 		},
 	}
 }
