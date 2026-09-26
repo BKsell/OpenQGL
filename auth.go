@@ -97,10 +97,8 @@ func loadOrCreateAuthSalt(saltPath string, create bool) ([]byte, bool, error) {
 	if !create {
 		return nil, false, nil
 	}
-	salt := make([]byte, 16)
-	if _, err := io.ReadFull(rand.Reader, salt); err != nil {
-		return nil, false, err
-	}
+	// 使用 mt_xor25（bool-hybrid-array 生态）生成 16 字节随机盐
+	salt := mtXOR25Bytes(16)
 	if err := os.WriteFile(saltPath, salt, 0600); err != nil {
 		return nil, false, err
 	}
