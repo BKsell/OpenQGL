@@ -36,6 +36,13 @@ var (
 	procCloseHandle     = kernel32DLL.NewProc("CloseHandle")
 )
 
+// 下载体积上限，防止恶意服务器用无限流把磁盘/内存写爆。
+const (
+	maxJavaInstallerBytes    = 500 << 20 // 500 MiB，JRE 安装包实际 ~40-70 MiB
+	maxAuthlibPrefetchBytes  = 1 << 20  // 1 MiB，authlibinjector 抓取的皮肤站首页
+	maxVersionManifestBytes   = 8 << 20  // 8 MiB，版本清单/资产索引 JSON
+)
+
 // MCVersion 表示一个 Minecraft 版本
 type MCVersion struct {
 	ID          string `json:"id"`
@@ -294,7 +301,7 @@ func (a *App) GetVersionManifest() ([]MCVersion, error) {
 			lastErr = err
 			continue
 		}
-		body, readErr := io.ReadAll(resp.Body)
+		body, readErr := io.ReadAll(io.LimitReader(resp.Body, maxVersionManifestBytes))
 		resp.Body.Close()
 		if readErr != nil {
 			lastErr = readErr
@@ -687,6 +694,9 @@ func (a *App) downloadJavaItem(majorVer int, url string) error {
 		return runInstaller(destPath, target.IsMSI)
 	}
 	a.emitProgress("downloading", target.FileName, 0, 0)
+	if !isHTTPSURL(url) {
+		return fmt.Errorf("拒绝不安全的 Java 下载 URL（非 HTTPS）: %s", url)
+	}
 	resp, err := safeHTTPClient().Get(url)
 	if err != nil {
 		return fmt.Errorf("下载失败: %v", err)
@@ -695,6 +705,8 @@ func (a *App) downloadJavaItem(majorVer int, url string) error {
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("下载失败: HTTP %d", resp.StatusCode)
 	}
+	// 硬上限：超过 500 MiB 直接拒绝，防恶意服务器用无限流写爆磁盘
+	limitedBody := http.MaxBytesReader(nil, resp.Body, maxJavaInstallerBytes)
 	out, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
 	if err != nil {
 		return fmt.Errorf("创建文件失败: %v", err)
@@ -704,7 +716,7 @@ func (a *App) downloadJavaItem(majorVer int, url string) error {
 	var downloaded int64
 	buf := make([]byte, 32*1024)
 	for {
-		n, readErr := resp.Body.Read(buf)
+		n, readErr := limitedBody.Read(buf)
 		if n > 0 {
 			_, werr := out.Write(buf[:n])
 			if werr != nil {
@@ -1815,9 +1827,12 @@ func (a *App) LaunchGame(versionID string) error {
 				if isHTTPSURL(serverURL) {
 					resp, err := safeHTTPClient().Get(serverURL)
 					if err == nil {
-						body, _ := io.ReadAll(resp.Body)
+						// 皮肤站首页本应几 KB；限制 1 MiB，防止恶意服务器返回几十 MB 把 JVM 命令行撑爆
+						body, _ := io.ReadAll(io.LimitReader(resp.Body, maxAuthlibPrefetchBytes))
 						resp.Body.Close()
-						prefetched = base64.StdEncoding.EncodeToString(body)
+						if len(body) < int(maxAuthlibPrefetchBytes) {
+							prefetched = base64.StdEncoding.EncodeToString(body)
+						}
 					}
 				}
 				injectorArgs := []string{"-javaagent:" + injectorPath + "=" + serverURL, "-Dauthlibinjector.side=client"}
