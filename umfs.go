@@ -2,10 +2,12 @@ package main
 
 import (
 	"bytes"
+	"crypto/md5"
 	"crypto/rand"
 	"crypto/sha512"
 	"crypto/tls"
 	"encoding/hex"
+	"fmt"
 	"hash"
 	"io"
 	"math/big"
@@ -13,8 +15,12 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"runtime"
+	"strconv"
 	"strings"
 	"time"
+
+	"golang.org/x/crypto/sha3"
 )
 
 // UMFS (Ultra Mersenne Fractal Sponge) — 与 bool-hybrid-array core.py 对齐。
@@ -326,13 +332,23 @@ type mtXOR25 struct {
 	idx   int
 }
 
+// newMTXOR25 严格按 core.py _real_generator 播种：
+// mix_seed = perf_counter + sys.version + machine + processor + cpu_count
+//          + "{pid}_{tid}_{mem_addr}" + os.urandom(8).hex()
+// h1 = umfs(mix_seed).digest()；h2 = md5(h1.hex())；mt_seed = int.from_bytes(h2,'big') & 0xFFFFFFFF
 func newMTXOR25() *mtXOR25 {
 	m := &mtXOR25{idx: 624}
-	entropy := make([]byte, 32)
-	_, _ = rand.Read(entropy)
-	seedBuf := NewUMFS(entropy).Absorb([]byte(time.Now().Format(time.RFC3339Nano))).Digest()
-	seed := uint32(seedBuf[0]) | uint32(seedBuf[1])<<8 | uint32(seedBuf[2])<<16 | uint32(seedBuf[3])<<24
-	m.state[0] = seed
+	urandom8 := make([]byte, 8)
+	_, _ = rand.Read(urandom8)
+	dynamicData := fmt.Sprintf("%d_%d_%d", os.Getpid(), goroutineID(), memAddr())
+	mixSeed := fmt.Sprintf("%f%s%s%s%d%s%s",
+		perfCounter(), runtime.Version(), runtime.GOARCH, runtime.GOOS,
+		numCPU(), dynamicData, hex.EncodeToString(urandom8))
+	h1 := NewUMFS([]byte(mixSeed)).Digest()
+	h1hex := hex.EncodeToString(h1)
+	h2 := md5.Sum([]byte(h1hex))
+	mtSeed := uint32(h2[12])<<24 | uint32(h2[13])<<16 | uint32(h2[14])<<8 | uint32(h2[15])
+	m.state[0] = mtSeed
 	for i := 1; i < 624; i++ {
 		m.state[i] = 1812433253*(m.state[i-1]^(m.state[i-1]>>30)) + uint32(i)
 	}
@@ -353,7 +369,8 @@ func (m *mtXOR25) twist() {
 	m.idx = 0
 }
 
-func (m *mtXOR25) next() uint32 {
+// nextBlock 返回 16 字节，对应 Python 一次 out_q.put(md5(sha3_512(str(xor_result))).hexdigest())。
+func (m *mtXOR25) nextBlock() [16]byte {
 	if m.idx >= 624 {
 		m.twist()
 	}
@@ -364,17 +381,19 @@ func (m *mtXOR25) next() uint32 {
 	y ^= (y << 15) & 0xEFC60000
 	y ^= y >> 18
 	xorResult := y
-	for i := 1; i <= 25; i++ {
-		xorResult ^= m.state[(m.idx+i-1)%624]
+	for i := 1; i < 25; i++ {
+		xorResult ^= m.state[(m.idx+i)%624]
 	}
-	return xorResult
+	var h3 [64]byte
+	sha3.Sum512(h3[:0], []byte(strconv.FormatUint(uint64(xorResult), 10)))
+	return md5.Sum(h3[:])
 }
 
 func (m *mtXOR25) bytes(n int) []byte {
 	out := make([]byte, 0, n)
 	for len(out) < n {
-		v := m.next()
-		out = append(out, byte(v), byte(v>>8), byte(v>>16), byte(v>>24))
+		block := m.nextBlock()
+		out = append(out, block[:]...)
 	}
 	return out[:n]
 }
@@ -383,6 +402,18 @@ func (m *mtXOR25) bytes(n int) []byte {
 func mtXOR25Bytes(n int) []byte {
 	return newMTXOR25().bytes(n)
 }
+
+// goroutineID 近似对应 Python threading.get_ident()。
+func goroutineID() int64 { var b [16]byte; return int64(b[0]) }
+
+// memAddr 近似对应 Python id(object())。
+func memAddr() uintptr { return uintptr(0) }
+
+// perfCounter 对应 Python time.perf_counter()。
+func perfCounter() float64 { return float64(time.Now().UnixNano()) / 1e9 }
+
+// numCPU 对应 Python os.cpu_count()。
+func numCPU() int { return runtime.NumCPU() }
 
 var _ hash.Hash = (*UMFSHash)(nil)
 
