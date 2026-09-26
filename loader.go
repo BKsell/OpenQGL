@@ -37,6 +37,23 @@ func readLimited(r io.Reader, maxSize int64) ([]byte, error) {
 	return io.ReadAll(io.LimitReader(r, maxSize))
 }
 
+// apiJSONMaxBytes 限制所有元数据 API 返回的 JSON 响应大小。
+// 版本清单 / Loader 列表等接口本应返回几 KB ~ 几百 KB，
+// 超过 10 MiB 基本就是恶意响应或错误页面，直接拒绝。
+const apiJSONMaxBytes = 10 << 20
+
+// readAPIJSON 读 resp.Body 并在 10 MiB 上限内 Unmarshal。
+func readAPIJSON(resp *http.Response, v interface{}) error {
+	body, err := readLimited(resp.Body, apiJSONMaxBytes)
+	if err != nil {
+		return err
+	}
+	if int64(len(body)) >= apiJSONMaxBytes {
+		return fmt.Errorf("API 响应超过 %d 字节上限", apiJSONMaxBytes)
+	}
+	return json.Unmarshal(body, v)
+}
+
 // isSafeFileName 验证版本名/文件名只包含安全字符
 // 防止路径遍历攻击（../, /, \ 等），只允许字母、数字、点、下划线、短横线
 func isSafeFileName(name string) bool {
@@ -178,15 +195,14 @@ func (a *App) GetForgeVersions(mcVersion string) ([]LoaderInfo, error) {
 	}
 
 	var entries []BMCLAPIForgeEntry
-	if err := json.NewDecoder(resp.Body).Decode(&entries); err != nil {
+	if err := readAPIJSON(resp, &entries); err != nil {
 		return nil, fmt.Errorf("解析 Forge 版本失败: %v", err)
 	}
 
 	recommendedVersion := ""
-	promosResp, err := safeHTTPClient().Get("https://bmclapi2.bangbang93.com/forge/promos")
-	if err == nil && promosResp.StatusCode == http.StatusOK {
+	if promosResp, promosErr := safeHTTPClient().Get("https://bmclapi2.bangbang93.com/forge/promos"); promosErr == nil && promosResp.StatusCode == http.StatusOK {
 		var promos map[string]string
-		if json.NewDecoder(promosResp.Body).Decode(&promos) == nil {
+		if promosErr2 := readAPIJSON(promosResp, &promos); promosErr2 == nil {
 			recommendedVersion = promos[mcVersion+"-recommended"]
 		}
 		promosResp.Body.Close()
@@ -300,7 +316,7 @@ func (a *App) GetFabricVersions(mcVersion string) ([]LoaderInfo, error) {
 		} `json:"game"`
 		Loader []FabricLoaderVersion `json:"loader"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&fabricMeta); err != nil {
+	if err := readAPIJSON(resp, &fabricMeta); err != nil {
 		return nil, fmt.Errorf("解析 Fabric 版本失败: %v", err)
 	}
 
@@ -450,7 +466,7 @@ func fetchNeoForgeVersionList(apiURL string) ([]string, error) {
 		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := readLimited(resp.Body, apiJSONMaxBytes)
 	if err != nil {
 		return nil, err
 	}
@@ -495,7 +511,7 @@ func (a *App) GetOptiFineVersions(mcVersion string) ([]LoaderInfo, error) {
 	}
 
 	var allEntries []BMCLAPIOptiFineEntry
-	if err := json.NewDecoder(resp.Body).Decode(&allEntries); err != nil {
+	if err := readAPIJSON(resp, &allEntries); err != nil {
 		return nil, fmt.Errorf("解析 OptiFine 版本失败: %v", err)
 	}
 
@@ -1417,7 +1433,7 @@ func (a *App) InstallFabric(mcVersion string, loaderVersion string) error {
 	}
 
 	var profileJSON map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&profileJSON); err != nil {
+	if err := readAPIJSON(resp, &profileJSON); err != nil {
 		return fmt.Errorf("解析 Fabric profile 失败: %v", err)
 	}
 
