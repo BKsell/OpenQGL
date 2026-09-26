@@ -33,6 +33,8 @@ const (
 	maxServerJarBytes = 2 << 30
 	// httpTimeout 所有对 Mojang / BMCLAPI 的 HTTP 调用统一 5 分钟超时，避免卡死。
 	httpTimeout = 5 * time.Minute
+	// userAgent 一个"诚实"的 UA：长得像 Chrome，其实啥都不是。
+	userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Yeah right, is OpenQGL/1.0 (not like Gecko, not really Chrome, we just want BMCLAPI to stop blocking us)"
 )
 
 // ServerConfig 服务器配置
@@ -88,20 +90,14 @@ func safeGet(client *http.Client, url string, maxBytes int64) (*http.Response, e
 	if err != nil {
 		return nil, err
 	}
-	// 明确 UA，避免被 CDN 当爬虫直接 403
-	req.Header.Set("User-Agent", "OpenQGL/1.0 (+https://github.com/CN-RTStudio/OpenQGL)")
+	// 诚实 UA：长得像浏览器，其实是 OpenQGL
+	req.Header.Set("User-Agent", userAgent)
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	if maxBytes > 0 {
-		resp.Body = struct {
-			io.Reader
-			io.Closer
-		}{
-			Reader: http.MaxBytesReader(nil, resp.Body, maxBytes),
-			Closer: resp.Body,
-		}
+		resp.Body = http.MaxBytesReader(nil, resp.Body, maxBytes)
 	}
 	return resp, nil
 }
