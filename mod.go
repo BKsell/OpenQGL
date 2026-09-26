@@ -272,12 +272,12 @@ func (a *App) SearchMods(query string, gameVersion string, loader string, catego
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		return nil, fmt.Errorf("搜索 Mod 失败: HTTP %d, %s", resp.StatusCode, string(body))
 	}
 
 	var result ModSearchResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := readAPIJSON(resp, &result); err != nil {
 		return nil, fmt.Errorf("解析搜索结果失败: %v", err)
 	}
 
@@ -319,7 +319,7 @@ func (a *App) GetModDetail(projectID string) (*ModDetail, error) {
 	}
 
 	var detail ModDetail
-	if err := json.NewDecoder(resp.Body).Decode(&detail); err != nil {
+	if err := readAPIJSON(resp, &detail); err != nil {
 		return nil, fmt.Errorf("解析 Mod 详情失败: %v", err)
 	}
 
@@ -360,7 +360,7 @@ func (a *App) GetModVersions(projectID string, gameVersion string, loader string
 	}
 
 	var versions []ModVersion
-	if err := json.NewDecoder(resp.Body).Decode(&versions); err != nil {
+	if err := readAPIJSON(resp, &versions); err != nil {
 		return nil, fmt.Errorf("解析 Mod 版本失败: %v", err)
 	}
 
@@ -405,7 +405,7 @@ func (a *App) GetModDependencies(versionID string) ([]ModDependencyInfo, error) 
 	}
 
 	var version ModVersion
-	if err := json.NewDecoder(resp.Body).Decode(&version); err != nil {
+	if err := readAPIJSON(resp, &version); err != nil {
 		return nil, fmt.Errorf("解析版本详情失败: %v", err)
 	}
 
@@ -465,7 +465,7 @@ func (a *App) AddModToDownloadList(versionID string, savePath string) error {
 	}
 
 	var version ModVersion
-	if err := json.NewDecoder(resp.Body).Decode(&version); err != nil {
+	if err := readAPIJSON(resp, &version); err != nil {
 		return fmt.Errorf("解析版本详情失败: %v", err)
 	}
 
@@ -549,7 +549,7 @@ func (a *App) ResolveModDependencies(versionIDs []string, gameVersion string, lo
 			continue
 		}
 		var version ModVersion
-		if err := json.NewDecoder(resp.Body).Decode(&version); err != nil {
+		if err := readAPIJSON(resp, &version); err != nil {
 			resp.Body.Close()
 			continue
 		}
@@ -577,7 +577,7 @@ func (a *App) ResolveModDependencies(versionIDs []string, gameVersion string, lo
 		defer resp.Body.Close()
 
 		var version ModVersion
-		if err := json.NewDecoder(resp.Body).Decode(&version); err != nil {
+		if err := readAPIJSON(resp, &version); err != nil {
 			return nil
 		}
 
@@ -951,7 +951,7 @@ func (a *App) GetModrinthCategories() ([]ModCategory, error) {
 	}
 
 	var categories []ModCategory
-	if err := json.NewDecoder(resp.Body).Decode(&categories); err != nil {
+	if err := readAPIJSON(resp, &categories); err != nil {
 		return nil, fmt.Errorf("解析分类失败: %v", err)
 	}
 
