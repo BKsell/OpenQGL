@@ -280,8 +280,10 @@ func (a *App) StartMicrosoftLogin() (string, error) {
 // pollMicrosoftToken 轮询微软令牌，到达设备码过期时间后自动退出
 func (a *App) pollMicrosoftToken(dc DeviceCodeResponse) {
 	interval := 5
-	if dc.Interval > 0 {
+	if dc.Interval >= 5 {
 		interval = dc.Interval
+	} else if dc.Interval > 0 {
+		interval = 5
 	}
 	ttl := time.Duration(dc.ExpiresIn) * time.Second
 	if ttl <= 0 {
