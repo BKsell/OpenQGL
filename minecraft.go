@@ -675,8 +675,8 @@ func (a *App) downloadJavaItem(majorVer int, url string) error {
 	}
 	if target.IsWebPage {
 		parsedURL, parseErr := url.Parse(url)
-		if parseErr != nil || (parsedURL.Scheme != "http" && parsedURL.Scheme != "https") {
-			return fmt.Errorf("invalid URL protocol: %s", url)
+		if parseErr != nil || parsedURL.Scheme != "https" {
+			return fmt.Errorf("Java 下载页面必须使用 HTTPS: %s", url)
 		}
 		cmd := exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
 		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
