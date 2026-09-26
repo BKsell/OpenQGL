@@ -75,9 +75,36 @@ type ExternalAuthDataEncrypted struct {
 
 // getEncryptionKey 使用 PBKDF2 派生 32 字节 AES 密钥
 // 使用 UMFS 作为底层哈希函数（bool-hybrid-array 生态）
-func getEncryptionKey(username string) []byte {
-	salt := []byte(pbkdf2Salt + username)
+// salt 为每用户随机持久化盐（ms_auth.salt）；为空时回退到旧硬编码盐以兼容老数据
+func getEncryptionKey(username string, salt []byte) []byte {
+	if len(salt) == 0 {
+		salt = []byte(pbkdf2Salt + username)
+	} else {
+		combined := make([]byte, 0, len(salt)+len(username))
+		combined = append(combined, salt...)
+		combined = append(combined, username...)
+		salt = combined
+	}
 	return pbkdf2.Key([]byte(username), salt, pbkdf2Iterations, pbkdf2KeyLength, NewUMFSHash)
+}
+
+// loadOrCreateAuthSalt 读取用户目录下的随机盐文件；不存在且 create=true 时生成 16 字节随机盐并落盘。
+// 读老数据时若文件不存在，返回 (nil, false)，调用方回退到旧硬编码盐。
+func loadOrCreateAuthSalt(saltPath string, create bool) ([]byte, bool, error) {
+	if data, err := os.ReadFile(saltPath); err == nil && len(data) >= 16 {
+		return data, false, nil
+	}
+	if !create {
+		return nil, false, nil
+	}
+	salt := make([]byte, 16)
+	if _, err := io.ReadFull(rand.Reader, salt); err != nil {
+		return nil, false, err
+	}
+	if err := os.WriteFile(saltPath, salt, 0600); err != nil {
+		return nil, false, err
+	}
+	return salt, true, nil
 }
 
 // aesGCMEncrypt 使用 AES-GCM 加密数据，返回 base64 编码的密文
@@ -633,7 +660,9 @@ func (a *App) GetMSAuthData(username string) (*MSAuthData, error) {
 	}
 	var encData MSAuthDataEncrypted
 	if err := json.Unmarshal(data, &encData); err == nil && encData.Data != "" {
-		key := getEncryptionKey(username)
+		saltPath := filepath.Join(a.GetUsersDir(), username, "ms_auth.salt")
+		salt, _, _ := loadOrCreateAuthSalt(saltPath, false)
+		key := getEncryptionKey(username, salt)
 		decrypted, err := aesGCMDecrypt(encData.Data, key)
 		if err != nil {
 			return nil, fmt.Errorf("解密认证数据失败: %w", err)
@@ -673,7 +702,9 @@ func (a *App) SaveMSAuthData(username string, authData *MSAuthData) error {
 	if err != nil {
 		return err
 	}
-	key := getEncryptionKey(username)
+	saltPath := filepath.Join(userDir, "ms_auth.salt")
+	salt, _, _ := loadOrCreateAuthSalt(saltPath, true)
+	key := getEncryptionKey(username, salt)
 	encrypted, err := aesGCMEncrypt(payloadBytes, key)
 	if err != nil {
 		return fmt.Errorf("加密认证数据失败: %w", err)
