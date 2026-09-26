@@ -28,6 +28,9 @@ const (
 // 安全加固: bcrypt 成本因子
 const bcryptCost = 12
 
+// maxBackgroundImageBytes 限制背景图片最大 10MB，防止恶意 CDN 塞个多 G 文件。
+const maxBackgroundImageBytes = 10 << 20
+
 // UserInfo 用户信息
 type UserInfo struct {
 	Username    string   `json:"username"`
@@ -818,11 +821,57 @@ func (a *App) GetBackgroundImage() string {
 	return config.BackgroundImage
 }
 
+// isSafeBackgroundPath 校验背景图片路径：
+//  1. 文件必须存在且是普通文件；
+//  2. 扩展名必须是图片类型；
+//  3. 路径必须落在 QGL/cache 或用户 Pictures 目录下。
+//
+// 防的是：renderer 通过 SetBackgroundImage 把 C:\Users\xxx\.ssh\id_rsa 这种
+// 任意文件塞进来，再调 GetBackgroundImageDataURL 把它 base64 读走。
+func (a *App) isSafeBackgroundPath(p string) bool {
+	if p == "" {
+		return false
+	}
+	info, err := os.Stat(p)
+	if err != nil || info.IsDir() || info.Size() > maxBackgroundImageBytes {
+		return false
+	}
+	switch strings.ToLower(filepath.Ext(p)) {
+	case ".jpg", ".jpeg", ".png", ".bmp", ".webp":
+	default:
+		return false
+	}
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		return false
+	}
+	allowedRoots := []string{
+		filepath.Join(a.GetQGLDir(), "cache"),
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		allowedRoots = append(allowedRoots,
+			filepath.Join(home, "Pictures"),
+			filepath.Join(home, "Videos"),
+		)
+	}
+	for _, root := range allowedRoots {
+		rel, err := filepath.Rel(root, abs)
+		if err == nil && !strings.HasPrefix(rel, "..") && rel != "." {
+			return true
+		}
+	}
+	return false
+}
+
 // SetBackgroundImage 设置当前用户的背景图片路径
 func (a *App) SetBackgroundImage(path string) error {
 	currentUser, err := a.GetCurrentUser()
 	if err != nil {
 		return fmt.Errorf("未登录")
+	}
+	// 安全加固：不接受任意路径，只能是 Pictures/Videos 或 QGL/cache 下的图片
+	if !a.isSafeBackgroundPath(path) {
+		return fmt.Errorf("背景图片路径不安全或不在允许目录内")
 	}
 	config, err := a.GetUserConfig(currentUser.Username)
 	if err != nil {
@@ -855,6 +904,10 @@ func (a *App) SelectBackgroundImage() (string, error) {
 func (a *App) GetBackgroundImageDataURL() string {
 	path := a.GetBackgroundImage()
 	if path == "" || !fileExists(path) {
+		return ""
+	}
+	// 安全加固：即使 config 里残留了老路径，读之前再校一遍
+	if !a.isSafeBackgroundPath(path) {
 		return ""
 	}
 	url, err := a.fileToDataURL(path)
@@ -895,10 +948,14 @@ func (a *App) GetBingDailyImage() (string, error) {
 	if resp.StatusCode == 302 || resp.StatusCode == 301 || resp.StatusCode == 307 || resp.StatusCode == 308 {
 		imageURL = resp.Header.Get("Location")
 	} else if resp.StatusCode == 200 {
-		// 有些 API 直接返回图片
-		data, err := io.ReadAll(resp.Body)
+		// 有些 API 直接返回图片，限 10MB 防超大 body
+		limited := io.LimitReader(resp.Body, maxBackgroundImageBytes)
+		data, err := io.ReadAll(limited)
 		if err != nil {
 			return "", fmt.Errorf("读取响应失败: %w", err)
+		}
+		if len(data) >= maxBackgroundImageBytes {
+			return "", fmt.Errorf("Bing 图片过大，已拒绝")
 		}
 		if err := os.WriteFile(cachePath, data, 0600); err != nil {
 			return "", fmt.Errorf("缓存图片失败: %w", err)
@@ -921,13 +978,18 @@ func (a *App) GetBingDailyImage() (string, error) {
 	if imgResp.StatusCode != 200 {
 		return "", fmt.Errorf("下载失败，状态码: %d", imgResp.StatusCode)
 	}
-	data, err := io.ReadAll(imgResp.Body)
+	// 限 10MB，防止恶意 CDN 塞个多 G 文件
+	limited := io.LimitReader(imgResp.Body, maxBackgroundImageBytes)
+	data, err := io.ReadAll(limited)
 	if err != nil {
 		return "", fmt.Errorf("读取图片数据失败: %w", err)
 	}
+	if len(data) >= maxBackgroundImageBytes {
+		return "", fmt.Errorf("图片过大，已拒绝")
+	}
 	// 缓存到本地
 	if err := os.WriteFile(cachePath, data, 0600); err != nil {
-		return "", fmt.Errorf("缓存图片失败: %w", err)
+		return fmt.Errorf("缓存图片失败: %w", err)
 	}
 	// 设置为当前背景
 	a.SetBackgroundImage(cachePath)
