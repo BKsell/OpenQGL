@@ -238,6 +238,9 @@ type MCEntitlementResponse struct {
 
 // StartMicrosoftLogin 开始微软登录流程（Device Code Flow）
 func (a *App) StartMicrosoftLogin() (string, error) {
+	if !authRateLimiter.Allow("ms-start") {
+		return "", fmt.Errorf("登录请求过于频繁，请稍后再试")
+	}
 	data := url.Values{
 		"client_id": {oauthClientID},
 		"scope":     {oauthScope},
@@ -593,6 +596,9 @@ func (a *App) getMCProfile(mcAccessToken string) (*MCProfileResponse, error) {
 
 // RefreshMicrosoftToken 刷新微软令牌
 func (a *App) RefreshMicrosoftToken(username string) error {
+	if !authRateLimiter.Allow("ms-refresh-" + username) {
+		return fmt.Errorf("刷新令牌过于频繁，请稍后再试")
+	}
 	if err := validateUsername(username); err != nil {
 		return err
 	}
@@ -825,6 +831,9 @@ func (a *App) GetYggdrasilServerInfo(serverURL string) (*YggdrasilServerInfo, er
 
 // LoginYggdrasil Yggdrasil 外置登录
 func (a *App) LoginYggdrasil(serverURL string, username string, password string) (*ExternalAuthData, error) {
+	if !authRateLimiter.Allow("ygg-" + username) {
+		return nil, fmt.Errorf("登录请求过于频繁，请稍后再试")
+	}
 	normalized, err := normalizeYggdrasilURL(serverURL)
 	if err != nil {
 		return nil, err
