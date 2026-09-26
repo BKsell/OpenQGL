@@ -138,6 +138,11 @@ const modrinthBaseURL = "https://api.modrinth.com/v2"
 // 之前 downloadModItem 下载完根本不校验哈希，镜像源被投毒或 CDN 被中间人替换都不会被发现。
 var modExpectedHashes = map[string]map[string]string{}
 
+// modExpectedSizes 记录 Modrinth 声明的文件大小，下载完再核对一遍。
+// 光有哈希不够：攻击者让镜像返回一个"刚好哈希对得上"的小文件（比如把 jar 替换成几字节的
+// 自解压脚本）也不行；Size 是 Modrinth 自己签的元数据，多一层防线。
+var modExpectedSizes = map[string]int64{}
+
 // recordModHashes 把 Modrinth 给的哈希登记到待校验集合。
 func recordModHashes(fileURL string, f ModFile) {
 	if fileURL == "" {
@@ -157,11 +162,23 @@ func recordModHashes(fileURL string, f ModFile) {
 	if len(hashes) > 0 {
 		modExpectedHashes[fileURL] = hashes
 	}
+	if f.Size > 0 {
+		modExpectedSizes[fileURL] = f.Size
+	}
 }
 
 // verifyModDownloaded 用 Modrinth 给的哈希校验刚下载的 mod jar。
 // 优先全长 sha512，缺了再 sha1；都没有就跳过（不阻塞老版本 API 响应）。
+// 同时核对文件大小是否和 Modrinth 声明一致。
 func verifyModDownloaded(destPath, fileURL string) error {
+	info, err := os.Stat(destPath)
+	if err != nil {
+		return err
+	}
+	if wantSize, ok := modExpectedSizes[fileURL]; ok && wantSize > 0 && info.Size() != wantSize {
+		return fmt.Errorf("文件大小不匹配：Modrinth 声明 %d 字节，实际 %d 字节（可能被截断或替换）",
+			wantSize, info.Size())
+	}
 	hashes, ok := modExpectedHashes[fileURL]
 	if !ok {
 		return nil
@@ -471,7 +488,7 @@ func (a *App) AddModToDownloadList(versionID string, savePath string) error {
 		return fmt.Errorf("不安全的下载 URL（非 HTTPS）")
 	}
 
-	// 登记 Modrinth 给的哈希，下载完会校验
+	// 登记 Modrinth 给的哈希和期望大小，下载完会校验
 	recordModHashes(primaryFile.URL, *primaryFile)
 
 	if savePath == "" {
@@ -766,7 +783,19 @@ func (a *App) ImportMod(versionID string) error {
 	}
 	defer src.Close()
 
-	fileName := filepath.Base(path)
+	// 安全：用户手动导入的 jar 也别让它超过 2 GiB，避免被人塞个 4GB 的奇怪东西
+	srcStat, err := src.Stat()
+	if err != nil {
+		return fmt.Errorf("读取源文件信息失败: %v", err)
+	}
+	if srcStat.Size() <= 0 || srcStat.Size() > maxDownloadBytes {
+		return fmt.Errorf("Mod 文件大小异常（%d 字节），拒绝导入", srcStat.Size())
+	}
+
+	fileName := SanitizeFilename(filepath.Base(path))
+	if fileName == "" || !strings.HasSuffix(strings.ToLower(fileName), ".jar") {
+		return fmt.Errorf("Mod 文件名无效")
+	}
 	destPath := filepath.Join(modsDir, fileName)
 
 	if _, err := os.Stat(destPath); err == nil {
@@ -851,6 +880,16 @@ func (a *App) downloadModItem(item *DownloadItem) error {
 		return fmt.Errorf("下载 Mod 失败: HTTP %d", resp.StatusCode)
 	}
 
+	// 关键：用 Modrinth 给的 Size 做一道硬上限；ContentLength 不可信（chunked 时是 -1）。
+	// MaxBytesReader 多写一字节就报错，防恶意镜像返回无限流。
+	effectiveCap := int64(maxDownloadBytes)
+	if wantSize, ok := modExpectedSizes[item.URL]; ok && wantSize > 0 {
+		// 允许比声明稍大一点（Modrinth 的 Size 本身就是文件大小，理论上严格相等，
+		// 这里给 1% 余量防止 CDN 加多字节尾部但哈希仍对的极端情况）
+		effectiveCap = wantSize + wantSize/100 + 1024
+	}
+	resp.Body = http.MaxBytesReader(nil, resp.Body, effectiveCap)
+
 	out, err := os.OpenFile(destPath+".part", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
 	if err != nil {
 		return fmt.Errorf("创建文件失败: %v", err)
@@ -882,7 +921,7 @@ func (a *App) downloadModItem(item *DownloadItem) error {
 	}
 	out.Close()
 
-	// 关键修复：下载完先用 Modrinth 给的哈希校验，再原子改名。
+	// 关键修复：下载完先用 Modrinth 给的哈希 + Size 校验，再原子改名。
 	if err := verifyModDownloaded(destPath+".part", item.URL); err != nil {
 		os.Remove(destPath + ".part")
 		return fmt.Errorf("Mod 完整性校验失败: %w", err)
