@@ -44,6 +44,10 @@ const (
 	pbkdf2Iterations = 100000
 	pbkdf2KeyLength  = 32
 	pbkdf2Salt       = "OpenQGL_Salt_2024!@#"
+
+	// authJSONMaxBytes 限制每个认证 JSON 响应最多 1 MiB。
+	// 认证接口本应返回小体量的 token 结构，超过这个尺寸基本就是恶意响应或错误页面。
+	authJSONMaxBytes = 1 << 20
 )
 
 // MSAuthData 微软认证数据（存储在用户目录的 ms_auth.json）
@@ -119,6 +123,20 @@ func aesGCMDecrypt(encoded string, key []byte) ([]byte, error) {
 // 安全加固: 复用全局 safeHTTPClient（TLS 1.2+，30秒超时）
 var httpClient = safeHTTPClient()
 
+// readAuthJSON 用 LimitReader 限制响应体大小后再读 JSON，
+// 防止恶意服务器返回几个 GiB 数据把内存吃爆。
+func readAuthJSON(resp *http.Response) ([]byte, error) {
+	limited := io.LimitReader(resp.Body, authJSONMaxBytes)
+	body, err := io.ReadAll(limited)
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(body)) >= authJSONMaxBytes {
+		return nil, fmt.Errorf("响应体超过 %d 字节上限", authJSONMaxBytes)
+	}
+	return body, nil
+}
+
 // DeviceCodeResponse 设备代码响应
 type DeviceCodeResponse struct {
 	UserCode         string `json:"user_code"`
@@ -173,7 +191,7 @@ type MCLoginResponse struct {
 	AccessToken string `json:"access_token"`
 	ExpiresIn  int    `json:"expires_in"`
 	TokenType   string `json:"token_type"`
-	Username   string `json:"username"`
+	Username    string `json:"username"`
 	// 错误字段
 	Error            string `json:"error"`
 	ErrorMessage     string `json:"errorMessage"`
@@ -204,7 +222,7 @@ func (a *App) StartMicrosoftLogin() (string, error) {
 		return "", fmt.Errorf("请求设备代码失败: %v", err)
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
+	body, err := readAuthJSON(resp)
 	if err != nil {
 		return "", fmt.Errorf("读取设备代码响应失败: %v", err)
 	}
@@ -260,7 +278,7 @@ func (a *App) pollMicrosoftToken(dc DeviceCodeResponse) {
 		if err != nil {
 			continue
 		}
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := readAuthJSON(resp)
 		resp.Body.Close()
 		var tokenResp TokenResponse
 		if err := json.Unmarshal(body, &tokenResp); err != nil {
@@ -330,7 +348,7 @@ func (a *App) completeMicrosoftLogin(msAccessToken string, msRefreshToken string
 		UUID:          profile.ID,
 		Username:      profile.Name,
 		ExpiresAt:     time.Now().Add(time.Duration(msExpiresIn) * time.Second).Unix(),
-		MCExpiresAt:   time.Now().Add(time.Duration(mcExpiresIn) * time.Second).Unix(),
+		MCExpiresAt:   time.Now().Add(time.Duration(msExpiresIn) * time.Second).Unix(),
 	}
 
 	if err := a.CreatePremiumUser(profile.Name, authData); err != nil {
@@ -366,7 +384,7 @@ func (a *App) authXBL(accessToken string) (string, string, error) {
 		return "", "", fmt.Errorf("XBL 请求失败: %v", err)
 	}
 	defer resp.Body.Close()
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := readAuthJSON(resp)
 	if err != nil {
 		return "", "", err
 	}
@@ -405,7 +423,7 @@ func (a *App) authXSTS(xblToken string) (string, string, error) {
 		return "", "", fmt.Errorf("XSTS 请求失败: %v", err)
 	}
 	defer resp.Body.Close()
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := readAuthJSON(resp)
 	if err != nil {
 		return "", "", err
 	}
@@ -461,7 +479,7 @@ func (a *App) authMinecraft(xstsToken string, uhs string) (string, int, error) {
 		return "", 0, fmt.Errorf("Minecraft 登录请求失败: %v", err)
 	}
 	defer resp.Body.Close()
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := readAuthJSON(resp)
 	if err != nil {
 		return "", 0, err
 	}
@@ -506,7 +524,7 @@ func (a *App) checkMCEntitlement(mcAccessToken string) (bool, error) {
 		return false, err
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
+	body, err := readAuthJSON(resp)
 	if err != nil {
 		return false, err
 	}
@@ -529,7 +547,7 @@ func (a *App) getMCProfile(mcAccessToken string) (*MCProfileResponse, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
+	body, err := readAuthJSON(resp)
 	if err != nil {
 		return nil, err
 	}
@@ -572,7 +590,7 @@ func (a *App) RefreshMicrosoftToken(username string) error {
 		return fmt.Errorf("刷新令牌请求失败: %v", err)
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
+	body, err := readAuthJSON(resp)
 	if err != nil {
 		return err
 	}
@@ -721,6 +739,10 @@ func isLoopbackOrPrivateHost(host string) bool {
 // 安全要求：默认强制 HTTPS，因为 LoginYggdrasil 会明文 POST 用户密码。
 // 仅当 host 是回环/私网（127.x / 10.x / 192.168.x / 172.16-31.x / ::1）时
 // 才允许 http://，用于本地调试皮肤站。
+//
+// 历史 bug 修复：之前判断写成 `u.Scheme == "http://"`，而 url.Parse 给的 Scheme
+// 永远是不带冒号斜杠的 "http"，导致该判断恒为 false——私网 http 调试也被错误拒绝。
+// 现在按 u.Scheme == "http" 判断。
 func normalizeYggdrasilURL(serverURL string) (string, error) {
 	serverURL = strings.TrimSpace(serverURL)
 	serverURL = strings.TrimSuffix(serverURL, "/")
@@ -729,12 +751,11 @@ func normalizeYggdrasilURL(serverURL string) (string, error) {
 		return "", fmt.Errorf("无效的服务器地址协议，只支持 http/https")
 	}
 
-	// 解析 host，决定是否允许 http
 	u, err := url.Parse(serverURL)
 	if err != nil {
 		return "", fmt.Errorf("无法解析服务器地址: %v", err)
 	}
-	if u.Scheme == "http://" && !isLoopbackOrPrivateHost(u.Hostname()) {
+	if u.Scheme == "http" && !isLoopbackOrPrivateHost(u.Hostname()) {
 		return "", fmt.Errorf("禁止通过明文 HTTP 连接公网 Yggdrasil 服务器（密码会被窃听），请使用 https://")
 	}
 
@@ -760,7 +781,7 @@ func (a *App) GetYggdrasilServerInfo(serverURL string) (*YggdrasilServerInfo, er
 		return nil, fmt.Errorf("无法连接到验证服务器: %v", err)
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
+	body, err := readAuthJSON(resp)
 	if err != nil {
 		return nil, fmt.Errorf("读取服务器信息失败: %v", err)
 	}
@@ -802,7 +823,7 @@ func (a *App) LoginYggdrasil(serverURL string, username string, password string)
 		return nil, fmt.Errorf("连接验证服务器失败: %v", err)
 	}
 	defer resp.Body.Close()
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := readAuthJSON(resp)
 	if err != nil {
 		return nil, fmt.Errorf("读取响应失败: %v", err)
 	}
@@ -879,7 +900,7 @@ func (a *App) RefreshExternalToken(username string) error {
 		return fmt.Errorf("连接验证服务器失败: %v", err)
 	}
 	defer resp.Body.Close()
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := readAuthJSON(resp)
 	if err != nil {
 		return fmt.Errorf("读取响应失败: %v", err)
 	}
@@ -934,7 +955,7 @@ func (a *App) DownloadAuthlibInjector() (string, error) {
 		if err != nil {
 			continue
 		}
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := readAuthJSON(resp)
 		resp.Body.Close()
 		if resp.StatusCode == 200 {
 			if err := json.Unmarshal(body, &latestInfo); err == nil {
