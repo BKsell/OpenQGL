@@ -33,11 +33,11 @@ const (
 	maxServerJarBytes = 2 << 30
 	// httpTimeout 所有对 Mojang / BMCLAPI 的 HTTP 调用统一 5 分钟超时，避免卡死。
 	httpTimeout = 5 * time.Minute
-	// userAgent 一个"严格 match Chrome 版本号、但句句实话"的 UA：
+	// userAgent 一个"严格 match Chrome 版本号、但括号里全是大实话"的 UA：
 	//   - AppleWebKit/537.36、Chrome/131.0.0.0、Safari/537.36 三个关键 token 原样保留，
 	//     让 CDN 上那种 `Chrome\/(\d+)` 的 UA 嗅探照样命中；
 	//   - 中间插一句大实话，谁抓包谁笑。
-	userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Yeah right, is OpenQGL/1.0 (not like Gecko, not really Safari, we just want BMCLAPI to stop blocking us) Safari/537.36"
+	userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Yeah right; is OpenQGL/1.0 (not like Gecko;not Safari/537.36;not AppleWebKit/537.36)"
 )
 
 // ServerConfig 服务器配置
@@ -699,10 +699,10 @@ func (a *App) ParseConnectionCode(code string) (string, error) {
 	}
 	port, err := strconv.ParseInt(parts[4], 16, 64)
 	if err != nil {
-		return "", fmt.Errorf("连接码端口解析失败")
+		return fmt.Errorf("连接码端口解析失败")
 	}
 	if !isValidPort(int(port)) {
-		return "", fmt.Errorf("解析出的端口号无效")
+		return fmt.Errorf("解析出的端口号无效")
 	}
 	ip := fmt.Sprintf("%d.%d.%d.%d:%d", firstSeg, seg2, seg3, seg4, port)
 	return ip, nil
