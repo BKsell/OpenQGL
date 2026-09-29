@@ -19,8 +19,8 @@ import (
 
 // 解压覆写文件时的大小上限，防止 zip bomb（高压缩比小文件膨胀占满磁盘）。
 const (
-	maxOverridesEntryBytes int64 = 2 << 30  // 单个文件最多 2 GiB
-	maxOverridesTotalBytes int64 = 20 << 30 // 全部覆写文件合计最多 20 GiB
+	maxOverridesEntryBytes int64 = 8 << 30  // 单个文件最多 8 GiB（正常整合包条目远小于此，只有解压炸弹才会触发）
+	maxOverridesTotalBytes int64 = 256 << 30 // 全部覆写文件合计最多 256 GiB（只在明显炸磁盘时中止）
 )
 
 // ===== Modrinth 整合包 API 结构体 =====
