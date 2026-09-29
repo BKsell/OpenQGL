@@ -17,6 +17,12 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
+// 解压覆写文件时的大小上限，防止 zip bomb（高压缩比小文件膨胀占满磁盘）。
+const (
+	maxOverridesEntryBytes int64 = 2 << 30  // 单个文件最多 2 GiB
+	maxOverridesTotalBytes int64 = 20 << 30 // 全部覆写文件合计最多 20 GiB
+)
+
 // ===== Modrinth 整合包 API 结构体 =====
 
 type ModpackSearchResult = ModSearchResult
@@ -569,6 +575,7 @@ func (a *App) installModpack(item *DownloadItem) error {
 	}
 
 	a.emitProgress("downloading", "解压覆写文件", 0, 0)
+	var totalExtracted int64
 	for _, f := range r.File {
 		var relPath string
 		if strings.HasPrefix(f.Name, "overrides/") {
@@ -604,9 +611,20 @@ func (a *App) installModpack(item *DownloadItem) error {
 			rc.Close()
 			continue
 		}
-		io.Copy(out, rc)
+		limited := io.LimitReader(rc, maxOverridesEntryBytes+1)
+		n, copyErr := io.Copy(out, limited)
 		out.Close()
 		rc.Close()
+		if copyErr != nil || n > maxOverridesEntryBytes {
+			fmt.Printf("跳过超大解压文件(解压炸弹防护): %s\n", f.Name)
+			os.Remove(destPath)
+			continue
+		}
+		totalExtracted += n
+		if totalExtracted > maxOverridesTotalBytes {
+			fmt.Printf("覆写文件解压总量超过 %d 字节上限，中止解压(解压炸弹防护)\n", maxOverridesTotalBytes)
+			break
+		}
 	}
 
 	configDir := filepath.Join(versionDir, "QGL")
