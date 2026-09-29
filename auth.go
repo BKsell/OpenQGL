@@ -145,8 +145,12 @@ func aesGCMDecrypt(encoded string, key []byte) ([]byte, error) {
 	return aesGCM.Open(nil, nonce, ciphertext, nil)
 }
 
-// 安全加固: 复用全局 safeHTTPClient（TLS 1.2+，30秒超时）
+// 安全加固: 复用全局 safeHTTPClient（TLS 1.2+，30秒超时，Dial 层拦私网）
 var httpClient = safeHTTPClient()
+
+// yggHTTPClient 仅供用户主动配置的 Yggdrasil 外置登录使用：本地调试皮肤站
+// 允许跑在 loopback/局域网，但绝不能用于远程元数据给出的 URL。
+var yggHTTPClient = localHTTPClient()
 
 // readAuthJSON 用 LimitReader 限制响应体大小后再读 JSON，
 // 防止恶意服务器返回几个 GiB 数据把内存吃爆。
@@ -813,7 +817,7 @@ func (a *App) GetYggdrasilServerInfo(serverURL string) (*YggdrasilServerInfo, er
 	if !strings.HasSuffix(infoURL, "/") {
 		infoURL += "/"
 	}
-	resp, err := httpClient.Get(infoURL)
+	resp, err := yggHTTPClient.Get(infoURL)
 	if err != nil {
 		return nil, fmt.Errorf("无法连接到验证服务器: %v", err)
 	}
@@ -860,7 +864,7 @@ func (a *App) LoginYggdrasil(serverURL string, username string, password string)
 		return nil, fmt.Errorf("创建请求失败: %v", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := httpClient.Do(req)
+	resp, err := yggHTTPClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("连接验证服务器失败: %v", err)
 	}
@@ -937,7 +941,7 @@ func (a *App) RefreshExternalToken(username string) error {
 		return fmt.Errorf("创建请求失败: %v", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := httpClient.Do(req)
+	resp, err := yggHTTPClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("连接验证服务器失败: %v", err)
 	}
