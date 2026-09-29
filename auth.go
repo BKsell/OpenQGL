@@ -831,6 +831,8 @@ func (a *App) GetYggdrasilServerInfo(serverURL string) (*YggdrasilServerInfo, er
 
 // LoginYggdrasil Yggdrasil 外置登录
 func (a *App) LoginYggdrasil(serverURL string, username string, password string) (*ExternalAuthData, error) {
+	username = strings.TrimSpace(username)
+	password = strings.TrimSpace(password)
 	if !authRateLimiter.Allow("ygg-" + username) {
 		return nil, fmt.Errorf("登录请求过于频繁，请稍后再试")
 	}
