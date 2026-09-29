@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/md5"
 	"crypto/rand"
 	"crypto/sha512"
@@ -81,6 +82,49 @@ func isPrivateDest(rawURL string) bool {
 	return false
 }
 
+// isBlockedIP 报告 IP 是否属于不该被启动器主动连出的地址段：
+// 回环 / RFC1918 私网 / 链路本地 / 未指定地址（含云元数据 169.254.169.254）。
+func isBlockedIP(ip net.IP) bool {
+	return ip.IsLoopback() || ip.IsPrivate() ||
+		ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
+		ip.IsUnspecified()
+}
+
+// safeDialContext 在 TCP 建连前再做一次 IP 级拦截。
+// isPrivateDest 只能拦字符串形态的内网地址；公网域名通过自托管 DNS 解析到
+// 127.0.0.1 / 169.254.169.254（DNS rebinding）时字符串看不出来，必须在这里兜：
+// 先自行解析、逐个候选 IP 校验，全部非法则拒绝建连。
+func safeDialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, err
+	}
+	if ip := net.ParseIP(host); ip != nil && isBlockedIP(ip) {
+		return nil, errDenyPrivateRedirect
+	}
+	addrs, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		return nil, err
+	}
+	dialer := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
+	var lastErr error
+	for _, a := range addrs {
+		if isBlockedIP(a.IP) {
+			lastErr = errDenyPrivateRedirect
+			continue
+		}
+		conn, dialErr := dialer.DialContext(ctx, network, net.JoinHostPort(a.IP.String(), port))
+		if dialErr == nil {
+			return conn, nil
+		}
+		lastErr = dialErr
+	}
+	if lastErr == nil {
+		lastErr = errDenyPrivateRedirect
+	}
+	return nil, lastErr
+}
+
 // safeCheckRedirect 是 http.Client.CheckRedirect 的实现：
 //   - 只允许跳 https://（除非原地 http→http，且我们本来就只发 https）；
 //   - 拒绝跳内网/回环/链路本地；
@@ -117,10 +161,28 @@ func safeHTTPClient() *http.Client {
 		Timeout:   30 * time.Second,
 		CheckRedirect: safeCheckRedirect,
 		Transport: &http.Transport{
+			DialContext: safeDialContext,
 			TLSClientConfig: &tls.Config{
 				MinVersion: tls.VersionTLS12,
 			},
 			// 单连接复用池上限别太大，避免在用户机器上占一堆 TIME_WAIT
+			MaxIdleConns:        32,
+			MaxIdleConnsPerHost: 4,
+			IdleConnTimeout:     30 * time.Second,
+		},
+	}
+}
+
+// localHTTPClient 与 safeHTTPClient 相同，但不在 Dial 层拦截私网地址。
+// 仅限用户主动配置的 Yggdrasil 外置登录服务器使用——本地调试皮肤站就是
+// 跑在 127.0.0.1 / 局域网的 http 服务，这是用户显式指定的可信目标。
+// 绝不能用于任何由远程元数据给出来的 URL。
+func localHTTPClient() *http.Client {
+	return &http.Client{
+		Timeout:       30 * time.Second,
+		CheckRedirect: safeCheckRedirect,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12},
 			MaxIdleConns:        32,
 			MaxIdleConnsPerHost: 4,
 			IdleConnTimeout:     30 * time.Second,
