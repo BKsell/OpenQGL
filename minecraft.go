@@ -2003,10 +2003,10 @@ func (a *App) watchGameProcess(cmd *exec.Cmd, stdoutPipe io.Reader, stderrPipe i
 				}
 				if elapsed < 3*time.Second {
 					runtime.EventsEmit(a.ctx, "launchStatus", "crashed")
-					runtime.EventsEmit(a.ctx, "crashInfo", fmt.Sprintf("游戏启动失败，进程立即退出 (退出码: %d)%s", exitCode, logContext))
+					runtime.EventsEmit(a.ctx, "crashInfo", sanitizeLogLine(fmt.Sprintf("游戏启动失败，进程立即退出 (退出码: %d)%s", exitCode, logContext)))
 				} else {
 					runtime.EventsEmit(a.ctx, "launchStatus", "crashed")
-					runtime.EventsEmit(a.ctx, "crashInfo", fmt.Sprintf("游戏进程意外退出 (退出码: %d)%s", exitCode, logContext))
+					runtime.EventsEmit(a.ctx, "crashInfo", sanitizeLogLine(fmt.Sprintf("游戏进程意外退出 (退出码: %d)%s", exitCode, logContext)))
 				}
 			}
 			return
@@ -2018,7 +2018,7 @@ func (a *App) watchGameProcess(cmd *exec.Cmd, stdoutPipe io.Reader, stderrPipe i
 			case <-time.After(5 * time.Second):
 			}
 			runtime.EventsEmit(a.ctx, "launchStatus", "crashed")
-			runtime.EventsEmit(a.ctx, "crashInfo", crashReason)
+			runtime.EventsEmit(a.ctx, "crashInfo", sanitizeLogLine(crashReason))
 			return
 		}
 		if elapsed > launchTimeout && !windowFound {
