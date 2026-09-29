@@ -955,8 +955,8 @@ func (a *App) downloadForgeLibraries(installerPath string, mcDir string, mcVersi
 
 // ensureForgeMappings 确保 Forge 新版需要的 Mappings 文件存在
 // 安全修复：移除 PowerShell 命令，改用 Go 原生 HTTP 下载，防止命令注入
-// maxMappingsDownloadBytes 限制 Forge mappings 下载体积，防止被劫持的端点灌入超大文件撑爆磁盘。
-const maxMappingsDownloadBytes int64 = 64 << 20
+// maxMappingsDownloadBytes 限制 Forge mappings 下载体积为 1 GiB，正常映射文件只有十几 MB，只有明显炸磁盘的响应才会触发。
+const maxMappingsDownloadBytes int64 = 1 << 30
 
 func (a *App) ensureForgeMappings(installerPath string, mcDir string) {
 	a.writeLog("===== 开始检查 Forge Mappings 文件 =====")
