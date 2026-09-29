@@ -466,7 +466,7 @@ func (a *App) StartServer(name string) error {
 				}
 			}
 			serverMgr.mu.Unlock()
-			runtime.EventsEmit(a.ctx, "serverLog", line)
+			runtime.EventsEmit(a.ctx, "serverLog", sanitizeLogLine(line))
 		}
 	}()
 
