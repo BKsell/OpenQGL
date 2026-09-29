@@ -955,6 +955,9 @@ func (a *App) downloadForgeLibraries(installerPath string, mcDir string, mcVersi
 
 // ensureForgeMappings 确保 Forge 新版需要的 Mappings 文件存在
 // 安全修复：移除 PowerShell 命令，改用 Go 原生 HTTP 下载，防止命令注入
+// maxMappingsDownloadBytes 限制 Forge mappings 下载体积，防止被劫持的端点灌入超大文件撑爆磁盘。
+const maxMappingsDownloadBytes int64 = 64 << 20
+
 func (a *App) ensureForgeMappings(installerPath string, mcDir string) {
 	a.writeLog("===== 开始检查 Forge Mappings 文件 =====")
 
@@ -1111,9 +1114,10 @@ func (a *App) ensureForgeMappings(installerPath string, mcDir string) {
 	}
 	defer out.Close()
 
-	_, err = io.Copy(out, resp.Body)
-	if err != nil {
-		a.writeLog("写入文件失败: %v", err)
+	limited := io.LimitReader(resp.Body, maxMappingsDownloadBytes+1)
+	n, copyErr := io.Copy(out, limited)
+	if copyErr != nil || n > maxMappingsDownloadBytes {
+		a.writeLog("mappings 文件超过 %d 字节上限，中止下载", maxMappingsDownloadBytes)
 		os.Remove(targetPath)
 		return
 	}
