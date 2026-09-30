@@ -625,29 +625,17 @@ func (a *App) SetServerOnlineMode(name string, onlineMode bool) error {
 		return fmt.Errorf("服务器目录路径不安全，拒绝修改")
 	}
 	propPath := filepath.Join(cfg.ServerDir, "server.properties")
-	content := ""
-	if data, err := os.ReadFile(propPath); err == nil {
-		content = string(data)
-	}
-	lines := strings.Split(content, "\n")
-	found := false
-	for i, line := range lines {
-		if strings.HasPrefix(line, "online-mode=") {
-			lines[i] = "online-mode=" + strconv.FormatBool(onlineMode)
-			found = true
-			break
-		}
-	}
-	if !found {
-		lines = append(lines, "online-mode="+strconv.FormatBool(onlineMode))
-	}
-	if err := os.WriteFile(propPath, []byte(strings.Join(lines, "\n")), allowedFilePerm); err != nil {
-		return fmt.Errorf("修改 server.properties 失败: %v", err)
+	// 用保序、去重复键、校验布尔值的读写器替换原先的朴素行拆分，
+	// 避免 CRLF 漏匹配 / 重复 online-mode 键冲突 / 非法值写入。
+	if err := updateServerProperty(propPath, "online-mode", strconv.FormatBool(onlineMode), validateBoolProperty); err != nil {
+		return err
 	}
 	cfg.OnlineMode = onlineMode
 	qglDir := filepath.Join(cfg.ServerDir, "QGL")
 	cfgData, _ := json.MarshalIndent(cfg, "", "  ")
-	os.WriteFile(filepath.Join(qglDir, "config.json"), cfgData, allowedFilePerm)
+	if err := os.WriteFile(filepath.Join(qglDir, "config.json"), cfgData, allowedFilePerm); err != nil {
+		return fmt.Errorf("同步配置失败: %v", err)
+	}
 	return nil
 }
 
