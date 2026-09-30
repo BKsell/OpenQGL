@@ -6,6 +6,7 @@ import (
 	"crypto/sha1"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -207,6 +208,30 @@ func (a *App) emitProgress(status string, currentFile string, downloaded, total 
 	runtime.EventsEmit(a.ctx, "downloadListUpdated", a.GetDownloadList())
 }
 
+// maxUnverifiedDownloadBytes 未做哈希校验的下载上限 4 GiB。
+// 走这个函数的库 / 安装器体积都远小于此值；正常数据永远碰不到，
+// 只有被劫持的镜像持续灌数据炸磁盘时才会触发中止并删除残文件。
+const maxUnverifiedDownloadBytes int64 = 4 << 30
+
+var errDownloadTooLarge = errors.New("下载体积超过安全上限")
+
+// cappedReader 读到第 max+1 个字节时返回 errDownloadTooLarge，
+// 配合调用方删除残文件，避免恶意端点靠超大响应撑爆磁盘。
+type cappedReader struct {
+	r   io.Reader
+	n   int64
+	max int64
+}
+
+func (c *cappedReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n += int64(n)
+	if c.n > c.max {
+		return n, errDownloadTooLarge
+	}
+	return n, err
+}
+
 func (a *App) downloadFile(url string, destPath string, reportProgress bool) error {
 	if !isHTTPSURL(url) {
 		return fmt.Errorf("拒绝不安全的下载 URL（非 HTTPS）: %s", url)
@@ -232,17 +257,29 @@ func (a *App) downloadFile(url string, destPath string, reportProgress bool) err
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("下载失败 %s: HTTP %d", url, resp.StatusCode)
 	}
+	// Content-Length 已知且超限，直接不落地文件。
+	if resp.ContentLength > maxUnverifiedDownloadBytes {
+		return fmt.Errorf("下载失败 %s: 声明体积 %d 超过上限 %d", url, resp.ContentLength, maxUnverifiedDownloadBytes)
+	}
 	out, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
 	if err != nil {
 		return fmt.Errorf("创建文件失败 %s: %v", destPath, err)
 	}
-	defer out.Close()
+	// 无论成功失败都关句柄；失败时把残文件删掉，避免下次误命中"文件已存在直接跳过"。
+	copied := false
+	defer func() {
+		out.Close()
+		if !copied {
+			os.Remove(destPath)
+		}
+	}()
+	body := &cappedReader{r: resp.Body, max: maxUnverifiedDownloadBytes}
 	if reportProgress {
 		total := resp.ContentLength
 		var downloaded int64
 		buf := make([]byte, 32*1024)
 		for {
-			n, err := resp.Body.Read(buf)
+			n, rerr := body.Read(buf)
 			if n > 0 {
 				_, werr := out.Write(buf[:n])
 				if werr != nil {
@@ -251,19 +288,25 @@ func (a *App) downloadFile(url string, destPath string, reportProgress bool) err
 				downloaded += int64(n)
 				a.emitProgress("downloading", filepath.Base(destPath), downloaded, total)
 			}
-			if err == io.EOF {
+			if rerr == io.EOF {
 				break
 			}
-			if err != nil {
-				return err
+			if rerr != nil {
+				if errors.Is(rerr, errDownloadTooLarge) {
+					return fmt.Errorf("下载失败 %s: %w", url, errDownloadTooLarge)
+				}
+				return rerr
 			}
 		}
 	} else {
-		_, err = io.Copy(out, resp.Body)
-		if err != nil {
+		if _, err = io.Copy(out, body); err != nil {
+			if errors.Is(err, errDownloadTooLarge) {
+				return fmt.Errorf("下载失败 %s: %w", url, errDownloadTooLarge)
+			}
 			return fmt.Errorf("写入文件失败 %s: %v", destPath, err)
 		}
 	}
+	copied = true
 	return nil
 }
 
