@@ -296,14 +296,17 @@ func searchDirForJava(dir string, results *[]JavaEntry, seen map[string]bool, ma
 const maxJavaVersionOutput int64 = 1 << 20 // 1 MiB
 
 // limitedWriter 最多写入 max+1 字节，多出的字节直接丢弃，
-// 调用方通过 n>max 判定输出超限。
+// 调用方通过 n>max 判定输出超限。stdout/stderr 可能并发写入，需加锁。
 type limitedWriter struct {
+	mu  sync.Mutex
 	buf *bytes.Buffer
 	max int64
 	n   int64
 }
 
 func (w *limitedWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	w.n += int64(len(p))
 	remain := w.max + 1 - int64(w.buf.Len())
 	if remain > 0 {
