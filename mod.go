@@ -830,20 +830,28 @@ func (a *App) DeleteMod(modFilePath string) error {
 
 // downloadModItem 下载 Mod 文件
 func (a *App) downloadModItem(item *DownloadItem) error {
+	// 纵深防御：即便下载队列项被内部其它路径污染，落盘目录也必须在 .minecraft 内。
+	mcDir := a.GetMinecraftDir()
 	destDir := item.SavePath
 	if destDir == "" {
-		mcDir := a.GetMinecraftDir()
 		destDir = filepath.Join(mcDir, "mods")
+	} else if !isPathInDir(destDir, mcDir) {
+		return fmt.Errorf("Mod 保存路径越界，必须位于 .minecraft 目录内: %s", destDir)
 	}
 
 	if err := os.MkdirAll(destDir, 0700); err != nil {
 		return fmt.Errorf("创建 mods 目录失败: %v", err)
 	}
 
-	// 安全：使用 filepath.Base 剥离 API 返回文件名中的路径遍历组件
-	fileName := filepath.Base(item.CustomName)
+	// 安全：filepath.Base 剥离 API 返回文件名里的目录组件，SanitizeFilename
+	// 再替换 Windows 保留字符（: * ? " < > | 及控制符），避免异常 Modrinth
+	// 元数据（如 "a:b.jar"）导致建文件失败或产生怪异文件名。
+	fileName := SanitizeFilename(filepath.Base(item.CustomName))
 	if fileName == "" || fileName == "." || fileName == string(filepath.Separator) {
-		fileName = filepath.Base(item.URL)
+		fileName = SanitizeFilename(filepath.Base(item.URL))
+	}
+	if fileName == "" {
+		fileName = "mod.jar"
 	}
 	if !strings.HasSuffix(strings.ToLower(fileName), ".jar") {
 		fileName += ".jar"
