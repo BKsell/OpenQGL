@@ -188,6 +188,12 @@ func (a *App) CreateServer(name, version string, port, maxMem, minMem int, onlin
 	serverDir := a.GetServerDir()
 	var dir string
 	if customDir != "" {
+		// 必须是绝对路径：否则 isPathTraversal 内部的 filepath.Abs 会按进程当前
+		// 工作目录解析相对路径，判定基准随启动方式漂移，可能被绕过。
+		if !filepath.IsAbs(customDir) {
+			return fmt.Errorf("自定义目录必须是绝对路径")
+		}
+		customDir = filepath.Clean(customDir)
 		if isPathTraversal(serverDir, customDir) {
 			return fmt.Errorf("自定义目录路径不安全")
 		}
@@ -235,75 +241,40 @@ func (a *App) CreateServer(name, version string, port, maxMem, minMem int, onlin
 	return nil
 }
 
-// downloadServerJar 下载服务器 JAR 文件
-// Mojang manifest 提供 SHA1 哈希，必须用 crypto/sha1 校验（UMFS 用于本地完整性）
+// downloadServerJar 下载并校验服务器 JAR。
+//
+// 安全要点（服务端 JAR 随后会被 `java -jar` 执行，属于代码执行面）：
+//   - 权威 SHA1 必须存在：Mojang 版本 JSON 的 downloads.server.sha1 缺失时，
+//     绝不下载/运行来源不可校验的 JAR（旧逻辑在 sha1 缺失时会“裸奔”执行）；
+//   - 已存在的 JAR 也要校验：旧逻辑只要文件在就直接复用，本地被替换/损坏、
+//     或上次留下半截文件都会被原样执行。这里走与游戏库相同的侧车回退链
+//     UMFS -> SHA512 -> 官方 SHA1，命中才复用，否则删除重下；
+//   - 新下载落盘先写同目录 .tmp，用官方 SHA1 校验通过后才 rename 成正式 JAR，
+//     随后补写 UMFS/SHA512 侧车。
 func (a *App) downloadServerJar(version string, targetDir string) error {
 	if err := sanitizePathComponent(version); err != nil {
 		return fmt.Errorf("无效的版本号: %v", err)
 	}
 	jarPath := filepath.Join(targetDir, version+"-server.jar")
-	if _, err := os.Stat(jarPath); err == nil {
-		return nil
+
+	jarURL, expectedHash, err := a.resolveServerJarDownload(version)
+	if err != nil {
+		return err
+	}
+	// 服务端 JAR 是要被执行的代码，缺少权威 SHA1 时一律拒绝，不能裸奔。
+	expectedHash = strings.ToLower(strings.TrimSpace(expectedHash))
+	if expectedHash == "" {
+		return fmt.Errorf("版本 %s 的官方清单缺少服务端 SHA1，拒绝运行未校验的 JAR", version)
 	}
 
-	manifest, err := a.GetVersionManifest()
-	if err != nil {
-		return fmt.Errorf("获取版本清单失败: %v", err)
-	}
-	var versionURL string
-	for _, v := range manifest {
-		if v.ID == version {
-			versionURL = v.URL
-			break
+	// 已有 JAR：必须通过侧车回退链 / 官方 SHA1 才允许复用，否则连同侧车一起删除重下。
+	if info, statErr := os.Stat(jarPath); statErr == nil && info.Size() > 0 {
+		if a.verifyCachedFile(jarPath, expectedHash) {
+			return nil
 		}
+		_ = os.Remove(jarPath)
+		removeCachedFileMeta(jarPath)
 	}
-	if versionURL == "" {
-		return fmt.Errorf("找不到版本 %s", version)
-	}
-
-	if !strings.HasPrefix(versionURL, "https://") {
-		return fmt.Errorf("版本清单 URL 必须使用 HTTPS")
-	}
-
-	versionURL = strings.Replace(versionURL, "https://piston-meta.mojang.com", "https://bmclapi2.bangbang93.com", 1)
-	versionURL = strings.Replace(versionURL, "https://launcher.mojang.com", "https://bmclapi2.bangbang93.com", 1)
-
-	// 版本 JSON 很小，限制 8MB 足够
-	resp, err := safeGet(httpClient, versionURL, 8<<20)
-	if err != nil {
-		return fmt.Errorf("下载版本 JSON 失败: %v", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("下载版本 JSON 失败 (HTTP %d)", resp.StatusCode)
-	}
-
-	body, _ := io.ReadAll(resp.Body)
-	var versionJSON map[string]interface{}
-	if err := json.Unmarshal(body, &versionJSON); err != nil {
-		return fmt.Errorf("解析版本 JSON 失败: %v", err)
-	}
-
-	downloads, ok := versionJSON["downloads"].(map[string]interface{})
-	if !ok {
-		return fmt.Errorf("版本 JSON 中没有 downloads 字段")
-	}
-	server, ok := downloads["server"].(map[string]interface{})
-	if !ok {
-		return fmt.Errorf("Mojang 没有为 %s 提供官方服务端下载", version)
-	}
-	jarURL, _ := server["url"].(string)
-	if jarURL == "" {
-		return fmt.Errorf("无法获取服务端下载地址")
-	}
-	if !strings.HasPrefix(jarURL, "https://") {
-		return fmt.Errorf("服务端下载地址必须使用 HTTPS")
-	}
-
-	expectedHash, _ := server["sha1"].(string)
-
-	jarURL = strings.Replace(jarURL, "https://piston-data.mojang.com", "https://bmclapi2.bangbang93.com", 1)
-	jarURL = strings.Replace(jarURL, "https://launcher.mojang.com", "https://bmclapi2.bangbang93.com", 1)
 
 	dlResp, err := safeGet(httpClient, jarURL, maxServerJarBytes)
 	if err != nil {
@@ -314,8 +285,9 @@ func (a *App) downloadServerJar(version string, targetDir string) error {
 		return fmt.Errorf("下载服务端 JAR 失败 (HTTP %d)", dlResp.StatusCode)
 	}
 
+	// 临时文件放在目标同目录，保证最后的 rename 是同卷原子操作；O_EXCL 避免跟随符号链接。
 	tempPath := jarPath + ".tmp"
-	file, err := os.OpenFile(tempPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
+	file, err := os.OpenFile(tempPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC|os.O_EXCL, 0600)
 	if err != nil {
 		return fmt.Errorf("创建临时文件失败: %v", err)
 	}
@@ -327,14 +299,16 @@ func (a *App) downloadServerJar(version string, targetDir string) error {
 		os.Remove(tempPath)
 		return fmt.Errorf("写入文件失败: %v", err)
 	}
-	file.Close()
+	if err := file.Close(); err != nil {
+		os.Remove(tempPath)
+		return fmt.Errorf("关闭临时文件失败: %v", err)
+	}
 
-	if expectedHash != "" {
-		actualHash := hex.EncodeToString(hasher.Sum(nil))
-		if actualHash != expectedHash {
-			os.Remove(tempPath)
-			return fmt.Errorf("服务端 JAR 哈希校验失败")
-		}
+	// 外部协议摘要（Mojang SHA1）保持原算法，是首次下载唯一的权威校验；不通过绝不 rename。
+	if actualHash := hex.EncodeToString(hasher.Sum(nil)); actualHash != expectedHash {
+		os.Remove(tempPath)
+		removeCachedFileMeta(tempPath)
+		return fmt.Errorf("服务端 JAR 哈希校验失败")
 	}
 
 	if err := os.Rename(tempPath, jarPath); err != nil {
@@ -342,7 +316,73 @@ func (a *App) downloadServerJar(version string, targetDir string) error {
 		return fmt.Errorf("重命名文件失败: %v", err)
 	}
 
+	// 官方 SHA1 已通过：补写本地 UMFS/SHA512 侧车，供下次启动快速且更强地校验。
+	if err := a.saveCachedFileMeta(jarPath, expectedHash); err != nil {
+		a.writeLog("服务端 JAR 侧车元数据写入失败（不影响完整性）: %s: %v", jarPath, err)
+	}
 	return nil
+}
+
+// resolveServerJarDownload 解析指定版本服务端 JAR 的最终下载地址与官方 SHA1。
+// 地址已强制 https，并把 Mojang 主机替换为 BMCLAPI 镜像；SHA1 仍取官方清单，
+// 镜像换源不改变信任锚。
+func (a *App) resolveServerJarDownload(version string) (string, string, error) {
+	manifest, err := a.GetVersionManifest()
+	if err != nil {
+		return "", "", fmt.Errorf("获取版本清单失败: %v", err)
+	}
+	var versionURL string
+	for _, v := range manifest {
+		if v.ID == version {
+			versionURL = v.URL
+			break
+		}
+	}
+	if versionURL == "" {
+		return "", "", fmt.Errorf("找不到版本 %s", version)
+	}
+	if !strings.HasPrefix(versionURL, "https://") {
+		return "", "", fmt.Errorf("版本清单 URL 必须使用 HTTPS")
+	}
+	versionURL = strings.Replace(versionURL, "https://piston-meta.mojang.com", "https://bmclapi2.bangbang93.com", 1)
+	versionURL = strings.Replace(versionURL, "https://launcher.mojang.com", "https://bmclapi2.bangbang93.com", 1)
+
+	// 版本 JSON 很小，限制 8MB 足够
+	resp, err := safeGet(httpClient, versionURL, 8<<20)
+	if err != nil {
+		return "", "", fmt.Errorf("下载版本 JSON 失败: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", "", fmt.Errorf("下载版本 JSON 失败 (HTTP %d)", resp.StatusCode)
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	var versionJSON map[string]interface{}
+	if err := json.Unmarshal(body, &versionJSON); err != nil {
+		return "", "", fmt.Errorf("解析版本 JSON 失败: %v", err)
+	}
+
+	downloads, ok := versionJSON["downloads"].(map[string]interface{})
+	if !ok {
+		return "", "", fmt.Errorf("版本 JSON 中没有 downloads 字段")
+	}
+	server, ok := downloads["server"].(map[string]interface{})
+	if !ok {
+		return "", "", fmt.Errorf("Mojang 没有为 %s 提供官方服务端下载", version)
+	}
+	jarURL, _ := server["url"].(string)
+	if jarURL == "" {
+		return "", "", fmt.Errorf("无法获取服务端下载地址")
+	}
+	if !strings.HasPrefix(jarURL, "https://") {
+		return "", "", fmt.Errorf("服务端下载地址必须使用 HTTPS")
+	}
+	expectedHash, _ := server["sha1"].(string)
+
+	jarURL = strings.Replace(jarURL, "https://piston-data.mojang.com", "https://bmclapi2.bangbang93.com", 1)
+	jarURL = strings.Replace(jarURL, "https://launcher.mojang.com", "https://bmclapi2.bangbang93.com", 1)
+	return jarURL, expectedHash, nil
 }
 
 // StartServer 启动服务器
