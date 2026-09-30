@@ -155,6 +155,56 @@ func (m *mtXOR25) randInt63n(n int64) int64 {
 	}
 }
 
+// Uniform 对照 Python XOR25_Generator.uniform：用 1024bit 随机数映射到 [low,high)。
+func (m *mtXOR25) Uniform(low, high float64) float64 {
+	if high <= low {
+		return low
+	}
+	r := m.GetRandBits(1024)
+	scale := new(big.Float).SetInt(r)
+	max := new(big.Float).SetInt(new(big.Int).Lsh(big.NewInt(1), 1024))
+	ratio, _ := new(big.Float).Quo(scale, max).Float64()
+	return low + (high-low)*ratio
+}
+
+// RandRange 对照 Python randrange：支持 [start,stop) 与步长 step，
+// 用 128bit 拒绝采样消除取模偏差（与源码同一思路，只是块宽不同）。
+func (m *mtXOR25) RandRange(start, stop int64, step int64) int64 {
+	if step == 0 {
+		panic("mt_xor25: step cannot be zero")
+	}
+	if step < 0 {
+		step = -step
+	}
+	span := stop - start
+	if span <= 0 {
+		panic("mt_xor25: stop must be greater than start")
+	}
+	cnt := (span-1)/step + 1
+	maxU128 := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 128), big.NewInt(1))
+	bias := new(big.Int).Mod(maxU128, big.NewInt(cnt))
+	limit := new(big.Int).Sub(maxU128, bias)
+	for {
+		num := m.GetRandBits(128)
+		if num.Cmp(limit) <= 0 {
+			off := new(big.Int).Mod(num, big.NewInt(cnt)).Int64()
+			return start + off*step
+		}
+	}
+}
+
+// RandInt 对照 Python randint(a,b)，返回闭区间 [a,b] 内的整数。
+func (m *mtXOR25) RandInt(a, b int64) int64 {
+	if b < a {
+		panic("mt_xor25: b must be >= a")
+	}
+	return m.RandRange(a, b+1, 1)
+}
+
+// 包级便捷入口。
+func mtXor25Uniform(low, high float64) float64 { return globalMTXOR25().Uniform(low, high) }
+func mtXor25RandInt(a, b int64) int64          { return globalMTXOR25().RandInt(a, b) }
+
 // mtXor25RandInt63n 包级入口，供重试抖动等本地场景使用。
 func mtXor25RandInt63n(n int64) int64 {
 	return globalMTXOR25().randInt63n(n)
