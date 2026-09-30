@@ -816,6 +816,15 @@ func (a *App) installOldForge(installerPath string, mcDir string, mcVersion stri
 	return nil
 }
 
+// Forge/NeoForge 安装器是从镜像下载的不受信任 JAR，其中 maven/ 条目会被
+// 解压到 libraries。给解压加上单条目 / 总量上限，防止恶意安装器用高压缩比
+// 大条目做解压炸弹：旧实现用 io.ReadAll 把整个条目读进内存，无任何上限。
+// 正常的依赖 jar 只有几 MB 到几十 MB，正常数据永远碰不到这两个阈值。
+const (
+	maxMavenEntryBytes int64 = 256 << 20 // 单个 maven 条目 256 MiB
+	maxMavenTotalBytes int64 = 2 << 30   // maven 解压总量 2 GiB
+)
+
 func (a *App) extractMavenFiles(installerPath string, mcDir string) error {
 	r, err := zip.OpenReader(installerPath)
 	if err != nil {
@@ -825,30 +834,51 @@ func (a *App) extractMavenFiles(installerPath string, mcDir string) error {
 
 	libsDir := filepath.Join(mcDir, "libraries")
 
+	var totalExtracted int64
 	for _, f := range r.File {
-		if strings.HasPrefix(f.Name, "maven/") && !f.FileInfo().IsDir() {
-			relPath := strings.TrimPrefix(f.Name, "maven/")
-			// Zip Slip 防护：验证解压路径不逃逸出 libsDir
-			safeRelPath := isSafeRelPath(relPath)
-			if safeRelPath == "" {
-				a.writeLog("跳过不安全的 ZIP 条目: %s", f.Name)
-				continue
-			}
-			destPath := filepath.Join(libsDir, safeRelPath)
+		if !strings.HasPrefix(f.Name, "maven/") || f.FileInfo().IsDir() {
+			continue
+		}
+		relPath := strings.TrimPrefix(f.Name, "maven/")
+		// Zip Slip 防护：验证解压路径不逃逸出 libsDir
+		safeRelPath := isSafeRelPath(relPath)
+		if safeRelPath == "" {
+			a.writeLog("跳过不安全的 ZIP 条目: %s", f.Name)
+			continue
+		}
+		// 元数据声明体积已超限，直接跳过，不必打开条目。
+		if f.UncompressedSize64 > uint64(maxMavenEntryBytes) {
+			a.writeLog("跳过超大 maven 条目(解压炸弹防护): %s", f.Name)
+			continue
+		}
+		destPath := filepath.Join(libsDir, safeRelPath)
 
-			os.MkdirAll(filepath.Dir(destPath), 0700)
+		os.MkdirAll(filepath.Dir(destPath), 0700)
 
-			rc, err := f.Open()
-			if err != nil {
-				continue
-			}
-			data, err := io.ReadAll(rc)
+		rc, err := f.Open()
+		if err != nil {
+			continue
+		}
+		out, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
+		if err != nil {
 			rc.Close()
-			if err != nil {
-				continue
-			}
+			continue
+		}
+		// 流式落盘并多放一字节用于判定超限，不再整条目读进内存。
+		limited := io.LimitReader(rc, maxMavenEntryBytes+1)
+		n, copyErr := io.Copy(out, limited)
+		out.Close()
+		rc.Close()
+		if copyErr != nil || n > maxMavenEntryBytes {
+			a.writeLog("跳过超大 maven 条目(解压炸弹防护): %s", f.Name)
+			os.Remove(destPath)
+			continue
+		}
 
-			os.WriteFile(destPath, data, 0600)
+		totalExtracted += n
+		if totalExtracted > maxMavenTotalBytes {
+			a.writeLog("maven 解压总量超过 %d 字节上限，中止解压(解压炸弹防护)", maxMavenTotalBytes)
+			break
 		}
 	}
 
