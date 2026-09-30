@@ -23,7 +23,12 @@ const (
 	maxOverridesTotalBytes int64 = 256 << 30 // 全部覆写文件合计最多 256 GiB（只在明显炸磁盘时中止）
 	maxMrpackDownloadBytes  int64 = 8 << 30  // 整合包本体最多 8 GiB，与单文件上限一致
 	maxMrpackManifestBytes  int64 = 16 << 20 // modrinth.index.json 最多 16 MiB（清单只是文件列表，正常远小于此）
+	maxOverridesEntries     = 100000        // 覆写条目数上限，防海量空文件耗尽 inode / 拖慢解压
 )
+
+// unsafeEntryMode 拒绝在覆写区落地的特殊文件类型：符号链接 / 设备 / 管道 / 套接字。
+// zip 里这类条目本不该出现在整合包，放行符号链接还可能被利用做链接逃逸或诱导覆盖。
+const unsafeEntryMode = os.ModeSymlink | os.ModeDevice | os.ModeNamedPipe | os.ModeSocket
 
 // ===== Modrinth 整合包 API 结构体 =====
 
@@ -591,6 +596,31 @@ func (a *App) installModpack(item *DownloadItem) error {
 	}
 
 	a.emitProgress("downloading", "解压覆写文件", 0, 0)
+
+	// 预检：在真正落盘前先汇总所有覆写条目的声明体积与数量。
+	// 之前是边解边累计，恶意整合包能先写出几十 GiB 才触发总量中止；
+	// 预检可在一个字节都不落地的情况下整体拒绝，并拦掉海量空文件耗尽 inode。
+	var declaredTotal int64
+	var overrideEntries int
+	for _, f := range r.File {
+		name := f.Name
+		if !(strings.HasPrefix(name, "overrides/") || strings.HasPrefix(name, "client-overrides/")) {
+			continue
+		}
+		rel := strings.TrimPrefix(strings.TrimPrefix(name, "overrides/"), "client-overrides/")
+		if rel == "" {
+			continue
+		}
+		overrideEntries++
+		if overrideEntries > maxOverridesEntries {
+			return fmt.Errorf("覆写条目数超过 %d 上限，拒绝解压(解压炸弹防护)", maxOverridesEntries)
+		}
+		declaredTotal += int64(f.UncompressedSize64)
+		if declaredTotal > maxOverridesTotalBytes {
+			return fmt.Errorf("覆写文件声明总大小超过 %d 字节上限，拒绝解压(解压炸弹防护)", maxOverridesTotalBytes)
+		}
+	}
+
 	var totalExtracted int64
 	for _, f := range r.File {
 		var relPath string
@@ -609,6 +639,12 @@ func (a *App) installModpack(item *DownloadItem) error {
 		destPath, err := safeJoin(versionDir, relPath)
 		if err != nil {
 			fmt.Printf("跳过不安全的解压路径(Zip Slip防护): %s, 错误: %v\n", f.Name, err)
+			continue
+		}
+
+		// 拒绝符号链接 / 设备 / 管道 / 套接字等特殊条目，只落地普通文件与目录。
+		if f.Mode()&unsafeEntryMode != 0 {
+			fmt.Printf("跳过特殊类型解压条目(仅允许普通文件/目录): %s\n", f.Name)
 			continue
 		}
 
