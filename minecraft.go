@@ -1040,16 +1040,41 @@ func (a *App) getMirrorURLs(originalURL string) []string {
 }
 
 func (a *App) downloadFromMirrors(urls []string, destPath string, maxBytes int64) bool {
-	for _, url := range urls {
+	for attempt, url := range urls {
 		os.Remove(destPath)
 		os.MkdirAll(filepath.Dir(destPath), 0700)
 		if err := a.downloadFileBounded(url, destPath, false, maxBytes); err != nil {
 			a.writeLog("下载失败 [%s]: %v", url, err)
+			// 切下一个镜像前做一次可中断的退避（mt_xor25 抖动 ±25%），
+			// 既避免失败后瞬间重试压垮镜像，也让多实例不会同步重试；取消下载立即返回。
+			if attempt+1 < len(urls) {
+				base := time.Duration(attempt+1) * 500 * time.Millisecond
+				if !a.sleepOrCancel(mtXor25Jitter(base)) {
+					return false
+				}
+			}
 			continue
 		}
 		return true
 	}
 	return false
+}
+
+// sleepOrCancel 休眠 d，期间若下载列表被取消则立即返回 false；正常到点返回 true。
+func (a *App) sleepOrCancel(d time.Duration) bool {
+	a.downloadMutex.Lock()
+	ch := a.downloadCancel
+	a.downloadMutex.Unlock()
+	if ch == nil {
+		time.Sleep(d)
+		return true
+	}
+	select {
+	case <-ch:
+		return false
+	case <-time.After(d):
+		return true
+	}
 }
 
 func (a *App) fixAssetsIndex(mcDir string, versionJSON *VersionJSON) {
