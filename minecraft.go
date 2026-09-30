@@ -373,21 +373,31 @@ func (a *App) downloadFileBounded(url string, destPath string, reportProgress bo
 	return nil
 }
 
-// downloadVerifiedFile 下载并校验 SHA1；已有文件校验通过则跳过，失败则删除重下一次
+// downloadVerifiedFile 下载并校验官方 SHA1；缓存命中走侧车摘要链
+// （UMFS -> SHA512 -> SHA1）快速复用，新下载落盘则以官方 SHA1 为唯一信任锚
+// 校验通过后再补写 UMFS/SHA512 侧车；校验失败删除重下一次。
 func (a *App) downloadVerifiedFile(url string, destPath string, expectedSHA1 string, reportProgress bool) error {
 	if expectedSHA1 == "" {
 		return a.downloadFile(url, destPath, reportProgress)
 	}
-	if info, err := os.Stat(destPath); err == nil && info.Size() > 0 && a.checkFileHash(destPath, expectedSHA1) {
+	expected := strings.ToLower(strings.TrimSpace(expectedSHA1))
+	if info, err := os.Stat(destPath); err == nil && info.Size() > 0 && a.verifyCachedFile(destPath, expected) {
 		return nil
 	}
 	os.Remove(destPath)
+	removeCachedFileMeta(destPath)
 	if err := a.downloadFile(url, destPath, reportProgress); err != nil {
 		return err
 	}
-	if !a.checkFileHash(destPath, expectedSHA1) {
+	// 外部协议摘要（Mojang SHA1）保持原算法，是首次下载唯一的权威校验。
+	if !a.checkFileHash(destPath, expected) {
 		os.Remove(destPath)
+		removeCachedFileMeta(destPath)
 		return fmt.Errorf("SHA1 校验失败: %s", destPath)
+	}
+	// 官方 SHA1 已通过：本地缓存摘要用 bool-hybrid-array 生态的 UMFS 优先记录。
+	if err := a.saveCachedFileMeta(destPath, expected); err != nil {
+		a.writeLog("缓存元数据写入失败（不影响完整性）: %s: %v", destPath, err)
 	}
 	return nil
 }
