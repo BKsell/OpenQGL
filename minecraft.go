@@ -214,6 +214,16 @@ func (a *App) emitProgress(status string, currentFile string, downloaded, total 
 // 只有被劫持的镜像持续灌数据炸磁盘时才会触发中止并删除残文件。
 const maxUnverifiedDownloadBytes int64 = 4 << 30
 
+// maxMetadataJSONBytes 版本 JSON / 资产索引这类元数据 JSON 的上限。
+// 官方文件只有几百 KB ~ 数 MB；它们走通用下载（4 GiB）落地后又被
+// os.ReadFile 整体读进内存，被劫持镜像灌一个 GB 级"json"会直接 OOM。
+// 单独收窄到 16 MiB，正常数据永远碰不到。
+const maxMetadataJSONBytes int64 = 16 << 20
+
+// maxAssetObjectBytes 单个 assets/objects 资源对象上限。
+// 内容寻址（路径/URL 即 SHA1），普通贴图/语言文件几 KB，音乐较大也远小于此。
+const maxAssetObjectBytes int64 = 256 << 20
+
 var errDownloadTooLarge = errors.New("下载体积超过安全上限")
 
 // cappedReader 读到第 max+1 个字节时返回 errDownloadTooLarge，
@@ -233,7 +243,34 @@ func (c *cappedReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
+// readBoundedFile 把本地文件读入内存，但先用 stat 体积、再用 LimitReader+1
+// 双保险封顶，防止把磁盘上被塞成 GB 级的"元数据 JSON"整体读进内存导致 OOM。
+func readBoundedFile(path string, maxBytes int64) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	if info, err := f.Stat(); err == nil && info.Size() > maxBytes {
+		return nil, fmt.Errorf("文件 %s 体积 %d 超过元数据上限 %d", path, info.Size(), maxBytes)
+	}
+	data, err := io.ReadAll(io.LimitReader(f, maxBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > maxBytes {
+		return nil, fmt.Errorf("文件 %s 超过元数据上限 %d", path, maxBytes)
+	}
+	return data, nil
+}
+
 func (a *App) downloadFile(url string, destPath string, reportProgress bool) error {
+	return a.downloadFileBounded(url, destPath, reportProgress, maxUnverifiedDownloadBytes)
+}
+
+// downloadFileBounded 与 downloadFile 相同，但允许调用方按文件类型指定体积上限，
+// 让版本 JSON / 资产索引等小元数据不必套用 4 GiB 的宽松上限。
+func (a *App) downloadFileBounded(url string, destPath string, reportProgress bool, maxBytes int64) error {
 	if !isHTTPSURL(url) {
 		return fmt.Errorf("拒绝不安全的下载 URL（非 HTTPS）: %s", url)
 	}
@@ -259,8 +296,8 @@ func (a *App) downloadFile(url string, destPath string, reportProgress bool) err
 		return fmt.Errorf("下载失败 %s: HTTP %d", url, resp.StatusCode)
 	}
 	// Content-Length 已知且超限，直接不落地文件。
-	if resp.ContentLength > maxUnverifiedDownloadBytes {
-		return fmt.Errorf("下载失败 %s: 声明体积 %d 超过上限 %d", url, resp.ContentLength, maxUnverifiedDownloadBytes)
+	if resp.ContentLength > maxBytes {
+		return fmt.Errorf("下载失败 %s: 声明体积 %d 超过上限 %d", url, resp.ContentLength, maxBytes)
 	}
 	out, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
 	if err != nil {
@@ -274,7 +311,7 @@ func (a *App) downloadFile(url string, destPath string, reportProgress bool) err
 			os.Remove(destPath)
 		}
 	}()
-	body := &cappedReader{r: resp.Body, max: maxUnverifiedDownloadBytes}
+	body := &cappedReader{r: resp.Body, max: maxBytes}
 	if reportProgress {
 		total := resp.ContentLength
 		var downloaded int64
@@ -460,7 +497,7 @@ func (a *App) scanVersionFolder(versionFolder string, folderName string) Install
 			jsonPath = jsonFiles[0]
 		}
 	}
-	jsonText, _ := os.ReadFile(jsonPath)
+	jsonText, _ := readBoundedFile(jsonPath, maxMetadataJSONBytes)
 	loader := ""
 	if strings.Contains(string(jsonText), "net.fabricmc:fabric-loader") {
 		loader = "fabric"
@@ -813,10 +850,10 @@ func (a *App) DownloadVersion(versionID string, versionURL string, customName st
 	a.emitProgress("downloading", customName+".json", 0, 0)
 	jsonURL := replaceWithBMCLAPI(versionURL)
 	jsonPath := filepath.Join(versionDir, customName+".json")
-	if err := a.downloadFile(jsonURL, jsonPath, false); err != nil {
+	if err := a.downloadFileBounded(jsonURL, jsonPath, false, maxMetadataJSONBytes); err != nil {
 		return fmt.Errorf("下载版本 JSON 失败: %v", err)
 	}
-	jsonData, err := os.ReadFile(jsonPath)
+	jsonData, err := readBoundedFile(jsonPath, maxMetadataJSONBytes)
 	if err != nil {
 		return fmt.Errorf("读取版本 JSON 失败: %v", err)
 	}
@@ -886,10 +923,10 @@ func (a *App) DownloadVersion(versionID string, versionURL string, customName st
 		assetIndexPath := filepath.Join(assetIndexDir, assetIndexRef.ID+".json")
 		assetIndexURL := replaceWithBMCLAPI(assetIndexRef.URL)
 		a.emitProgress("downloading", "资源索引", 0, 0)
-		if err := a.downloadFile(assetIndexURL, assetIndexPath, false); err != nil {
+		if err := a.downloadFileBounded(assetIndexURL, assetIndexPath, false, maxMetadataJSONBytes); err != nil {
 			fmt.Printf("下载资源索引失败: %v\n", err)
 		} else {
-			assetIndexData, err := os.ReadFile(assetIndexPath)
+			assetIndexData, err := readBoundedFile(assetIndexPath, maxMetadataJSONBytes)
 			if err == nil {
 				var assetIndex AssetIndex
 				if json.Unmarshal(assetIndexData, &assetIndex) == nil {
@@ -977,11 +1014,11 @@ func (a *App) getMirrorURLs(originalURL string) []string {
 	return urls
 }
 
-func (a *App) downloadFromMirrors(urls []string, destPath string) bool {
+func (a *App) downloadFromMirrors(urls []string, destPath string, maxBytes int64) bool {
 	for _, url := range urls {
 		os.Remove(destPath)
 		os.MkdirAll(filepath.Dir(destPath), 0700)
-		if err := a.downloadFile(url, destPath, false); err != nil {
+		if err := a.downloadFileBounded(url, destPath, false, maxBytes); err != nil {
 			a.writeLog("下载失败 [%s]: %v", url, err)
 			continue
 		}
@@ -1006,7 +1043,7 @@ func (a *App) fixAssetsIndex(mcDir string, versionJSON *VersionJSON) {
 		urls[i] = strings.Replace(u, "https://piston-meta.mojang.com/", "https://bmclapi2.bangbang93.com/", 1)
 		urls[i] = strings.Replace(urls[i], "https://launcher.mojang.com/", "https://bmclapi2.bangbang93.com/", 1)
 	}
-	if a.downloadFromMirrors(urls, assetIndexPath) {
+	if a.downloadFromMirrors(urls, assetIndexPath, maxMetadataJSONBytes) {
 		a.writeLog("资源索引文件下载完成: %s", versionJSON.AssetIndex.ID)
 		a.fixMissingAssets(mcDir, assetIndexPath)
 	} else {
@@ -1015,7 +1052,7 @@ func (a *App) fixAssetsIndex(mcDir string, versionJSON *VersionJSON) {
 }
 
 func (a *App) fixMissingAssets(mcDir string, assetIndexPath string) {
-	data, err := os.ReadFile(assetIndexPath)
+	data, err := readBoundedFile(assetIndexPath, maxMetadataJSONBytes)
 	if err != nil {
 		return
 	}
@@ -1037,7 +1074,7 @@ func (a *App) fixMissingAssets(mcDir string, assetIndexPath string) {
 		originalURL := fmt.Sprintf("https://resources.download.minecraft.net/%s/%s", obj.Hash[:2], obj.Hash)
 		urls := a.getMirrorURLs(originalURL)
 		os.MkdirAll(filepath.Dir(objPath), 0700)
-		if a.downloadFromMirrors(urls, objPath) {
+		if a.downloadFromMirrors(urls, objPath, maxAssetObjectBytes) {
 			downloadedCount++
 		}
 	}
@@ -1471,9 +1508,9 @@ func (a *App) resolveVersionJSON(versionID string) (*VersionJSON, error) {
 			jsonPath = jsonFiles[0]
 		}
 	}
-	jsonData, err := os.ReadFile(jsonPath)
+	jsonData, err := readBoundedFile(jsonPath, maxMetadataJSONBytes)
 	if err != nil {
-		return nil, fmt.Errorf("未找到版本 JSON: %s", versionDir)
+		return nil, fmt.Errorf("未找到或无法读取版本 JSON: %s (%v)", versionDir, err)
 	}
 	var versionJSON VersionJSON
 	if err := json.Unmarshal(jsonData, &versionJSON); err != nil {
