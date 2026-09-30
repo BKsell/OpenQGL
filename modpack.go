@@ -21,6 +21,8 @@ import (
 const (
 	maxOverridesEntryBytes int64 = 8 << 30  // 单个文件最多 8 GiB（正常整合包条目远小于此，只有解压炸弹才会触发）
 	maxOverridesTotalBytes int64 = 256 << 30 // 全部覆写文件合计最多 256 GiB（只在明显炸磁盘时中止）
+	maxMrpackDownloadBytes  int64 = 8 << 30  // 整合包本体最多 8 GiB，与单文件上限一致
+	maxMrpackManifestBytes  int64 = 16 << 20 // modrinth.index.json 最多 16 MiB（清单只是文件列表，正常远小于此）
 )
 
 // ===== Modrinth 整合包 API 结构体 =====
@@ -404,6 +406,11 @@ func (a *App) installModpack(item *DownloadItem) error {
 	for {
 		n, readErr := resp.Body.Read(buf)
 		if n > 0 {
+			if downloaded+int64(n) > maxMrpackDownloadBytes {
+				out.Close()
+				os.Remove(mrpackPath)
+				return fmt.Errorf("整合包体积超过 %d 字节上限，拒绝写入(防炸磁盘)", maxMrpackDownloadBytes)
+			}
 			if _, werr := out.Write(buf[:n]); werr != nil {
 				out.Close()
 				return werr
@@ -442,10 +449,19 @@ func (a *App) installModpack(item *DownloadItem) error {
 	if err != nil {
 		return fmt.Errorf("读取 manifest 失败: %v", err)
 	}
-	manifestData, err := io.ReadAll(rc)
+	// mrpack 来自第三方下载源，manifest 条目同样可被塞成解压炸弹：
+	// 先用 zip 元数据预检，再用 LimitReader 多读 1 字节判定真实超限。
+	if manifestEntry.UncompressedSize64 > uint64(maxMrpackManifestBytes) {
+		rc.Close()
+		return fmt.Errorf("manifest 体积超过 %d 字节上限，拒绝读取(解压炸弹防护)", maxMrpackManifestBytes)
+	}
+	manifestData, err := io.ReadAll(io.LimitReader(rc, maxMrpackManifestBytes+1))
 	rc.Close()
 	if err != nil {
 		return fmt.Errorf("读取 manifest 数据失败: %v", err)
+	}
+	if int64(len(manifestData)) > maxMrpackManifestBytes {
+		return fmt.Errorf("manifest 体积超过 %d 字节上限，拒绝解析(解压炸弹防护)", maxMrpackManifestBytes)
 	}
 
 	var manifest ModrinthModpackManifest
