@@ -371,9 +371,16 @@ func (a *App) AddModpackToDownloadList(versionID string, customName string) erro
 func (a *App) installModpack(item *DownloadItem) error {
 	mcDir := a.GetMinecraftDir()
 
-	tmpDir := filepath.Join(os.TempDir(), "qgl-modpack")
-	if err := os.MkdirAll(tmpDir, 0700); err != nil {
+	// 用每次安装唯一的临时目录（权限 0700），而不是固定的 qgl-modpack/modpack.mrpack。
+	// 固定路径可被本地其他进程提前放成符号链接，随后 O_CREATE|O_TRUNC 会跟随链接
+	// 截断任意可写文件；MkdirTemp 生成不可预测的目录名，杜绝该预置链接攻击面。
+	tmpDir, err := os.MkdirTemp("", "qgl-modpack-*")
+	if err != nil {
 		return fmt.Errorf("创建临时目录失败: %v", err)
+	}
+	if err := os.Chmod(tmpDir, 0700); err != nil {
+		os.RemoveAll(tmpDir)
+		return fmt.Errorf("设置临时目录权限失败: %v", err)
 	}
 	defer os.RemoveAll(tmpDir)
 
@@ -400,7 +407,9 @@ func (a *App) installModpack(item *DownloadItem) error {
 		return fmt.Errorf("下载整合包失败: HTTP %d", resp.StatusCode)
 	}
 
-	out, err := os.OpenFile(mrpackPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
+	// O_EXCL 保证文件由我们新建：即便唯一临时目录内被抢先放入同名符号链接也直接报错，
+	// 不会跟随链接截断其它文件。
+	out, err := os.OpenFile(mrpackPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC|os.O_EXCL, 0600)
 	if err != nil {
 		return fmt.Errorf("创建临时文件失败: %v", err)
 	}
