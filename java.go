@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -30,8 +32,39 @@ type JavaVersionReq struct {
 	MaxMajor int // 最高主版本号（0表示无上限）
 }
 
-// SearchJava 搜索系统中所有已安装的 Java
+// SearchJava 搜索系统中所有已安装的 Java。
+// 全盘扫描（A-Z 盘 + AppData 递归）很慢，而一次启动流程里选 Java、安装器
+// 选 Java、兼容检查会反复调用。对结果做短时缓存，TTL 内直接返回快照，
+// 避免每次都把所有磁盘遍历一遍造成明显卡顿。
+var (
+	javaSearchMu    sync.Mutex
+	javaSearchCache []JavaEntry
+	javaSearchAt    time.Time
+)
+
+// javaSearchTTL 内复用上次全盘扫描结果；用户新装 JDK 后重新搜索最坏等待 TTL。
+const javaSearchTTL = 2 * time.Minute
+
 func (a *App) SearchJava() []JavaEntry {
+	javaSearchMu.Lock()
+	if javaSearchCache != nil && time.Since(javaSearchAt) < javaSearchTTL {
+		cached := append([]JavaEntry(nil), javaSearchCache...)
+		javaSearchMu.Unlock()
+		return cached
+	}
+	javaSearchMu.Unlock()
+
+	results := a.scanJavaInstallations()
+
+	javaSearchMu.Lock()
+	javaSearchCache = append([]JavaEntry(nil), results...)
+	javaSearchAt = time.Now()
+	javaSearchMu.Unlock()
+	return results
+}
+
+// scanJavaInstallations 执行实际的全盘 Java 扫描，SearchJava 的 TTL 缓存包在外面。
+func (a *App) scanJavaInstallations() []JavaEntry {
 	var results []JavaEntry
 	seen := make(map[string]bool)
 
@@ -257,9 +290,49 @@ func searchDirForJava(dir string, results *[]JavaEntry, seen map[string]bool, ma
 	}
 }
 
+// maxJavaVersionOutput 限制 `java -version` 的输出体积。
+// 正常输出只有几百字节；用户选择的"Java 路径"是前端绑定方法可直接传入的
+// 参数，若放任输出不设上限，一个伪造的 java.exe 打印海量内容即可撑爆内存。
+const maxJavaVersionOutput int64 = 1 << 20 // 1 MiB
+
+// limitedWriter 最多写入 max+1 字节，多出的字节直接丢弃，
+// 调用方通过 n>max 判定输出超限。
+type limitedWriter struct {
+	buf *bytes.Buffer
+	max int64
+	n   int64
+}
+
+func (w *limitedWriter) Write(p []byte) (int, error) {
+	w.n += int64(len(p))
+	remain := w.max + 1 - int64(w.buf.Len())
+	if remain > 0 {
+		if int64(len(p)) < remain {
+			remain = int64(len(p))
+		}
+		w.buf.Write(p[:remain])
+	}
+	return len(p), nil
+}
+
+// isJavaBinaryName 校验传入路径指向的确实是 java / javaw 可执行文件。
+// GetJavaInfo 等绑定方法的路径参数前端可控，必须挡住 cmd.exe、脚本等
+// 非 Java 可执行文件，避免它退化为"带固定参数的任意程序执行"原语。
+func isJavaBinaryName(p string) bool {
+	switch strings.ToLower(filepath.Base(p)) {
+	case "java.exe", "javaw.exe":
+		return true
+	}
+	return false
+}
+
 // validateJava 验证 Java 路径并获取版本信息（参考PCL的JavaEntry.Check）
 // 安全加固: 添加 10 秒超时，防止 Java 进程挂起导致应用卡住
 func validateJava(javawPath string) *JavaEntry {
+	javawPath = filepath.Clean(javawPath)
+	if !isJavaBinaryName(javawPath) {
+		return nil
+	}
 	// 检查 javaw.exe 是否存在
 	if _, err := os.Stat(javawPath); err != nil {
 		return nil
@@ -267,6 +340,9 @@ func validateJava(javawPath string) *JavaEntry {
 	// 检查 java.exe 是否存在（同目录下）
 	dir := filepath.Dir(javawPath)
 	javaExePath := filepath.Join(dir, "java.exe")
+	if !isJavaBinaryName(javaExePath) {
+		return nil
+	}
 	if _, err := os.Stat(javaExePath); err != nil {
 		return nil
 	}
@@ -281,16 +357,20 @@ func validateJava(javawPath string) *JavaEntry {
 	defer cancel()
 	cmd := exec.CommandContext(ctx, javaExePath, "-version")
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		// 某些 Java 即使成功也会返回非零退出码
-		// 尝试解析输出
-		if ctx.Err() != nil {
-			// 超时，跳过这个 Java
-			return nil
-		}
+	var outBuf bytes.Buffer
+	lw := &limitedWriter{buf: &outBuf, max: maxJavaVersionOutput}
+	cmd.Stdout = lw
+	cmd.Stderr = lw
+	runErr := cmd.Run()
+	if runErr != nil && ctx.Err() != nil {
+		// 超时，跳过这个 Java
+		return nil
 	}
-	outputStr := string(output)
+	if lw.n > maxJavaVersionOutput {
+		// 输出体积异常，疑似伪造可执行文件
+		return nil
+	}
+	outputStr := outBuf.String()
 	// 解析版本号（参考PCL的正则匹配逻辑）
 	version, majorVer := parseJavaVersion(outputStr)
 	if majorVer <= 0 {
