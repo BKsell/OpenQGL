@@ -54,6 +54,36 @@ func readAPIJSON(resp *http.Response, v interface{}) error {
 	return json.Unmarshal(body, v)
 }
 
+// 安装器（Forge/NeoForge JAR）来自镜像、不受信任。其中的 install_profile.json /
+// version.json 正常只有几百 KB，内嵌的库 jar 正常几十 MB。给条目读取设上限，
+// 防止恶意安装器用高压缩比超大条目把进程内存撑爆（解压炸弹）。
+const (
+	maxInstallerJSONBytes int64 = 16 << 20  // 安装器内 JSON 元数据 16 MiB
+	maxInstallerLibBytes  int64 = 256 << 20 // 安装器内内嵌库 jar 256 MiB
+)
+
+// readZipEntryLimited 读取单个 zip 条目并限制解压后体积：
+// 先用 zip 元数据预检，再用 LimitReader 多读 1 字节判定实际超限，
+// 调用方无需信任 f.UncompressedSize64 与真实流是否一致。
+func readZipEntryLimited(f *zip.File, maxBytes int64) ([]byte, error) {
+	if f.UncompressedSize64 > uint64(maxBytes) {
+		return nil, fmt.Errorf("zip 条目解压后声明体积超过 %d 字节: %s", maxBytes, f.Name)
+	}
+	rc, err := f.Open()
+	if err != nil {
+		return nil, err
+	}
+	defer rc.Close()
+	data, err := io.ReadAll(io.LimitReader(rc, maxBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > maxBytes {
+		return nil, fmt.Errorf("zip 条目解压后体积超过 %d 字节: %s", maxBytes, f.Name)
+	}
+	return data, nil
+}
+
 // isSafeFileName 验证版本名/文件名只包含安全字符
 // 防止路径遍历攻击（../, /, \ 等），只允许字母、数字、点、下划线、短横线
 func isSafeFileName(name string) bool {
@@ -680,12 +710,7 @@ func (a *App) installOldForge(installerPath string, mcDir string, mcVersion stri
 	var installProfile map[string]interface{}
 	for _, f := range r.File {
 		if f.Name == "install_profile.json" {
-			rc, err := f.Open()
-			if err != nil {
-				return fmt.Errorf("读取 install_profile.json 失败: %v", err)
-			}
-			data, err := io.ReadAll(rc)
-			rc.Close()
+			data, err := readZipEntryLimited(f, maxInstallerJSONBytes)
 			if err != nil {
 				return fmt.Errorf("读取 install_profile.json 失败: %v", err)
 			}
@@ -729,12 +754,11 @@ func (a *App) installOldForge(installerPath string, mcDir string, mcVersion stri
 		var versionJSONData []byte
 		for _, f := range r.File {
 			if f.Name == safeJSONPath {
-				rc, err := f.Open()
+				data, err := readZipEntryLimited(f, maxInstallerJSONBytes)
 				if err != nil {
 					return fmt.Errorf("读取版本 JSON 失败: %v", err)
 				}
-				versionJSONData, _ = io.ReadAll(rc)
-				rc.Close()
+				versionJSONData = data
 				break
 			}
 		}
@@ -779,13 +803,25 @@ func (a *App) installOldForge(installerPath string, mcDir string, mcVersion stri
 
 			for _, f := range r.File {
 				if f.Name == safeFilePath {
+					if f.UncompressedSize64 > uint64(maxInstallerLibBytes) {
+						return fmt.Errorf("安装器内嵌库过大(解压炸弹防护): %s", safeFilePath)
+					}
 					rc, err := f.Open()
 					if err != nil {
 						break
 					}
-					data, _ := io.ReadAll(rc)
+					out, err := os.OpenFile(libPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
+					if err != nil {
+						rc.Close()
+						break
+					}
+					n, copyErr := io.Copy(out, io.LimitReader(rc, maxInstallerLibBytes+1))
+					out.Close()
 					rc.Close()
-					os.WriteFile(libPath, data, 0600)
+					if copyErr != nil || n > maxInstallerLibBytes {
+						os.Remove(libPath)
+						return fmt.Errorf("安装器内嵌库超过 %d 字节上限(解压炸弹防护): %s", maxInstallerLibBytes, safeFilePath)
+					}
 					break
 				}
 			}
@@ -894,17 +930,22 @@ func (a *App) downloadForgeLibraries(installerPath string, mcDir string, mcVersi
 
 	var profileData, versionData map[string]interface{}
 	for _, f := range r.File {
-		if f.Name == "install_profile.json" {
-			rc, _ := f.Open()
-			data, _ := io.ReadAll(rc)
-			rc.Close()
-			json.Unmarshal(data, &profileData)
-		}
-		if f.Name == "version.json" {
-			rc, _ := f.Open()
-			data, _ := io.ReadAll(rc)
-			rc.Close()
-			json.Unmarshal(data, &versionData)
+		if f.Name == "install_profile.json" || f.Name == "version.json" {
+			// 安装器 JSON 不受信任，限 16 MiB 防解压炸弹；超限/损坏就跳过该文件。
+			data, err := readZipEntryLimited(f, maxInstallerJSONBytes)
+			if err != nil {
+				fmt.Printf("跳过安装器条目 %s: %v\n", f.Name, err)
+				continue
+			}
+			var target map[string]interface{}
+			if err := json.Unmarshal(data, &target); err != nil {
+				continue
+			}
+			if f.Name == "install_profile.json" {
+				profileData = target
+			} else {
+				versionData = target
+			}
 		}
 	}
 
@@ -1002,10 +1043,11 @@ func (a *App) ensureForgeMappings(installerPath string, mcDir string) {
 	var mcVersion string
 	for _, f := range r.File {
 		if f.Name == "install_profile.json" {
-			rc, _ := f.Open()
-			data, _ := io.ReadAll(rc)
-			rc.Close()
-
+			data, err := readZipEntryLimited(f, maxInstallerJSONBytes)
+			if err != nil {
+				a.writeLog("读取 install_profile.json 失败(条目过大或损坏，跳过): %v", err)
+				break
+			}
 			json.Unmarshal(data, &installProfile)
 
 			if minecraftVal, ok := installProfile["minecraft"]; ok {
@@ -1178,9 +1220,11 @@ func (a *App) downloadForgeMappings(mcDir string, mcVersion string, installerPat
 	var installProfile map[string]interface{}
 	for _, f := range r.File {
 		if f.Name == "install_profile.json" {
-			rc, _ := f.Open()
-			data, _ := io.ReadAll(rc)
-			rc.Close()
+			data, err := readZipEntryLimited(f, maxInstallerJSONBytes)
+			if err != nil {
+				fmt.Printf("读取 install_profile.json 失败(条目过大或损坏，跳过): %v\n", err)
+				break
+			}
 			json.Unmarshal(data, &installProfile)
 			break
 		}
