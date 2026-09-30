@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"crypto/sha1"
 	"encoding/hex"
@@ -33,6 +34,8 @@ const (
 	maxServerJarBytes = 2 << 30
 	// httpTimeout 所有对 Mojang / BMCLAPI 的 HTTP 调用统一 5 分钟超时，避免卡死。
 	httpTimeout = 5 * time.Minute
+	// maxServerLogLineBytes 单行服务端日志的读取上限（堆栈 / JSON 单行也不会超过此值）。
+	maxServerLogLineBytes = 1 << 20 // 1 MiB
 	// userAgent 一个"严格 match Chrome 版本号、但括号里全是大实话"的 UA：
 	//   - AppleWebKit/537.36、Chrome/131.0.0.0、Safari/537.36 三个关键 token 原样保留，
 	//     让 CDN 上那种 `Chrome\/(\d+)` 的 UA 嗅探照样命中；
@@ -415,37 +418,28 @@ func (a *App) StartServer(name string) error {
 
 	go func() {
 		scanner := make(chan string, 200)
-		go func() {
-			buf := make([]byte, 4096)
-			for {
-				n, err := stdout.Read(buf)
-				if err != nil {
-					return
-				}
-				lines := strings.Split(string(buf[:n]), "\n")
-				for _, line := range lines {
-					line = strings.TrimRight(line, "\r")
-					if line != "" {
-						scanner <- line
-					}
+		var wg sync.WaitGroup
+		pipeOutput := func(r io.Reader) {
+			defer wg.Done()
+			s := bufio.NewScanner(r)
+			// 服务端日志通常很短，但堆栈 / JSON 单行可能到几十 KB；
+			// 缓冲区上限 1 MiB，超出的异常超长行直接结束扫描，避免无界增长。
+			s.Buffer(make([]byte, 0, 64*1024), maxServerLogLineBytes)
+			for s.Scan() {
+				line := strings.TrimRight(s.Text(), "\r")
+				if line != "" {
+					scanner <- line
 				}
 			}
-		}()
+		}
+		wg.Add(2)
+		go pipeOutput(stdout)
+		go pipeOutput(stderr)
+		// 两个读取协程都退出（进程结束、管道关闭）后再关闭 channel，
+		// 否则外层 range 永久阻塞，每次启动服务器都会泄漏一个协程。
 		go func() {
-			buf := make([]byte, 4096)
-			for {
-				n, err := stderr.Read(buf)
-				if err != nil {
-					return
-				}
-				lines := strings.Split(string(buf[:n]), "\n")
-				for _, line := range lines {
-					line = strings.TrimRight(line, "\r")
-					if line != "" {
-						scanner <- line
-					}
-				}
-			}
+			wg.Wait()
+			close(scanner)
 		}()
 		for line := range scanner {
 			serverMgr.mu.Lock()
