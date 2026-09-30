@@ -3,6 +3,7 @@ package main
 import (
 	"archive/zip"
 	"bufio"
+	"context"
 	"crypto/sha1"
 	"encoding/base64"
 	"encoding/json"
@@ -264,6 +265,28 @@ func readBoundedFile(path string, maxBytes int64) ([]byte, error) {
 	return data, nil
 }
 
+// downloadContext 返回一个与“下载列表取消信号”绑定的 context。
+// 之前 CancelDownloadList 只能在两个文件之间跳出循环，正在传输的大文件
+// 仍要等下完才停；把请求挂到这个 context 上后，取消会立刻中断进行中的 HTTP 读取。
+// 非下载列表场景（如启动时补全文件）没有取消信号，返回普通 Background context。
+func (a *App) downloadContext() (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(context.Background())
+	a.downloadMutex.Lock()
+	ch := a.downloadCancel
+	a.downloadMutex.Unlock()
+	if ch == nil {
+		return ctx, cancel
+	}
+	go func() {
+		select {
+		case <-ch:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+	return ctx, cancel
+}
+
 func (a *App) downloadFile(url string, destPath string, reportProgress bool) error {
 	return a.downloadFileBounded(url, destPath, reportProgress, maxUnverifiedDownloadBytes)
 }
@@ -281,7 +304,9 @@ func (a *App) downloadFileBounded(url string, destPath string, reportProgress bo
 	if info, err := os.Stat(destPath); err == nil && info.Size() > 0 {
 		return nil
 	}
-	req, err := http.NewRequest("GET", url, nil)
+	ctx, cancelReq := a.downloadContext()
+	defer cancelReq()
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return fmt.Errorf("创建请求失败 %s: %v", url, err)
 	}
