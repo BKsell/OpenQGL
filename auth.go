@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -57,6 +58,9 @@ const (
 	// slow_down 要求每次间隔 +5s，但加多少次必须有上限，否则服务器一直回
 	// slow_down 就能把这个 goroutine 无限期挂住。
 	deviceCodeMaxSlowDowns = 60
+	// 网络错误 / 429 / 5xx 属于瞬时故障，连续这么多次仍不恢复就放弃登录，
+	// 而不是在后台无限重试。
+	deviceCodeMaxTransientErrors = 8
 	// token expires_in 的合理上限（一年）。正常 MSA/MC 令牌都是 24h，
 	// 给极大值只会把过期时间写到未来很久，掩盖"该刷新了"的判断。
 	tokenMaxLifetimeSeconds = 365 * 24 * 3600
@@ -353,14 +357,89 @@ func (a *App) StartMicrosoftLogin() (string, error) {
 	return result, nil
 }
 
-// pollMicrosoftToken 轮询微软令牌，到达设备码过期时间后自动退出
+// backoffDeviceInterval 把轮询间隔翻倍退避（下限 5s、上限 5min）。
+func backoffDeviceInterval(cur time.Duration) time.Duration {
+	next := cur * 2
+	if next < deviceCodeMinInterval {
+		return deviceCodeMinInterval
+	}
+	if next > deviceCodeMaxInterval {
+		return deviceCodeMaxInterval
+	}
+	return next
+}
+
+// parseRetryAfterDelay 解析 RFC 7231 的 Retry-After（delta-seconds 或 HTTP 日期），
+// 非法 / 零 / 负值返回 0；正值统一钳到轮询上限，避免服务器让我们睡几个小时。
+func parseRetryAfterDelay(value string) time.Duration {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0
+	}
+	if sec, err := strconv.Atoi(value); err == nil {
+		if sec <= 0 {
+			return 0
+		}
+		d := time.Duration(sec) * time.Second
+		if d > deviceCodeMaxInterval {
+			return deviceCodeMaxInterval
+		}
+		return d
+	}
+	if t, err := http.ParseTime(value); err == nil {
+		d := time.Until(t)
+		if d <= 0 || d > deviceCodeMaxInterval {
+			if d <= 0 {
+				return 0
+			}
+			return deviceCodeMaxInterval
+		}
+		return d
+	}
+	return 0
+}
+
+// pollMicrosoftToken 轮询微软令牌，到达设备码过期时间后自动退出。
+//
+// 韧性处理（interval / ttl 已在 clampXxx 中钳制）：
+//   - 网络错误、5xx、429 属于瞬时故障，按翻倍退避重试，并尊重 Retry-After；
+//   - 连续 deviceCodeMaxTransientErrors 次瞬时故障就报错退出，不无限忙轮询；
+//   - authorization_pending / slow_down 说明服务器本身健康，清零瞬时故障计数。
 func (a *App) pollMicrosoftToken(dc DeviceCodeResponse) {
 	interval := clampPollInterval(dc.Interval)
 	deadline := time.Now().Add(clampDeviceTTL(dc.ExpiresIn))
 	slowDowns := 0
-	for {
-		time.Sleep(interval)
+	transientErrors := 0
+
+	// sleepFor 等待下一次轮询；应用退出（ctx.Done）时立即结束。
+	// 返回 false 表示已到截止时间或应用关闭，调用方应退出循环。
+	sleepFor := func(d time.Duration) bool {
+		if d > deviceCodeMaxInterval {
+			d = deviceCodeMaxInterval
+		}
+		timer := time.NewTimer(d)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+		case <-a.ctx.Done():
+			return false
+		}
 		if time.Now().After(deadline) {
+			return false
+		}
+		return true
+	}
+
+	failTransient := func() bool {
+		transientErrors++
+		return transientErrors >= deviceCodeMaxTransientErrors
+	}
+
+	for {
+		if !sleepFor(interval) {
+			if a.ctx.Err() != nil {
+				return
+			}
 			runtime.EventsEmit(a.ctx, "msLoginError", "登录已过期，请重新尝试")
 			return
 		}
@@ -371,14 +450,45 @@ func (a *App) pollMicrosoftToken(dc DeviceCodeResponse) {
 		}
 		resp, err := httpClient.PostForm(tokenURL, data)
 		if err != nil {
+			if failTransient() {
+				runtime.EventsEmit(a.ctx, "msLoginError", "登录服务器连续无响应，请检查网络后重试")
+				return
+			}
+			interval = backoffDeviceInterval(interval)
 			continue
 		}
-		body, _ := readAuthJSON(resp)
+
+		// 429 / 5xx：优先尊重 Retry-After，否则指数退避；都不消费设备码语义。
+		if resp.StatusCode == 429 || resp.StatusCode >= 500 {
+			retry := parseRetryAfterDelay(resp.Header.Get("Retry-After"))
+			resp.Body.Close()
+			if failTransient() {
+				runtime.EventsEmit(a.ctx, "msLoginError", "登录服务器暂时不可用，请稍后重试")
+				return
+			}
+			if retry > 0 {
+				interval = retry
+			} else {
+				interval = backoffDeviceInterval(interval)
+			}
+			continue
+		}
+
+		body, readErr := readAuthJSON(resp)
 		resp.Body.Close()
 		var tokenResp TokenResponse
-		if err := json.Unmarshal(body, &tokenResp); err != nil {
+		if readErr != nil || json.Unmarshal(body, &tokenResp) != nil {
+			// 4xx 还返回无法解析的内容，基本是被代理/门户劫持，直接失败；
+			// 2xx 但内容畸形则按瞬时故障退避重试。
+			if resp.StatusCode >= 400 || failTransient() {
+				runtime.EventsEmit(a.ctx, "msLoginError", fmt.Sprintf("登录响应异常 (HTTP %d)", resp.StatusCode))
+				return
+			}
+			interval = backoffDeviceInterval(interval)
 			continue
 		}
+		transientErrors = 0
+
 		if tokenResp.Error != "" {
 			if tokenResp.Error == "authorization_pending" {
 				continue
@@ -404,7 +514,8 @@ func (a *App) pollMicrosoftToken(dc DeviceCodeResponse) {
 			runtime.EventsEmit(a.ctx, "msLoginError", fmt.Sprintf("登录失败: %s", tokenResp.ErrorDescription))
 			return
 		}
-		a.completeMicrosoftLogin(tokenResp.AccessToken, tokenResp.RefreshToken, tokenResp.ExpiresIn)		return
+		a.completeMicrosoftLogin(tokenResp.AccessToken, tokenResp.RefreshToken, tokenResp.ExpiresIn)
+		return
 	}
 }
 
