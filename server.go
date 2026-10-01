@@ -132,6 +132,44 @@ func isPathTraversal(baseDir, targetPath string) bool {
 	return !strings.HasPrefix(resolvedTarget, resolvedBase+string(os.PathSeparator)) && resolvedTarget != resolvedBase
 }
 
+// isStrictSubdir 判断 target 是否为 base 的“严格子目录”：
+// 解析符号链接后，target 既不能等于 base，也不能是 base 的父级或越出 base。
+// 删除单个服务器时必须用它（而非 isPathTraversal），否则被篡改的 ServerDir
+// 若等于服务器根目录，RemoveAll 会一次性清空所有服务器。
+func isStrictSubdir(base, target string) bool {
+	baseAbs, err := filepath.Abs(base)
+	if err != nil {
+		return false
+	}
+	targetAbs, err := filepath.Abs(target)
+	if err != nil {
+		return false
+	}
+	// 拒绝直接对盘符 / 卷根动手，避免误删整盘。
+	if strings.TrimRight(targetAbs, string(os.PathSeparator)) == filepath.VolumeName(targetAbs) {
+		return false
+	}
+	// 尽量解析到真实路径，挫败“服务器目录是指向根目录 / 其外部的符号链接”。
+	if real, err := filepath.EvalSymlinks(targetAbs); err == nil {
+		targetAbs = real
+	}
+	if realBase, err := filepath.EvalSymlinks(baseAbs); err == nil {
+		baseAbs = realBase
+	}
+	if targetAbs == baseAbs {
+		return false
+	}
+	rel, err := filepath.Rel(baseAbs, targetAbs)
+	if err != nil {
+		return false
+	}
+	rel = filepath.ToSlash(rel)
+	if rel == "." || rel == ".." || strings.HasPrefix(rel, "../") {
+		return false
+	}
+	return true
+}
+
 // GetServerDir 获取服务器根目录
 func (a *App) GetServerDir() string {
 	return filepath.Join(a.GetQGLDir(), "server")
@@ -834,8 +872,10 @@ func (a *App) DeleteServer(name string) error {
 		serverMgr.mu.Unlock()
 	}
 	serverDir := a.GetServerDir()
-	if isPathTraversal(serverDir, cfg.ServerDir) {
-		return fmt.Errorf("服务器目录路径不安全，拒绝删除")
+	// 必须是严格子目录且解析符号链接后仍在根内，防止配置被改成根目录本身
+	// 或指向外部的链接，导致 RemoveAll 清空所有服务器 / 删除越界路径。
+	if !isStrictSubdir(serverDir, cfg.ServerDir) {
+		return fmt.Errorf("服务器目录路径不安全（必须是服务器根目录的子目录），拒绝删除")
 	}
 	return os.RemoveAll(cfg.ServerDir)
 }
