@@ -122,6 +122,53 @@ func TestParseConnectionCodeRejectsBadSegments(t *testing.T) {
 	}
 }
 
+// TestValidateLoadedServerConfig 磁盘上的 config.json 被篡改 / 写坏时，
+// 加载校验必须拒绝，绝不带病进入 java -jar 执行路径。
+func TestValidateLoadedServerConfig(t *testing.T) {
+	a := &App{}
+	root := a.GetServerDir()
+	good := func() ServerConfig {
+		return ServerConfig{
+			Name:      "srv1",
+			Version:   "1.20.4",
+			Port:      25565,
+			MaxMemory: 2048,
+			MinMemory: 1024,
+			ServerDir: filepath.Join(root, "srv1"),
+		}
+	}
+	if err := a.validateLoadedServerConfig(nil); err == nil {
+		t.Fatal("nil 配置必须拒绝")
+	}
+	if err := a.validateLoadedServerConfig(func() *ServerConfig { c := good(); return &c }()); err != nil {
+		t.Fatalf("合法配置应放行: %v", err)
+	}
+
+	bad := []struct {
+		name string
+		mut  func(*ServerConfig)
+	}{
+		{"空名称", func(c *ServerConfig) { c.Name = "" }},
+		{"名称注入换行", func(c *ServerConfig) { c.Name = "a\nonline-mode=false" }},
+		{"版本号父目录跳转", func(c *ServerConfig) { c.Version = "../evil" }},
+		{"版本号带分隔符", func(c *ServerConfig) { c.Version = `a\b` }},
+		{"端口为0", func(c *ServerConfig) { c.Port = 0 }},
+		{"端口越界", func(c *ServerConfig) { c.Port = 70000 }},
+		{"内存过小", func(c *ServerConfig) { c.MinMemory, c.MaxMemory = 16, 16 }},
+		{"最小内存大于最大", func(c *ServerConfig) { c.MinMemory, c.MaxMemory = 4096, 2048 }},
+		{"相对服务器目录", func(c *ServerConfig) { c.ServerDir = filepath.Join("server", "srv1") }},
+		{"目录跳出根", func(c *ServerConfig) { c.ServerDir = filepath.Join(root, "..", "evil") }},
+		{"目录指向无关绝对路径", func(c *ServerConfig) { c.ServerDir = t.TempDir() }},
+	}
+	for _, b := range bad {
+		c := good()
+		b.mut(&c)
+		if err := a.validateLoadedServerConfig(&c); err == nil {
+			t.Errorf("非法配置必须被拒绝: %s (dir=%q)", b.name, c.ServerDir)
+		}
+	}
+}
+
 // TestServerJarRequiresAbsoluteCustomDir 由 CreateServer 的目录策略保证：
 // 相对自定义路径应在真正落盘前被拒绝（这里只验证判定前提 filepath.IsAbs）。
 func TestServerJarRequiresAbsoluteCustomDir(t *testing.T) {
