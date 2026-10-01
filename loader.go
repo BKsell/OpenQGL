@@ -31,6 +31,42 @@ func isHTTPSURL(rawURL string) bool {
 	return u.Scheme == "https"
 }
 
+// allowedMavenLibHosts 是允许下载游戏依赖库的 Maven 主机白名单。
+// install_profile.json / version.json 来自镜像上不受信任的安装器，其中每个库
+// 的 url/sha1 都由安装器作者填写：攻击者可以把某个库的 url 指向自己的服务器，
+// 该 jar 最终会落进 libraries 并进入 JVM classpath，等同于远程代码执行。
+// 光有 https 和“随安装器自带的 sha1”挡不住这一点（主机和 sha1 都是攻击者写的），
+// 所以必须把下载主机限定在官方/可信 Maven 源，再尽量用官方 sha1 复核传输完整性。
+var allowedMavenLibHosts = map[string]bool{
+	"maven.minecraftforge.net": true,
+	"maven.neoforged.net":      true,
+	"libraries.minecraft.net":  true,
+	"piston-data.mojang.com":   true,
+	"maven.fabricmc.net":       true,
+	"repo1.maven.org":          true, // Maven Central，部分安装器依赖在此
+	"bmclapi2.bangbang93.com":  true, // BMCLAPI 镜像（重写后的目标主机）
+}
+
+// isAllowedMavenLibURL 判断依赖库下载 URL 是否落在可信 Maven 主机上。
+// 强制 https、不允许 userinfo、只允许默认 443、主机必须精确命中白名单
+// （用 map 精确匹配而非后缀匹配，避免 evil-maven.minecraftforge.net.evil.com
+// 之类的伪造主机绕过）。
+func isAllowedMavenLibURL(rawURL string) bool {
+	u, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return false
+	}
+	if u.Scheme != "https" || u.User != nil {
+		return false
+	}
+	if port := u.Port(); port != "" && port != "443" {
+		return false
+	}
+	host := strings.ToLower(u.Hostname())
+	host = strings.TrimSuffix(host, ".") // 容忍结尾点，但仍须精确命中
+	return allowedMavenLibHosts[host]
+}
+
 // readLimited 读取响应体，限制最大大小防止内存耗尽攻击
 // 用于 API JSON 响应，最大 10MB
 func readLimited(r io.Reader, maxSize int64) ([]byte, error) {
@@ -982,12 +1018,15 @@ func (a *App) downloadForgeLibraries(installerPath string, mcDir string, mcVersi
 
 		url, _ := artifact["url"].(string)
 		path, _ := artifact["path"].(string)
+		sha1, _ := artifact["sha1"].(string)
 		if url == "" || path == "" {
 			continue
 		}
 
-		if !isHTTPSURL(url) {
-			fmt.Printf("跳过不安全的 URL: %s\n", url)
+		// 安装器不可信：库 URL 必须落在官方/可信 Maven 主机白名单内，
+		// 否则攻击者可借安装器把任意 jar 拉进 classpath（供应链 RCE）。
+		if !isAllowedMavenLibURL(url) {
+			fmt.Printf("跳过非可信 Maven 主机的库（防止供应链投毒）: %s\n", url)
 			continue
 		}
 
@@ -1002,12 +1041,12 @@ func (a *App) downloadForgeLibraries(installerPath string, mcDir string, mcVersi
 			continue
 		}
 		destPath := filepath.Join(libsDir, safePath)
-		if _, err := os.Stat(destPath); err == nil {
-			continue
-		}
 
-		if err := a.downloadFile(url, destPath, false); err != nil {
-			fmt.Printf("下载支持库失败 %s: %v\n", path, err)
+		// 走带官方 sha1 的下载：已存在的库也会经侧车摘要链复核，
+		// 避免“文件在就直接信任”导致被替换的 jar 被加载。
+		// 个别安装器确实缺 sha1 字段时仍下载（主机已白名单），但不再自行跳过校验。
+		if err := a.downloadVerifiedFile(url, destPath, strings.TrimSpace(sha1), false); err != nil {
+			fmt.Printf("下载/校验支持库失败 %s: %v\n", path, err)
 		}
 	}
 
