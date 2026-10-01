@@ -809,8 +809,11 @@ func (a *App) downloadJavaItem(majorVer int, url string) error {
 		return fmt.Errorf(`不安全的 Java 安装文件名: %s`, target.FileName)
 	}
 	destPath := filepath.Join(tempDir, target.FileName)
-	if _, err := os.Stat(destPath); err == nil {
-		return runInstaller(destPath, target.IsMSI)
+	// %TEMP% 对同用户其它进程可写：不能看到同名文件就直接执行，否则恶意程序
+	// 预先放一个同名 msi/exe 就会被我们拉起。先清掉残留（符号链接只删链接
+	// 本身），本次下载的内容才是即将被校验执行的内容。
+	if err := removeStaleInstaller(destPath); err != nil {
+		return fmt.Errorf("清理旧安装包失败: %v", err)
 	}
 	a.emitProgress("downloading", target.FileName, 0, 0)
 	if !isHTTPSURL(url) {
@@ -826,7 +829,9 @@ func (a *App) downloadJavaItem(majorVer int, url string) error {
 	}
 	// 硬上限：超过 500 MiB 直接拒绝，防恶意服务器用无限流写爆磁盘
 	limitedBody := http.MaxBytesReader(nil, resp.Body, maxJavaInstallerBytes)
-	out, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
+	// O_EXCL：清理与创建之间若被抢塞回一个同名链接，直接报错而不是 O_TRUNC
+	// 跟链截断链接目标，堵住 remove->open 的 TOCTOU 窗口。
+	out, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0600)
 	if err != nil {
 		return fmt.Errorf("创建文件失败: %v", err)
 	}
@@ -855,17 +860,13 @@ func (a *App) downloadJavaItem(majorVer int, url string) error {
 }
 
 func runInstaller(filePath string, isMSI bool) error {
-	ext := strings.ToLower(filepath.Ext(filePath))
+	if err := validateInstallerPackage(filePath, isMSI); err != nil {
+		return err
+	}
 	if isMSI {
-		if ext != ".msi" {
-			return fmt.Errorf("不安全的文件类型: %s", ext)
-		}
 		cmd := exec.Command("msiexec", "/i", filePath)
 		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 		return cmd.Start()
-	}
-	if ext != ".exe" {
-		return fmt.Errorf("不安全的文件类型: %s", ext)
 	}
 	cmd := exec.Command("explorer", filePath)
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
