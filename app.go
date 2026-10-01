@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"path/filepath"
 	"sync"
 )
 
@@ -29,4 +30,8 @@ func NewApp() *App {
 // so we can call the runtime methods
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+	// 安全事件审计日志固定放在 QGL/security 下（0700）。初始化失败不影响启动：
+	// 审计器在未初始化状态下仍会把事件保存在内存环形缓冲里。
+	auditDir := filepath.Join(a.GetQGLDir(), "security")
+	_ = defaultSecurityAudit.initSecurityAudit(auditDir)
 }
