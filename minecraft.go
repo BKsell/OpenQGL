@@ -811,7 +811,18 @@ func (a *App) downloadJavaItem(majorVer int, url string) error {
 	destPath := filepath.Join(tempDir, target.FileName)
 	// %TEMP% 对同用户其它进程可写：不能看到同名文件就直接执行，否则恶意程序
 	// 预先放一个同名 msi/exe 就会被我们拉起。先清掉残留（符号链接只删链接
-	// 本身），本次下载的内容才是即将被校验执行的内容。
+	// 本身），本次下载的内容才是即将被校验执行的内容。发现残留本身值得审计：
+	// 正常首次下载时这里应该什么都没有。
+	if pre, statErr := os.Lstat(destPath); statErr == nil {
+		kind := "普通文件"
+		if pre.Mode()&os.ModeSymlink != 0 {
+			kind = "符号链接"
+		} else if !pre.Mode().IsRegular() {
+			kind = "特殊文件"
+		}
+		recordSecurityEvent(auditCategoryInstaller, auditSeverityCritical, auditActionBlocked,
+			"minecraft", "TEMP 中发现预置同名安装包("+kind+")，拒绝执行并清除: "+destPath)
+	}
 	if err := removeStaleInstaller(destPath); err != nil {
 		return fmt.Errorf("清理旧安装包失败: %v", err)
 	}
@@ -861,6 +872,8 @@ func (a *App) downloadJavaItem(majorVer int, url string) error {
 
 func runInstaller(filePath string, isMSI bool) error {
 	if err := validateInstallerPackage(filePath, isMSI); err != nil {
+		recordSecurityEvent(auditCategoryInstaller, auditSeverityCritical, auditActionBlocked,
+			"minecraft", "安装包执行前校验失败: "+err.Error())
 		return err
 	}
 	if isMSI {
@@ -2245,6 +2258,11 @@ func (a *App) LaunchGame(versionID string) error {
 	cmd.Env = gameEnv
 	for _, name := range strippedEnv {
 		a.writeLog("安全: 已从游戏进程环境中剥离隐式 JVM 参数变量: %s", name)
+	}
+	if len(strippedEnv) > 0 {
+		// 只记录变量名（值可能含敏感路径/令牌），作为"环境被人动过"的留痕。
+		recordSecurityEvent(auditCategoryJVMEnv, auditSeverityWarn, auditActionStripped,
+			"minecraft", "启动游戏时剥离隐式 JVM 参数环境变量: "+strings.Join(strippedEnv, ","))
 	}
 
 	stdoutPipe, err := cmd.StdoutPipe()
