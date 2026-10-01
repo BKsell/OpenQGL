@@ -117,8 +117,11 @@ func verifyModDownloaded(destPath, fileURL string) error {
 		return nil
 	}
 	if wantSize > 0 && info.Size() != wantSize {
-		return fmt.Errorf("文件大小不匹配：Modrinth 声明 %d 字节，实际 %d 字节（可能被截断或替换）",
+		err := fmt.Errorf("文件大小不匹配：Modrinth 声明 %d 字节，实际 %d 字节（可能被截断或替换）",
 			wantSize, info.Size())
+		recordSecurityEvent(auditCategoryHashVerify, auditSeverityCritical, auditActionBlocked,
+			"modverify", err.Error()+"："+fileURL)
+		return err
 	}
 	if len(hashes) == 0 {
 		return nil
@@ -137,7 +140,10 @@ func verifyModDownloaded(destPath, fileURL string) error {
 		}
 		got := hex.EncodeToString(h.Sum(nil))
 		if got != want {
-			return fmt.Errorf("sha512 校验失败（可能下载被篡改）: got %s want %s", got, want)
+			err := fmt.Errorf("sha512 校验失败（可能下载被篡改）: got %s want %s", got, want)
+			recordSecurityEvent(auditCategoryHashVerify, auditSeverityCritical, auditActionBlocked,
+				"modverify", "sha512 校验失败："+fileURL)
+			return err
 		}
 		return nil
 	}
@@ -152,7 +158,10 @@ func verifyModDownloaded(destPath, fileURL string) error {
 		}
 		got := hex.EncodeToString(h.Sum(nil))
 		if got != want {
-			return fmt.Errorf("sha1 校验失败（可能下载被篡改）: got %s want %s", got, want)
+			err := fmt.Errorf("sha1 校验失败（可能下载被篡改）: got %s want %s", got, want)
+			recordSecurityEvent(auditCategoryHashVerify, auditSeverityCritical, auditActionBlocked,
+				"modverify", "sha1 校验失败："+fileURL)
+			return err
 		}
 		return nil
 	}
