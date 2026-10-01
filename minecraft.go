@@ -293,6 +293,10 @@ func (a *App) downloadFile(url string, destPath string, reportProgress bool) err
 
 // downloadFileBounded 与 downloadFile 相同，但允许调用方按文件类型指定体积上限，
 // 让版本 JSON / 资产索引等小元数据不必套用 4 GiB 的宽松上限。
+//
+// 实际的 HTTP 请求 / 体积双校验 / 流式 sha256 / 原子落盘 / 503 退避重试统一走
+// streamVerifiedDownload：这里只保留"已存在跳过""进度上报到前端""错误归一化"
+// 三层 App 语义，避免各下载点各自手写请求体。
 func (a *App) downloadFileBounded(url string, destPath string, reportProgress bool, maxBytes int64) error {
 	if !isHTTPSURL(url) {
 		return fmt.Errorf("拒绝不安全的下载 URL（非 HTTPS）: %s", url)
@@ -306,70 +310,23 @@ func (a *App) downloadFileBounded(url string, destPath string, reportProgress bo
 	}
 	ctx, cancelReq := a.downloadContext()
 	defer cancelReq()
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
-	if err != nil {
-		return fmt.Errorf("创建请求失败 %s: %v", url, err)
+	opts := secureDownloadOptions{
+		MaxBytes:  maxBytes,
+		Attempts:  3,
+		UserAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+		Client:    safeHTTPClient(),
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-	client := safeHTTPClient()
-	resp, err := client.Do(req)
-	if err != nil {
+	if reportProgress {
+		opts.Progress = func(received, total int64) {
+			a.emitProgress("downloading", filepath.Base(destPath), received, total)
+		}
+	}
+	if _, err := streamVerifiedDownload(ctx, url, destPath, opts); err != nil {
+		if errors.Is(err, errSecureDownloadTooLarge) {
+			return fmt.Errorf("下载失败 %s: %w", url, errDownloadTooLarge)
+		}
 		return fmt.Errorf("下载失败 %s: %v", url, err)
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("下载失败 %s: HTTP %d", url, resp.StatusCode)
-	}
-	// Content-Length 已知且超限，直接不落地文件。
-	if resp.ContentLength > maxBytes {
-		return fmt.Errorf("下载失败 %s: 声明体积 %d 超过上限 %d", url, resp.ContentLength, maxBytes)
-	}
-	out, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
-	if err != nil {
-		return fmt.Errorf("创建文件失败 %s: %v", destPath, err)
-	}
-	// 无论成功失败都关句柄；失败时把残文件删掉，避免下次误命中"文件已存在直接跳过"。
-	copied := false
-	defer func() {
-		out.Close()
-		if !copied {
-			os.Remove(destPath)
-		}
-	}()
-	body := &cappedReader{r: resp.Body, max: maxBytes}
-	if reportProgress {
-		total := resp.ContentLength
-		var downloaded int64
-		buf := make([]byte, 32*1024)
-		for {
-			n, rerr := body.Read(buf)
-			if n > 0 {
-				_, werr := out.Write(buf[:n])
-				if werr != nil {
-					return werr
-				}
-				downloaded += int64(n)
-				a.emitProgress("downloading", filepath.Base(destPath), downloaded, total)
-			}
-			if rerr == io.EOF {
-				break
-			}
-			if rerr != nil {
-				if errors.Is(rerr, errDownloadTooLarge) {
-					return fmt.Errorf("下载失败 %s: %w", url, errDownloadTooLarge)
-				}
-				return rerr
-			}
-		}
-	} else {
-		if _, err = io.Copy(out, body); err != nil {
-			if errors.Is(err, errDownloadTooLarge) {
-				return fmt.Errorf("下载失败 %s: %w", url, errDownloadTooLarge)
-			}
-			return fmt.Errorf("写入文件失败 %s: %v", destPath, err)
-		}
-	}
-	copied = true
 	return nil
 }
 
