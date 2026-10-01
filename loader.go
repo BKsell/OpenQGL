@@ -1617,10 +1617,15 @@ func (a *App) downloadFabricLibraries(profileJSON map[string]interface{}, mcDir 
 			continue
 		}
 
-		if !isHTTPSURL(url) {
-			fmt.Printf("跳过不安全的 URL: %s\n", url)
+		// 供应链 RCE 防护（与 Forge 库一致）：profile JSON 不可信，artifact.url 可能被
+		// 篡改指向攻击者自己的 https 服务器。先对“原始”主机做白名单校验（在镜像
+		// 替换之前），拒绝非白名单主机 / userinfo / 非标端口，避免只校验 https scheme。
+		if !isAllowedMavenLibURL(url) {
+			fmt.Printf("跳过非信任主机的 Fabric 库 URL: %s\n", url)
 			continue
 		}
+
+		sha1, _ := artifact["sha1"].(string)
 
 		url = strings.Replace(url, "https://maven.fabricmc.net/", "https://bmclapi2.bangbang93.com/maven/", 1)
 		url = strings.Replace(url, "https://repo1.maven.org/maven2/", "https://bmclapi2.bangbang93.com/maven/", 1)
@@ -1634,12 +1639,10 @@ func (a *App) downloadFabricLibraries(profileJSON map[string]interface{}, mcDir 
 		}
 		destPath := filepath.Join(libsDir, safePath)
 
-		if _, err := os.Stat(destPath); err == nil {
-			continue
-		}
-
 		os.MkdirAll(filepath.Dir(destPath), 0700)
-		if err := a.downloadFile(url, destPath, false); err != nil {
+		// 走带官方 sha1 锚点的下载（缺失时退化为侧车 UMFS/SHA512/SHA1 复核），
+		// 已存在文件也会复核，杜绝“预置坏 jar + os.Stat 跳过”。
+		if err := a.downloadVerifiedFile(url, destPath, strings.TrimSpace(sha1), false); err != nil {
 			fmt.Printf("下载 Fabric 库失败 %s: %v\n", path, err)
 		} else {
 			downloadedCount++
