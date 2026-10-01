@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // TestIsAllowedMavenLibURL_Trusted 官方与镜像 Maven 主机必须放行（重写前后都可能出现）。
 func TestIsAllowedMavenLibURL_Trusted(t *testing.T) {
@@ -70,6 +73,51 @@ func TestIsSafeRelPath(t *testing.T) {
 	for _, in := range bad {
 		if got := isSafeRelPath(in); got != "" {
 			t.Errorf("危险相对路径 %q 必须返回空串，got %q", in, got)
+		}
+	}
+}
+
+// toBMCLMirror 复刻 downloadFabricLibraries 里的官方→BMCLAPI 镜像替换，
+// 用来锁定“替换前的源主机”和“替换后的镜像主机”都必须在信任白名单内。
+func toBMCLMirror(u string) string {
+	u = strings.Replace(u, "https://maven.fabricmc.net/", "https://bmclapi2.bangbang93.com/maven/", 1)
+	u = strings.Replace(u, "https://repo1.maven.org/maven2/", "https://bmclapi2.bangbang93.com/maven/", 1)
+	u = strings.Replace(u, "https://libraries.minecraft.net/", "https://bmclapi2.bangbang93.com/libraries/", 1)
+	return u
+}
+
+// TestFabricLibrarySourcesAndMirrorsTrusted Fabric profile 里出现的官方库主机，
+// 以及镜像替换后的实际下载地址，都必须通过主机白名单；否则要么误拒合法库，
+// 要么（更危险）把下载导向了非信任主机。
+func TestFabricLibrarySourcesAndMirrorsTrusted(t *testing.T) {
+	sources := []string{
+		"https://maven.fabricmc.net/net/fabricmc/fabric-loader/0.16.0/fabric-loader-0.16.0.jar",
+		"https://repo1.maven.org/maven2/org/ow2/asm/asm-commons/9.7/asm-commons-9.7.jar",
+		"https://libraries.minecraft.net/com/mojang/blocklist/1.0.10/blocklist-1.0.10.txt",
+	}
+	for _, src := range sources {
+		if !isAllowedMavenLibURL(src) {
+			t.Errorf("Fabric 官方源主机应在白名单内: %s", src)
+		}
+		mirrored := toBMCLMirror(src)
+		if !isAllowedMavenLibURL(mirrored) {
+			t.Errorf("镜像替换后的地址也应在白名单内: %s (源 %s)", mirrored, src)
+		}
+	}
+}
+
+// TestFabricTamperedLibraryRejected 即使伪造的 Fabric 库 URL 也带 .jar、
+// 长得像合法路径，只要主机不在白名单就必须被挡下（结合 sha1 锚点双保险）。
+func TestFabricTamperedLibraryRejected(t *testing.T) {
+	attacks := []string{
+		"https://maven.fabricmc.net.evil.tld/net/fabricmc/fabric-loader/0.16.0/fabric-loader-0.16.0.jar",
+		"https://fabricmc.net.s3.evil.example/loader.jar",
+		"https://repo1.maven.org@127.0.0.1/maven2/x.jar",
+		"http://libraries.minecraft.net/com/mojang/x.jar",
+	}
+	for _, u := range attacks {
+		if isAllowedMavenLibURL(u) {
+			t.Errorf("被篡改的 Fabric 库 URL 必须被拒绝: %s", u)
 		}
 	}
 }
