@@ -1,9 +1,6 @@
 package main
 
 import (
-	"crypto/sha1"
-	"crypto/sha512"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -142,89 +139,8 @@ type ModFileInfo struct {
 
 const modrinthBaseURL = "https://api.modrinth.com/v2"
 
-// modExpectedHashes 缓存 Modrinth 给的文件哈希，key 是下载 URL。
-// 之前 downloadModItem 下载完根本不校验哈希，镜像源被投毒或 CDN 被中间人替换都不会被发现。
-var modExpectedHashes = map[string]map[string]string{}
-
-// modExpectedSizes 记录 Modrinth 声明的文件大小，下载完再核对一遍。
-// 光有哈希不够：攻击者让镜像返回一个"刚好哈希对得上"的小文件（比如把 jar 替换成几字节的
-// 自解压脚本）也不行；Size 是 Modrinth 自己签的元数据，多一层防线。
-var modExpectedSizes = map[string]int64{}
-
-// recordModHashes 把 Modrinth 给的哈希登记到待校验集合。
-func recordModHashes(fileURL string, f ModFile) {
-	if fileURL == "" {
-		return
-	}
-	hashes := map[string]string{}
-	for k, v := range f.Hashes {
-		if v != "" {
-			hashes[strings.ToLower(k)] = strings.ToLower(v)
-		}
-	}
-	if f.SHA1 != "" {
-		if _, ok := hashes["sha1"]; !ok {
-			hashes["sha1"] = strings.ToLower(f.SHA1)
-		}
-	}
-	if len(hashes) > 0 {
-		modExpectedHashes[fileURL] = hashes
-	}
-	if f.Size > 0 {
-		modExpectedSizes[fileURL] = f.Size
-	}
-}
-
-// verifyModDownloaded 用 Modrinth 给的哈希校验刚下载的 mod jar。
-// 优先全长 sha512，缺了再 sha1；都没有就跳过（不阻塞老版本 API 响应）。
-// 同时核对文件大小是否和 Modrinth 声明一致。
-func verifyModDownloaded(destPath, fileURL string) error {
-	info, err := os.Stat(destPath)
-	if err != nil {
-		return err
-	}
-	if wantSize, ok := modExpectedSizes[fileURL]; ok && wantSize > 0 && info.Size() != wantSize {
-		return fmt.Errorf("文件大小不匹配：Modrinth 声明 %d 字节，实际 %d 字节（可能被截断或替换）",
-			wantSize, info.Size())
-	}
-	hashes, ok := modExpectedHashes[fileURL]
-	if !ok {
-		return nil
-	}
-	f, err := os.Open(destPath)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-
-	if want, ok := hashes["sha512"]; ok && want != "" {
-		h := sha512.New()
-		if _, err := io.Copy(h, f); err != nil {
-			return err
-		}
-		got := hex.EncodeToString(h.Sum(nil))
-		if got != want {
-			return fmt.Errorf("sha512 校验失败（可能下载被篡改）: got %s want %s", got, want)
-		}
-		return nil
-	}
-
-	if want, ok := hashes["sha1"]; ok && want != "" {
-		if _, err := f.Seek(0, io.SeekStart); err != nil {
-			return err
-		}
-		h := sha1.New()
-		if _, err := io.Copy(h, f); err != nil {
-			return err
-		}
-		got := hex.EncodeToString(h.Sum(nil))
-		if got != want {
-			return fmt.Errorf("sha1 校验失败（可能下载被篡改）: got %s want %s", got, want)
-		}
-		return nil
-	}
-	return nil
-}
+// 下载期望值（哈希/大小）的并发安全存储、完整性校验、下载主机白名单与
+// 符号链接安全落盘都已收口到 modverify.go（var modExpect 等）。
 
 // mirrorModURL 将 Mod 下载 URL 替换为中国镜像源
 func mirrorModURL(original string) string {
@@ -491,13 +407,15 @@ func (a *App) AddModToDownloadList(versionID string, savePath string) error {
 		return fmt.Errorf("未找到 Mod 文件")
 	}
 
-	// 安全校验：下载 URL 必须是 HTTPS
-	if !isHTTPSURL(primaryFile.URL) {
-		return fmt.Errorf("不安全的下载 URL（非 HTTPS）")
+	// 安全校验：下载 URL 必须是 HTTPS 且主机在 Mod 下载白名单内
+	// （官方 Modrinth/CurseForge CDN 与 mcimirror 镜像），防止被篡改的
+	// 版本元数据把下载指向任意主机。
+	if err := validateModDownloadURL(primaryFile.URL); err != nil {
+		return err
 	}
 
-	// 登记 Modrinth 给的哈希和期望大小，下载完会校验
-	recordModHashes(primaryFile.URL, *primaryFile)
+	// 登记 Modrinth 给的哈希和期望大小，下载完会校验（并发安全，详见 modverify.go）
+	modExpect.record(primaryFile.URL, *primaryFile)
 
 	if savePath == "" {
 		mcDir := a.GetMinecraftDir()
@@ -873,19 +791,28 @@ func (a *App) downloadModItem(item *DownloadItem) error {
 
 	a.emitProgress("downloading", fileName, 0, 0)
 
-	// 安全校验：下载 URL 必须是 HTTPS
-	if !isHTTPSURL(item.URL) {
-		return fmt.Errorf("不安全的下载 URL（非 HTTPS）")
+	// 安全校验：下载 URL 必须是 HTTPS 且主机在 Mod 下载白名单内。
+	if err := validateModDownloadURL(item.URL); err != nil {
+		return err
 	}
 
-	// 先尝试镜像源，失败再回退到官方源
-	client := safeHTTPClient()
-	resp, err := client.Get(mirrorModURL(item.URL))
+	// 下载结束（成功或失败）后清掉期望值，避免随下载历史无限堆积。
+	defer modExpect.delete(item.URL)
+
+	// 先尝试镜像源，失败再回退到官方源。
+	// 用专用下载客户端：无 30s 总超时（大 Mod 慢网不该被整体掐断），
+	// 且重定向每一跳都强制主机白名单，防镜像把流量甩到任意外部主机。
+	mirrorURL := mirrorModURL(item.URL)
+	if err := validateModDownloadURL(mirrorURL); err != nil {
+		return fmt.Errorf("镜像下载地址不安全: %w", err)
+	}
+	client := newModDownloadClient()
+	resp, err := client.Get(mirrorURL)
 	if err != nil || resp.StatusCode != http.StatusOK {
 		if resp != nil {
 			resp.Body.Close()
 		}
-		resp, err = safeHTTPClient().Get(item.URL)
+		resp, err = newModDownloadClient().Get(item.URL)
 		if err != nil {
 			return fmt.Errorf("下载 Mod 失败: %v", err)
 		}
@@ -898,15 +825,17 @@ func (a *App) downloadModItem(item *DownloadItem) error {
 
 	// 关键：用 Modrinth 给的 Size 做一道硬上限；ContentLength 不可信（chunked 时是 -1）。
 	// MaxBytesReader 多写一字节就报错，防恶意镜像返回无限流。
+	_, wantSize, _ := modExpect.lookup(item.URL)
 	effectiveCap := int64(maxDownloadBytes)
-	if wantSize, ok := modExpectedSizes[item.URL]; ok && wantSize > 0 {
+	if wantSize > 0 {
 		// 允许比声明稍大一点（Modrinth 的 Size 本身就是文件大小，理论上严格相等，
 		// 这里给 1% 余量防止 CDN 加多字节尾部但哈希仍对的极端情况）
 		effectiveCap = wantSize + wantSize/100 + 1024
 	}
 	resp.Body = http.MaxBytesReader(nil, resp.Body, effectiveCap)
 
-	out, err := os.OpenFile(destPath+".part", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
+	partPath := destPath + ".part"
+	out, err := openSecurePartFile(partPath)
 	if err != nil {
 		return fmt.Errorf("创建文件失败: %v", err)
 	}
@@ -920,7 +849,7 @@ func (a *App) downloadModItem(item *DownloadItem) error {
 		if n > 0 {
 			if _, werr := out.Write(buf[:n]); werr != nil {
 				out.Close()
-				os.Remove(destPath + ".part")
+				os.Remove(partPath)
 				return werr
 			}
 			downloaded += int64(n)
@@ -931,24 +860,19 @@ func (a *App) downloadModItem(item *DownloadItem) error {
 		}
 		if readErr != nil {
 			out.Close()
-			os.Remove(destPath + ".part")
+			os.Remove(partPath)
 			return readErr
 		}
 	}
 	out.Close()
 
-	// 关键修复：下载完先用 Modrinth 给的哈希 + Size 校验，再原子改名。
-	if err := verifyModDownloaded(destPath+".part", item.URL); err != nil {
-		os.Remove(destPath + ".part")
+	// 关键：下载完先用 Modrinth 给的哈希 + Size 校验，再原子改名，
+	// 两者都拒绝顺着预置符号链接写穿到 mods 目录之外。
+	if err := verifyModDownloaded(partPath, item.URL); err != nil {
+		os.Remove(partPath)
 		return fmt.Errorf("Mod 完整性校验失败: %w", err)
 	}
-
-	if err := os.Rename(destPath+".part", destPath); err != nil {
-		os.Remove(destPath + ".part")
-		return fmt.Errorf("重命名临时文件失败: %v", err)
-	}
-
-	return nil
+	return finalizeDownloadFile(partPath, destPath)
 }
 
 // GetModrinthCategories 获取 Modrinth 分类标签
