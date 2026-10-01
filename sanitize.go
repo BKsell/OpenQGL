@@ -47,6 +47,11 @@ func IsSafeArchiveExt(path string) bool {
 //	rel, ok := PathWithin("/opt/mc/versions", userSuppliedPath)
 //
 // 调用方拿到 rel 后再 Join(root, rel) 拼最终绝对路径，绝不直接用 userSuppliedPath。
+//
+// 安全说明：光做 filepath.Rel 的词法判定挡不住符号链接 / junction——
+// root 内若被预先放进一个指向外部目录的链接，词法上路径仍“在 root 里”，
+// 实际读写却落到 root 外。这里在词法检查之外再做一次真实路径解析（见
+// resolvedInside），任何一段把目标带到 root 之外的链接都判为越界。
 func PathWithin(root string, p string) (string, bool) {
 	if p == "" {
 		return "", false
@@ -64,12 +69,77 @@ func PathWithin(root string, p string) (string, bool) {
 		return "", false
 	}
 	if rel == "." {
+		// 即使目标就是 root 本身，也要确认 root 没被链接到别处。
+		if !resolvedInside(rootAbs, abs) {
+			return "", false
+		}
 		return ".", true
 	}
 	if strings.HasPrefix(rel, "..") || filepath.IsAbs(rel) {
 		return "", false
 	}
+	// 词法在 root 内，再确认解析所有符号链接后仍在 root 内。
+	if !resolvedInside(rootAbs, abs) {
+		return "", false
+	}
 	return rel, true
+}
+
+// lexicallyWithin 判断 target 的词法绝对路径是否落在 root 内（不跟随链接）。
+func lexicallyWithin(rootAbs, targetAbs string) bool {
+	rel, err := filepath.Rel(rootAbs, targetAbs)
+	if err != nil {
+		return false
+	}
+	if rel == "." {
+		return true
+	}
+	return rel != ".." &&
+		!strings.HasPrefix(rel, ".."+string(os.PathSeparator)) &&
+		!filepath.IsAbs(rel)
+}
+
+// resolvedInside 在解析符号链接 / junction 后判断 p 是否仍位于 root 内。
+// p 已存在时直接 EvalSymlinks；p 尚不存在（典型的“准备创建的目标文件”）时，
+// 向上找到第一个真实存在的祖先目录，解析它后再接回尚未存在的相对后缀，
+// 防止攻击者用“root 内一个指向外部的已存在链接 + 尚不存在的文件名”绕过检查。
+func resolvedInside(rootAbs, p string) bool {
+	rootReal, err := filepath.EvalSymlinks(rootAbs)
+	if err != nil {
+		rootReal = rootAbs // root 尚不存在时退化为词法根
+	}
+	rootReal, _ = filepath.Abs(rootReal)
+
+	if real, err := filepath.EvalSymlinks(p); err == nil {
+		return lexicallyWithin(rootReal, real)
+	}
+
+	// p（或其某一级祖先）不存在：定位最长的已存在祖先。
+	existing := p
+	for {
+		if _, statErr := os.Lstat(existing); statErr == nil {
+			break
+		}
+		parent := filepath.Dir(existing)
+		if parent == existing {
+			break // 已到卷根，无法再向上
+		}
+		existing = parent
+	}
+
+	realExisting, err := filepath.EvalSymlinks(existing)
+	if err != nil {
+		realExisting = existing
+	}
+	suffix, err := filepath.Rel(existing, p)
+	if err != nil {
+		return false
+	}
+	rebuilt, err := filepath.Abs(filepath.Join(realExisting, suffix))
+	if err != nil {
+		return false
+	}
+	return lexicallyWithin(rootReal, rebuilt)
 }
 
 // IsSymlink 报告给定路径是否是符号链接本身（不跟随）。
