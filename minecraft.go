@@ -365,34 +365,17 @@ func (a *App) GetVersionManifest() ([]MCVersion, error) {
 		"https://bmclapi2.bangbang93.com/mc/game/version_manifest_v2.json",
 		"https://piston-meta.mojang.com/mc/game/version_manifest_v2.json",
 	}
-	var body []byte
-	var lastErr error
-	httpClient := safeHTTPClient()
-	for _, u := range urls {
-		resp, err := httpClient.Get(u)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		body, readErr := io.ReadAll(io.LimitReader(resp.Body, maxVersionManifestBytes))
-		resp.Body.Close()
-		if readErr != nil {
-			lastErr = readErr
-			continue
-		}
-		if resp.StatusCode != http.StatusOK {
-			lastErr = fmt.Errorf("HTTP %d from %s", resp.StatusCode, u)
-			continue
-		}
-		lastErr = nil
-		break
-	}
-	if lastErr != nil {
-		return nil, fmt.Errorf("获取版本清单失败: %v", lastErr)
-	}
 	var manifest VersionManifest
-	if err := json.Unmarshal(body, &manifest); err != nil {
-		return nil, fmt.Errorf("解析版本清单失败: %v", err)
+	opts := jsonFetchOptions{
+		MaxBytes:        maxVersionManifestBytes,
+		Attempts:        2,
+		UserAgent:       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+		Client:          safeHTTPClient(),
+		AllowMediaTypes: []string{"application/json"},
+		SourceLabel:     "版本清单",
+	}
+	if err := fetchJSONFromMirrors(context.Background(), urls, &manifest, opts); err != nil {
+		return nil, fmt.Errorf("获取版本清单失败: %v", err)
 	}
 	var result []MCVersion
 	for _, v := range manifest.Versions {
@@ -784,45 +767,28 @@ func (a *App) downloadJavaItem(majorVer int, url string) error {
 		return fmt.Errorf("清理旧安装包失败: %v", err)
 	}
 	a.emitProgress("downloading", target.FileName, 0, 0)
-	if !isHTTPSURL(url) {
-		return fmt.Errorf("拒绝不安全的 Java 下载 URL（非 HTTPS）: %s", url)
+	ctx, cancelReq := a.downloadContext()
+	defer cancelReq()
+	// 安装包与普通游戏文件走同一条安全通道：HTTPS 强制、声明/实际体积双校验、
+	// 临时文件流式落盘 + fsync + 原子 rename、503/网络抖动指数退避重试，
+	// 失败不会在 TEMP 留半截安装包。安装包紧接着要被执行，落盘后必须补
+	// Mark of the Web（ZoneId=3 Internet），让 SmartScreen 按互联网来源处置，
+	// 而不是把刚下载的文件当成本机原生文件。
+	opts := secureDownloadOptions{
+		MaxBytes:      maxJavaInstallerBytes,
+		Attempts:      3,
+		UserAgent:     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+		Client:        safeHTTPClient(),
+		MarkWebOrigin: true,
+		Progress: func(received, total int64) {
+			a.emitProgress("downloading", target.FileName, received, total)
+		},
 	}
-	resp, err := safeHTTPClient().Get(url)
-	if err != nil {
+	if _, err := streamVerifiedDownload(ctx, url, destPath, opts); err != nil {
+		if errors.Is(err, errSecureDownloadTooLarge) {
+			return fmt.Errorf("下载失败 %s: %w", url, errDownloadTooLarge)
+		}
 		return fmt.Errorf("下载失败: %v", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("下载失败: HTTP %d", resp.StatusCode)
-	}
-	// 硬上限：超过 500 MiB 直接拒绝，防恶意服务器用无限流写爆磁盘
-	limitedBody := http.MaxBytesReader(nil, resp.Body, maxJavaInstallerBytes)
-	// O_EXCL：清理与创建之间若被抢塞回一个同名链接，直接报错而不是 O_TRUNC
-	// 跟链截断链接目标，堵住 remove->open 的 TOCTOU 窗口。
-	out, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0600)
-	if err != nil {
-		return fmt.Errorf("创建文件失败: %v", err)
-	}
-	defer out.Close()
-	total := resp.ContentLength
-	var downloaded int64
-	buf := make([]byte, 32*1024)
-	for {
-		n, readErr := limitedBody.Read(buf)
-		if n > 0 {
-			_, werr := out.Write(buf[:n])
-			if werr != nil {
-				return werr
-			}
-			downloaded += int64(n)
-			a.emitProgress("downloading", target.FileName, downloaded, total)
-		}
-		if readErr == io.EOF {
-			break
-		}
-		if readErr != nil {
-			return readErr
-		}
 	}
 	return runInstaller(destPath, target.IsMSI)
 }
