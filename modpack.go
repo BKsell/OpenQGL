@@ -606,87 +606,25 @@ func (a *App) installModpack(item *DownloadItem) error {
 
 	a.emitProgress("downloading", "解压覆写文件", 0, 0)
 
-	// 预检：在真正落盘前先汇总所有覆写条目的声明体积与数量。
-	// 之前是边解边累计，恶意整合包能先写出几十 GiB 才触发总量中止；
-	// 预检可在一个字节都不落地的情况下整体拒绝，并拦掉海量空文件耗尽 inode。
-	var declaredTotal int64
-	var overrideEntries int
-	for _, f := range r.File {
-		name := f.Name
-		if !(strings.HasPrefix(name, "overrides/") || strings.HasPrefix(name, "client-overrides/")) {
-			continue
-		}
-		rel := strings.TrimPrefix(strings.TrimPrefix(name, "overrides/"), "client-overrides/")
-		if rel == "" {
-			continue
-		}
-		overrideEntries++
-		if overrideEntries > maxOverridesEntries {
-			return fmt.Errorf("覆写条目数超过 %d 上限，拒绝解压(解压炸弹防护)", maxOverridesEntries)
-		}
-		declaredTotal += int64(f.UncompressedSize64)
-		if declaredTotal > maxOverridesTotalBytes {
-			return fmt.Errorf("覆写文件声明总大小超过 %d 字节上限，拒绝解压(解压炸弹防护)", maxOverridesTotalBytes)
-		}
+	// 覆写文件解压统一走 zipextract 安全内核：
+	// Zip Slip、符号链接 / 设备等特殊条目、重复落盘路径在预检阶段整体拒绝；
+	// 条目数 / 单文件 8 GiB / 总量 256 GiB 上限先按声明值预检，落盘再用
+	// LimitReader 复核；每个文件先写同目录临时文件，校验通过后原子替换。
+	lim := zipExtractLimits{
+		EntryMax:   maxOverridesEntryBytes,
+		TotalMax:   maxOverridesTotalBytes,
+		MaxEntries: maxOverridesEntries,
 	}
-
-	var totalExtracted int64
-	for _, f := range r.File {
-		var relPath string
-		if strings.HasPrefix(f.Name, "overrides/") {
-			relPath = strings.TrimPrefix(f.Name, "overrides/")
-		} else if strings.HasPrefix(f.Name, "client-overrides/") {
-			relPath = strings.TrimPrefix(f.Name, "client-overrides/")
-		} else {
-			continue
-		}
-
-		if relPath == "" {
-			continue
-		}
-
-		destPath, err := safeJoin(versionDir, relPath)
-		if err != nil {
-			fmt.Printf("跳过不安全的解压路径(Zip Slip防护): %s, 错误: %v\n", f.Name, err)
-			continue
-		}
-
-		// 拒绝符号链接 / 设备 / 管道 / 套接字等特殊条目，只落地普通文件与目录。
-		if f.Mode()&unsafeEntryMode != 0 {
-			fmt.Printf("跳过特殊类型解压条目(仅允许普通文件/目录): %s\n", f.Name)
-			continue
-		}
-
-		if f.FileInfo().IsDir() {
-			os.MkdirAll(destPath, 0700)
-			continue
-		}
-
-		os.MkdirAll(filepath.Dir(destPath), 0700)
-		rc, err := f.Open()
-		if err != nil {
-			continue
-		}
-		out, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
-		if err != nil {
-			rc.Close()
-			continue
-		}
-		limited := io.LimitReader(rc, maxOverridesEntryBytes+1)
-		n, copyErr := io.Copy(out, limited)
-		out.Close()
-		rc.Close()
-		if copyErr != nil || n > maxOverridesEntryBytes {
-			fmt.Printf("跳过超大解压文件(解压炸弹防护): %s\n", f.Name)
-			os.Remove(destPath)
-			continue
-		}
-		totalExtracted += n
-		if totalExtracted > maxOverridesTotalBytes {
-			fmt.Printf("覆写文件解压总量超过 %d 字节上限，中止解压(解压炸弹防护)\n", maxOverridesTotalBytes)
-			break
-		}
+	extractedBytes, extractedFiles, err := extractZipPrefixes(
+		r.File, versionDir,
+		[]string{"overrides/", "client-overrides/"},
+		lim,
+		func(format string, args ...any) { fmt.Printf(format+"\n", args...) },
+	)
+	if err != nil {
+		return fmt.Errorf("解压覆写文件失败: %w", err)
 	}
+	fmt.Printf("覆写文件解压完成: %d 个文件，共 %d 字节\n", extractedFiles, extractedBytes)
 
 	configDir := filepath.Join(versionDir, "QGL")
 	if err := os.MkdirAll(configDir, 0700); err == nil {
