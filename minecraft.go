@@ -1157,7 +1157,21 @@ func mavenNameToURL(name string) string {
 	return fmt.Sprintf("https://repo1.maven.org/maven2/%s/%s/%s/%s-%s%s.jar", group, artifact, version, artifact, version, classifier)
 }
 
+// 单个 / 全部 native 条目解压后的体积上限。
+// 正常的 .dll / .so / .jnilib 远小于这些值，上限只在“异常压缩包 / zip 炸弹”时触发，
+// 避免一个恶意 natives jar 借超大条目或高压缩比把磁盘写满。
+const (
+	maxNativeEntryBytes int64 = 256 << 20 // 256 MiB / 单个 native
+	maxNativeTotalBytes int64 = 2 << 30   // 2 GiB / 单次解压总量
+)
+
 func extractNatives(jarPath string, destDir string) (int, error) {
+	return extractNativesWithLimits(jarPath, destDir, maxNativeEntryBytes, maxNativeTotalBytes)
+}
+
+// extractNativesWithLimits 是真正的解压内核，单文件 / 总量上限由调用方传入，
+// 既让生产路径用固定安全常量，也便于用小阈值对体积边界做轻量单测（不必造几百 MiB 数据）。
+func extractNativesWithLimits(jarPath string, destDir string, entryMax, totalMax int64) (int, error) {
 	r, err := zip.OpenReader(jarPath)
 	if err != nil {
 		os.Remove(jarPath)
@@ -1165,39 +1179,71 @@ func extractNatives(jarPath string, destDir string) (int, error) {
 	}
 	defer r.Close()
 	count := 0
+	var total int64
 	for _, f := range r.File {
 		if f.FileInfo().IsDir() || strings.HasPrefix(f.Name, "META-INF/") {
+			continue
+		}
+		// 符号链接 / 设备等特殊条目绝不落地，即便伪装成 .dll 后缀。
+		if f.Mode()&(os.ModeSymlink|os.ModeDevice|os.ModeNamedPipe|os.ModeSocket) != 0 {
 			continue
 		}
 		lowerName := strings.ToLower(f.Name)
 		if !strings.HasSuffix(lowerName, ".dll") && !strings.HasSuffix(lowerName, ".jnilib") && !strings.HasSuffix(lowerName, ".so") {
 			continue
 		}
-		rc, err := f.Open()
-		if err != nil {
-			continue
+		// zip 头里声明的解压体积可先廉价挡一刀；真正的边界仍靠 LimitReader，不信任该值。
+		if f.UncompressedSize64 > uint64(entryMax) {
+			return count, fmt.Errorf("native 条目 %s 声明体积超过单文件上限", f.Name)
+		}
+		if total >= totalMax || total+int64(f.UncompressedSize64) > totalMax {
+			return count, fmt.Errorf("native 解压总量超过 %d 字节上限，疑似 zip 炸弹", totalMax)
 		}
 		fileName := filepath.Base(f.Name)
 		destPath := filepath.Join(destDir, fileName)
 		if info, err := os.Stat(destPath); err == nil && info.Size() == f.FileInfo().Size() {
-			rc.Close()
 			count++
 			continue
 		}
-		if _, err := os.Stat(destPath); err == nil {
-			os.Remove(destPath)
+		rc, err := f.Open()
+		if err != nil {
+			continue
 		}
-		out, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
+		if err := os.MkdirAll(destDir, 0700); err != nil {
+			rc.Close()
+			return count, fmt.Errorf("创建 natives 目录失败: %v", err)
+		}
+		// 先写到同目录临时文件，完整通过体积校验后再原子替换，避免留下半截大文件。
+		tmp, err := os.CreateTemp(destDir, ".native-*.tmp")
 		if err != nil {
 			rc.Close()
 			continue
 		}
-		_, err = io.Copy(out, rc)
-		out.Close()
+		tmpName := tmp.Name()
+		limited := io.LimitReader(rc, entryMax+1)
+		n, copyErr := io.Copy(tmp, limited)
+		tmp.Close()
 		rc.Close()
-		if err != nil {
+		if copyErr != nil {
+			os.Remove(tmpName)
 			continue
 		}
+		if n > entryMax || total+n > totalMax {
+			os.Remove(tmpName)
+			if n > entryMax {
+				return count, fmt.Errorf("native 条目 %s 解压后超过单文件上限", fileName)
+			}
+			return count, fmt.Errorf("native 解压总量超过 %d 字节上限，疑似 zip 炸弹", totalMax)
+		}
+		if err := os.Chmod(tmpName, 0600); err != nil {
+			os.Remove(tmpName)
+			continue
+		}
+		if err := os.Rename(tmpName, destPath); err != nil {
+			os.Remove(tmpName)
+			continue
+		}
+		total += n
 		count++
 	}
 	return count, nil
@@ -1341,21 +1387,44 @@ func (a *App) ensureNativesForLoader(mcDir string, versionID string, versionDir 
 	a.extractNativesFromJSON(mcDir, nativesDir, versionJSON)
 }
 
+// copyDirContents 只复制 srcDir 顶层的普通文件到 dstDir（不递归）。
+// 显式跳过符号链接 / 特殊文件，并对单文件与总量设上限：源目录是各版本 natives，
+// 正常只含体积有限的 .dll/.so；跳过链接可避免把链接目标（可能指向目录外敏感文件）
+// 以普通文件形式带进运行目录。
+const maxCopyDirEntryBytes int64 = 256 << 20
+
 func copyDirContents(srcDir string, dstDir string) error {
-	os.MkdirAll(dstDir, 0700)
+	if err := os.MkdirAll(dstDir, 0700); err != nil {
+		return err
+	}
 	entries, err := os.ReadDir(srcDir)
 	if err != nil {
 		return err
 	}
+	var total int64
 	for _, entry := range entries {
 		if entry.IsDir() {
+			continue
+		}
+		// ReadDir 不跟随链接：任何非常规文件（符号链接 / 设备 / 管道等）一律跳过。
+		if entry.Type()&os.ModeType != 0 {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil || info.Size() > maxCopyDirEntryBytes || total+info.Size() > maxNativeTotalBytes {
 			continue
 		}
 		data, err := os.ReadFile(filepath.Join(srcDir, entry.Name()))
 		if err != nil {
 			continue
 		}
-		os.WriteFile(filepath.Join(dstDir, entry.Name()), data, 0600)
+		if int64(len(data)) > maxCopyDirEntryBytes || total+int64(len(data)) > maxNativeTotalBytes {
+			continue
+		}
+		if err := os.WriteFile(filepath.Join(dstDir, entry.Name()), data, 0600); err != nil {
+			continue
+		}
+		total += int64(len(data))
 	}
 	return nil
 }
