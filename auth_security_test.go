@@ -1,6 +1,7 @@
 package main
 
 import (
+	"net/http"
 	"testing"
 	"time"
 )
@@ -60,6 +61,64 @@ func TestTokenExpiryUnix(t *testing.T) {
 	want := now.Add(time.Duration(tokenMaxLifetimeSeconds) * time.Second).Unix()
 	if got := tokenExpiryUnix(now, 999_999_999); got != want {
 		t.Fatalf("huge expiry = %d, want cap %d", got, want)
+	}
+}
+
+func TestBackoffDeviceInterval(t *testing.T) {
+	if got := backoffDeviceInterval(5 * time.Second); got != 10*time.Second {
+		t.Fatalf("5s backoff = %v, want 10s", got)
+	}
+	if got := backoffDeviceInterval(deviceCodeMaxInterval); got != deviceCodeMaxInterval {
+		t.Fatalf("backoff above cap = %v, want cap %v", got, deviceCodeMaxInterval)
+	}
+	// 极小输入也不会跌破最小间隔。
+	if got := backoffDeviceInterval(time.Nanosecond); got != deviceCodeMinInterval {
+		t.Fatalf("tiny backoff = %v, want min %v", got, deviceCodeMinInterval)
+	}
+	// 连续退避序列必须单调不减且封顶。
+	cur := deviceCodeMinInterval
+	for i := 0; i < 20; i++ {
+		next := backoffDeviceInterval(cur)
+		if next < cur {
+			t.Fatalf("backoff decreased: %v -> %v", cur, next)
+		}
+		if next > deviceCodeMaxInterval {
+			t.Fatalf("backoff exceeded cap: %v", next)
+		}
+		cur = next
+	}
+}
+
+func TestParseRetryAfterDelay(t *testing.T) {
+	if got := parseRetryAfterDelay(""); got != 0 {
+		t.Fatalf("empty = %v, want 0", got)
+	}
+	if got := parseRetryAfterDelay("0"); got != 0 {
+		t.Fatalf("zero = %v, want 0", got)
+	}
+	if got := parseRetryAfterDelay("-15"); got != 0 {
+		t.Fatalf("negative = %v, want 0", got)
+	}
+	if got := parseRetryAfterDelay("not-a-number"); got != 0 {
+		t.Fatalf("garbage = %v, want 0", got)
+	}
+	if got := parseRetryAfterDelay("30"); got != 30*time.Second {
+		t.Fatalf("30 = %v, want 30s", got)
+	}
+	// 超大秒数被钳到轮询上限，不能让 goroutine 睡几小时。
+	if got := parseRetryAfterDelay("999999"); got != deviceCodeMaxInterval {
+		t.Fatalf("huge = %v, want cap %v", got, deviceCodeMaxInterval)
+	}
+	// HTTP-date 形式：给一个 45 秒后的时刻，应落在约 45s（容忍调度误差，校验区间）。
+	future := time.Now().Add(45 * time.Second).UTC().Format(http.TimeFormat)
+	got := parseRetryAfterDelay(future)
+	if got < 40*time.Second || got > 50*time.Second {
+		t.Fatalf("http-date = %v, want ~45s", got)
+	}
+	// 过去的 HTTP-date 一律忽略。
+	past := time.Now().Add(-time.Hour).UTC().Format(http.TimeFormat)
+	if got := parseRetryAfterDelay(past); got != 0 {
+		t.Fatalf("past http-date = %v, want 0", got)
 	}
 }
 
