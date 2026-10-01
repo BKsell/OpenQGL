@@ -2236,6 +2236,16 @@ func (a *App) LaunchGame(versionID string) error {
 	cmd.Dir = gameDir
 	cmd.SysProcAttr = &syscall.SysProcAttr{CmdLine: fullCmdLine}
 
+	// 子进程默认会继承启动器的全部环境变量，而 JAVA_TOOL_OPTIONS /
+	// _JAVA_OPTIONS / JDK_JAVA_OPTIONS 等会被 JVM 在启动时自动当作额外参数
+	// 加载，绕过我们对版本 JSON 与 JVM 参数的危险参数过滤（可注入任意
+	// javaagent / 本地代理）。这里显式下发净化后的环境，只剥掉这一族变量。
+	gameEnv, strippedEnv := currentGameEnvironment(nil)
+	cmd.Env = gameEnv
+	for _, name := range strippedEnv {
+		a.writeLog("安全: 已从游戏进程环境中剥离隐式 JVM 参数变量: %s", name)
+	}
+
 	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {
 		return fmt.Errorf("创建 stdout 管道失败: %v", err)
