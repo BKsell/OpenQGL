@@ -102,6 +102,31 @@ func TestSafeExternalURL_PathAndQueryUnrestricted(t *testing.T) {
 	}
 }
 
+// TestSafeExternalURL_ParserEdgeCases 锁定一些容易被解析器细节绕过的边界：
+// scheme 大小写归一、@ 只出现在 query 里不应被当成 userinfo、
+// 百分号编码主机名不能用来伪装成白名单主机。
+func TestSafeExternalURL_ParserEdgeCases(t *testing.T) {
+	accept := []string{
+		"HTTPS://github.com/x",                 // scheme 大写会被 url.Parse 归一为 https
+		"https://github.com/search?q=a%40b",    // @ 在 query 里是合法数据，不是 userinfo
+		"https://api.modrinth.com/?ref=mailto:x@y.com",
+	}
+	for _, u := range accept {
+		if err := safeExternalURL(u); err != nil {
+			t.Errorf("边界链接应放行 %q: %v", u, err)
+		}
+	}
+	reject := []string{
+		"https://github%2ecom/x", // %2e 编码的点不能还原成白名单主机
+		"https://github%2Ecom/x",
+	}
+	for _, u := range reject {
+		if err := safeExternalURL(u); err == nil {
+			t.Errorf("百分号编码伪装主机必须被拒绝: %q", u)
+		}
+	}
+}
+
 // TestAllowedExternalHostsImmutable 关键官方主机必须始终在白名单里，
 // 防止有人误删后把启动器外链校验整体放哑。
 func TestAllowedExternalHostsImmutable(t *testing.T) {
