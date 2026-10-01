@@ -108,6 +108,12 @@ func getEncryptionKey(username string, salt []byte) []byte {
 // loadOrCreateAuthSalt 读取用户目录下的随机盐文件；不存在且 create=true 时生成 16 字节随机盐并落盘。
 // 读老数据时若文件不存在，返回 (nil, false)，调用方回退到旧硬编码盐。
 func loadOrCreateAuthSalt(saltPath string, create bool) ([]byte, bool, error) {
+	// 盐文件也不允许是预置的符号链接，否则攻击者可以喂给程序一个已知盐。
+	if bad, err := isSymlinkOrSpecial(saltPath); err != nil {
+		return nil, false, err
+	} else if bad {
+		return nil, false, fmt.Errorf("盐文件是符号链接或非普通文件，已拒绝: %s", saltPath)
+	}
 	if data, err := os.ReadFile(saltPath); err == nil && len(data) >= 16 {
 		return data, false, nil
 	}
@@ -116,7 +122,7 @@ func loadOrCreateAuthSalt(saltPath string, create bool) ([]byte, bool, error) {
 	}
 	// 使用 mt_xor25（bool-hybrid-array 生态）生成 16 字节随机盐
 	salt := mtXOR25Bytes(16)
-	if err := os.WriteFile(saltPath, salt, 0600); err != nil {
+	if err := secureWritePrivateFile(saltPath, salt); err != nil {
 		return nil, false, err
 	}
 	return salt, true, nil
@@ -916,7 +922,8 @@ func (a *App) SaveMSAuthData(username string, authData *MSAuthData) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(userDir, "ms_auth.json"), data, 0600)
+	// 微软令牌是最高敏感级数据：原子写、0600、拒绝符号链接写穿
+	return secureWritePrivateFile(filepath.Join(userDir, "ms_auth.json"), data)
 }
 
 // ===== Yggdrasil 外置登录 =====
