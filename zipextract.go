@@ -119,31 +119,43 @@ func planZipEntries(files []*zip.File, prefixes []string, lim zipExtractLimits) 
 
 		secureRel, ok := secureZipRelPath(rel)
 		if !ok {
-			return nil, 0, fmt.Errorf("zip 条目路径不安全(Zip Slip 防护): %s", f.Name)
+			err := fmt.Errorf("zip 条目路径不安全(Zip Slip 防护): %s", f.Name)
+			recordSecurityEvent(auditCategoryZip, auditSeverityCritical, auditActionBlocked, "zipextract", err.Error())
+			return nil, 0, err
 		}
 		if f.Mode()&unsafeEntryMode != 0 {
-			return nil, 0, fmt.Errorf("zip 条目是不允许的特殊类型(符号链接/设备/管道/套接字): %s", f.Name)
+			err := fmt.Errorf("zip 条目是不允许的特殊类型(符号链接/设备/管道/套接字): %s", f.Name)
+			recordSecurityEvent(auditCategoryZip, auditSeverityCritical, auditActionBlocked, "zipextract", err.Error())
+			return nil, 0, err
 		}
 		if _, dup := seen[secureRel]; dup {
-			return nil, 0, fmt.Errorf("zip 中存在重复落盘路径的条目: %s", f.Name)
+			err := fmt.Errorf("zip 中存在重复落盘路径的条目: %s", f.Name)
+			recordSecurityEvent(auditCategoryZip, auditSeverityWarn, auditActionBlocked, "zipextract", err.Error())
+			return nil, 0, err
 		}
 		seen[secureRel] = struct{}{}
 
 		isDir := f.FileInfo().IsDir() || strings.HasSuffix(secureRel, "/")
 		if !isDir {
 			if int64(f.UncompressedSize64) > lim.EntryMax {
-				return nil, 0, fmt.Errorf("zip 条目 %s 声明体积 %d 超过单文件上限 %d(解压炸弹防护)",
+				err := fmt.Errorf("zip 条目 %s 声明体积 %d 超过单文件上限 %d(解压炸弹防护)",
 					f.Name, f.UncompressedSize64, lim.EntryMax)
+				recordSecurityEvent(auditCategoryZip, auditSeverityWarn, auditActionBlocked, "zipextract", err.Error())
+				return nil, 0, err
 			}
 			declaredTotal += int64(f.UncompressedSize64)
 			if declaredTotal > lim.TotalMax {
-				return nil, 0, fmt.Errorf("zip 条目声明总大小超过 %d 字节上限(解压炸弹防护)", lim.TotalMax)
+				err := fmt.Errorf("zip 条目声明总大小超过 %d 字节上限(解压炸弹防护)", lim.TotalMax)
+				recordSecurityEvent(auditCategoryZip, auditSeverityWarn, auditActionBlocked, "zipextract", err.Error())
+				return nil, 0, err
 			}
 		}
 
 		plan = append(plan, zipPlannedEntry{file: f, rel: secureRel, dir: isDir})
 		if len(plan) > lim.MaxEntries {
-			return nil, 0, fmt.Errorf("zip 条目数超过 %d 上限(inode 耗尽防护)", lim.MaxEntries)
+			err := fmt.Errorf("zip 条目数超过 %d 上限(inode 耗尽防护)", lim.MaxEntries)
+			recordSecurityEvent(auditCategoryZip, auditSeverityWarn, auditActionBlocked, "zipextract", err.Error())
+			return nil, 0, err
 		}
 	}
 	return plan, declaredTotal, nil
@@ -155,13 +167,17 @@ func planZipEntries(files []*zip.File, prefixes []string, lim zipExtractLimits) 
 // 落盘期间使用同目录临时文件，成功后才 rename，任何失败都不留半成品。
 func writeZipEntrySecure(f *zip.File, destPath string, entryMax int64) (int64, error) {
 	if f.Mode()&unsafeEntryMode != 0 {
-		return 0, fmt.Errorf("拒绝落地特殊类型 zip 条目: %s", f.Name)
+		err := fmt.Errorf("拒绝落地特殊类型 zip 条目: %s", f.Name)
+		recordSecurityEvent(auditCategoryZip, auditSeverityCritical, auditActionBlocked, "zipextract", err.Error())
+		return 0, err
 	}
 	// 目标已存在且是符号链接时拒绝写入：攻击者可能预先布置链接，
 	// 让普通文件写入沿链接穿透到根目录之外。
 	if info, err := os.Lstat(destPath); err == nil {
 		if info.Mode()&os.ModeSymlink != 0 {
-			return 0, fmt.Errorf("目标路径已存在符号链接，拒绝覆盖: %s", destPath)
+			err := fmt.Errorf("目标路径已存在符号链接，拒绝覆盖: %s", destPath)
+			recordSecurityEvent(auditCategoryZip, auditSeverityCritical, auditActionBlocked, "zipextract", err.Error())
+			return 0, err
 		}
 	}
 
@@ -193,7 +209,9 @@ func writeZipEntrySecure(f *zip.File, destPath string, entryMax int64) (int64, e
 	}
 	if n > entryMax {
 		os.Remove(tmpName)
-		return 0, fmt.Errorf("zip 条目 %s 解压后超过单文件上限 %d(解压炸弹防护)", f.Name, entryMax)
+		err := fmt.Errorf("zip 条目 %s 解压后超过单文件上限 %d(解压炸弹防护)", f.Name, entryMax)
+		recordSecurityEvent(auditCategoryZip, auditSeverityWarn, auditActionBlocked, "zipextract", err.Error())
+		return 0, err
 	}
 	if err := os.Chmod(tmpName, 0600); err != nil {
 		os.Remove(tmpName)
@@ -221,7 +239,9 @@ func extractPlannedZipEntries(plan []zipPlannedEntry, destDir string, lim zipExt
 	for _, pe := range plan {
 		destPath := filepath.Join(destDir, filepath.FromSlash(pe.rel))
 		if !secureDestUnder(destDir, destPath) {
-			return totalWritten, fileCount, fmt.Errorf("zip 条目解析后越出目标目录(Zip Slip 防护): %s", pe.file.Name)
+			err := fmt.Errorf("zip 条目解析后越出目标目录(Zip Slip 防护): %s", pe.file.Name)
+			recordSecurityEvent(auditCategoryZip, auditSeverityCritical, auditActionBlocked, "zipextract", err.Error())
+			return totalWritten, fileCount, err
 		}
 		if pe.dir {
 			if err := os.MkdirAll(destPath, 0700); err != nil {
@@ -237,7 +257,9 @@ func extractPlannedZipEntries(plan []zipPlannedEntry, destDir string, lim zipExt
 		totalWritten += n
 		fileCount++
 		if totalWritten > lim.TotalMax {
-			return totalWritten, fileCount, fmt.Errorf("zip 实际解压总量超过 %d 字节上限(解压炸弹防护)", lim.TotalMax)
+			err := fmt.Errorf("zip 实际解压总量超过 %d 字节上限(解压炸弹防护)", lim.TotalMax)
+			recordSecurityEvent(auditCategoryZip, auditSeverityWarn, auditActionBlocked, "zipextract", err.Error())
+			return totalWritten, fileCount, err
 		}
 		logf("解压条目完成: %s (%d 字节)", pe.rel, n)
 	}
