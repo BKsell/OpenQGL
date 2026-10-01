@@ -85,6 +85,8 @@ func secureWriteFile(path string, data []byte, perm os.FileMode) (retErr error) 
 	if bad, err := isSymlinkOrSpecial(path); err != nil {
 		return fmt.Errorf("检查目标路径失败: %w", err)
 	} else if bad {
+		recordSecurityEvent(auditCategoryPrivateWrite, auditSeverityCritical, auditActionBlocked,
+			"safeio", "目标路径是符号链接或特殊文件，拒绝写入: "+path)
 		return fmt.Errorf("拒绝写入符号链接或非普通文件: %s", path)
 	}
 
