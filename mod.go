@@ -16,7 +16,9 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
-// isPathInDir 校验路径是否在指定目录内，防止路径遍历
+// isPathInDir 校验路径是否在指定目录内，防止路径遍历。
+// 用 Rel 的结果做“边界”判定：只有等于目录本身、或第一段不是 ".." 时才算在目录内，
+// 避免把目录内合法的 "..foo" 这类名字误判成越界（单纯 HasPrefix("..") 会误杀）。
 func isPathInDir(path, dir string) bool {
 	absPath, err := filepath.Abs(path)
 	if err != nil {
@@ -30,7 +32,13 @@ func isPathInDir(path, dir string) bool {
 	if err != nil {
 		return false
 	}
-	return !strings.HasPrefix(rel, "..")
+	if rel == "." {
+		return true
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		return false
+	}
+	return true
 }
 
 // isValidModID 验证 Mod ID 格式，防止 URL 注入
