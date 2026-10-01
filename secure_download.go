@@ -44,12 +44,14 @@ const (
 
 // secureDownloadOptions 控制一次安全下载。
 type secureDownloadOptions struct {
-	MaxBytes       int64               // 必填：声明与实际体积的共同硬上限
-	ExpectedSHA256 string              // 可空：非空时必须与流式摘要一致（小写十六进制）
-	Attempts       int                 // 可空：<=0 时取 secureDownloadDefaultAttempts
-	UserAgent      string              // 可空：为空则不覆盖
-	Client         *http.Client        // 可空：为空用 safeHTTPClient()
-	Progress       func(received, total int64) // 可空：每读到一批数据回调一次
+	MaxBytes       int64                        // 必填：声明与实际体积的共同硬上限
+	ExpectedSHA256 string                       // 可空：非空时必须与流式摘要一致（小写十六进制）
+	Attempts       int                          // 可空：<=0 时取 secureDownloadDefaultAttempts
+	UserAgent      string                       // 可空：为空则不覆盖
+	Client         *http.Client                 // 可空：为空用 safeHTTPClient()
+	Progress       func(received, total int64)  // 可空：每读到一批数据回调一次
+	MarkWebOrigin  bool                         // 可空：Windows 上落盘后写入 MOTW（ZoneId=3 Internet）
+	ReferrerURL    string                       // 可空：MOTW 的 ReferrerUrl
 }
 
 // secureDownloadResult 是一次成功下载的回执。
@@ -247,6 +249,12 @@ loop:
 	if err := os.Rename(tmpName, destPath); err != nil {
 		os.Remove(tmpName)
 		return nil, false, fmt.Errorf("原子替换目标文件失败: %w", err)
+	}
+
+	// 落盘成功后补 Windows 网络来源标记（MOTW）。MOTW 是纵深防御层，
+	// 写失败只审计、不回滚文件本身——内容已通过全部校验。
+	if opts.MarkWebOrigin {
+		markDownloadWithWebOrigin(destPath, url, opts.ReferrerURL)
 	}
 
 	return &secureDownloadResult{Bytes: written, SHA256: actualSHA}, false, nil
