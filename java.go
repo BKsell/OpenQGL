@@ -187,6 +187,23 @@ func (a *App) scanJavaInstallations() []JavaEntry {
 	return results
 }
 
+// isReparsePointDir 判断目录条目是否为 reparse point（junction / 符号链接 /
+// 挂载点）。全盘递归扫描（AppData、磁盘根）若跟随 junction，可能被引到另一个
+// 卷或系统目录（例如用户把某目录联接成 C:\ 根），既拖慢扫描又会发现扫描范围
+// 之外的 Java；maxDepth 也挡不住 junction 构成的环之外的横向跳转。
+// 发现阶段只认真实目录：当前层级的 javaw.exe 探测照常（显式安装的 JDK 不受
+// 影响），但绝不递归进入 reparse point。
+func isReparsePointDir(entry os.DirEntry) bool {
+	info, err := entry.Info()
+	if err != nil {
+		return false
+	}
+	if data, ok := info.Sys().(*syscall.Win32FileAttributeData); ok {
+		return data.FileAttributes&syscall.FILE_ATTRIBUTE_REPARSE_POINT != 0
+	}
+	return false
+}
+
 // searchDriveForJava 搜索磁盘驱动器上的 Java（参考PCL的磁盘遍历逻辑）
 // 只搜索根目录下的 Java 相关文件夹，避免全盘递归太慢
 func searchDriveForJava(drivePath string, results *[]JavaEntry, seen map[string]bool) {
@@ -224,6 +241,10 @@ func searchDriveForJava(drivePath string, results *[]JavaEntry, seen map[string]
 			}
 		}
 		if shouldEnter {
+			// 不跟随 junction / 符号链接，避免扫到其它卷或陷入联接环。
+			if isReparsePointDir(entry) {
+				continue
+			}
 			searchDirForJava(filepath.Join(drivePath, name), results, seen, 4)
 		}
 	}
@@ -285,6 +306,11 @@ func searchDirForJava(dir string, results *[]JavaEntry, seen map[string]bool, ma
 			}
 		}
 		if shouldEnter {
+			// 不跟随 junction / 符号链接：AppData 下的目录联接可能指向
+			// Program Files 或其它卷，真实目录会由对应的固定扫描路径发现。
+			if isReparsePointDir(entry) {
+				continue
+			}
 			searchDirForJava(filepath.Join(dir, name), results, seen, maxDepth-1)
 		}
 	}
@@ -513,10 +539,10 @@ func (a *App) GetJavaRequirement(versionID string) JavaVersionReq {
 	// MC 1.20.5+ (24w14a+) -> Java 21+
 	if mcMajor > 1 || (mcMajor == 1 && mcMinor >= 21) || (mcMajor == 1 && mcMinor == 20 && mcPatch >= 5) {
 		req.MinMajor = 21
-	} else if mcMajor > 1 || (mcMajor == 1 && mcMinor >= 18) {
-		// MC 1.18+ -> Java 17+
+	} else if mcMajor == 1 && mcMinor >= 18 {
+		// MC 1.18+ -> Java 17+（走到 else 时 mcMajor>1 已被上一支覆盖）
 		req.MinMajor = 17
-	} else if mcMajor > 1 || (mcMajor == 1 && mcMinor >= 17) {
+	} else if mcMajor == 1 && mcMinor >= 17 {
 		// MC 1.17+ -> Java 16+
 		req.MinMajor = 16
 	} else if releaseYear >= 2017 {
