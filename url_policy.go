@@ -30,34 +30,42 @@ var allowedExternalHosts = map[string]bool{
 	"bmclapi2.bangbang93.com":    true,
 }
 
+// rejectExternalURL 统一记录一次"外部链接被拒"安全事件并返回错误。
+// raw 会过脱敏（token / 邮箱 / 内网 IP）与限长，避免把敏感 query 写进审计日志。
+func rejectExternalURL(reason, raw string) error {
+	recordSecurityEvent(auditCategoryExternalURL, auditSeverityWarn, auditActionRejected,
+		"url_policy", reason+"："+raw)
+	return fmt.Errorf("%s", reason)
+}
+
 // safeExternalURL 校验 url 是否允许交给系统浏览器打开。
 // 只允许 https、标准 443 端口、host 必须在白名单内，
 // 且不允许 userinfo（防 https://github.com@evil.com 这类视觉混淆）。
 func safeExternalURL(raw string) error {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		return fmt.Errorf("空 URL")
+		return rejectExternalURL("空 URL", raw)
 	}
 	u, err := url.Parse(raw)
 	if err != nil {
-		return fmt.Errorf("URL 解析失败: %v", err)
+		return rejectExternalURL("URL 解析失败: "+err.Error(), raw)
 	}
 	if u.Scheme != "https" {
-		return fmt.Errorf("只允许 https:// 链接，收到 %q", u.Scheme)
+		return rejectExternalURL(fmt.Sprintf("只允许 https:// 链接，收到 %q", u.Scheme), raw)
 	}
 	if u.User != nil {
-		return fmt.Errorf("外部链接不允许携带用户信息(userinfo): %s", u.Host)
+		return rejectExternalURL(fmt.Sprintf("外部链接不允许携带用户信息(userinfo): %s", u.Host), raw)
 	}
 	// 只放行默认 https 端口；显式写 :8080 之类一律拒绝，避免借端口绕过白名单心智。
 	if port := u.Port(); port != "" && port != "443" {
-		return fmt.Errorf("外部链接只允许 443 端口，收到 %q", port)
+		return rejectExternalURL(fmt.Sprintf("外部链接只允许 443 端口，收到 %q", port), raw)
 	}
 	host := strings.ToLower(u.Hostname())
 	if host == "" {
-		return fmt.Errorf("外部链接缺少主机名")
+		return rejectExternalURL("外部链接缺少主机名", raw)
 	}
 	if !allowedExternalHosts[host] {
-		return fmt.Errorf("host %q 不在外部链接白名单内", host)
+		return rejectExternalURL(fmt.Sprintf("host %q 不在外部链接白名单内", host), raw)
 	}
 	return nil
 }
