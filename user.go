@@ -219,7 +219,8 @@ func (a *App) saveUserType(username string, userType UserType) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(userDir, "type.json"), data, 0600)
+	// 敏感文件统一走原子私有写：防半截写、防符号链接写穿、强制 0600。
+	return secureWritePrivateFile(filepath.Join(userDir, "type.json"), data)
 }
 
 func (a *App) GetUsers() ([]UserInfo, error) {
@@ -290,8 +291,8 @@ func (a *App) CreateGuestUser(username string, securityPassword string) error {
 		return fmt.Errorf("序列化密码数据失败: %w", err)
 	}
 	pwdPath := filepath.Join(userDir, "password.json")
-	// 安全加固: 密码文件权限 0600
-	if err := os.WriteFile(pwdPath, pwdBytes, 0600); err != nil {
+	// 安全加固: 密码文件权限 0600，且原子写 / 拒绝符号链接写穿
+	if err := secureWritePrivateFile(pwdPath, pwdBytes); err != nil {
 		return fmt.Errorf("写入密码文件失败: %w", err)
 	}
 	// 保存用户类型为访客
@@ -377,8 +378,8 @@ func (a *App) SaveExternalAuthData(username string, authData *ExternalAuthData) 
 	if err != nil {
 		return fmt.Errorf("序列化加密数据失败: %w", err)
 	}
-	// 安全加固: 认证数据文件权限 0600
-	return os.WriteFile(filepath.Join(userDir, "external_auth.json"), data, 0600)
+	// 安全加固: 认证数据文件权限 0600，原子写并拒绝符号链接写穿
+	return secureWritePrivateFile(filepath.Join(userDir, "external_auth.json"), data)
 }
 
 // GetExternalAuthData 获取外置登录认证数据（解密读取）
@@ -438,8 +439,8 @@ func (a *App) CreateUser(username string, password string) error {
 			return fmt.Errorf("序列化密码数据失败: %w", err)
 		}
 		pwdPath := filepath.Join(userDir, "password.json")
-		// 安全加固: 密码文件权限 0600
-		if err := os.WriteFile(pwdPath, pwdBytes, 0600); err != nil {
+		// 安全加固: 密码文件原子写、0600、拒绝符号链接写穿
+		if err := secureWritePrivateFile(pwdPath, pwdBytes); err != nil {
 			return fmt.Errorf("写入密码文件失败: %w", err)
 		}
 	}
@@ -452,7 +453,7 @@ func (a *App) CreateUser(username string, password string) error {
 		return fmt.Errorf("序列化用户配置失败: %w", err)
 	}
 	configPath := filepath.Join(userDir, "config.json")
-	if err := os.WriteFile(configPath, configBytes, 0600); err != nil {
+	if err := secureWritePrivateFile(configPath, configBytes); err != nil {
 		return fmt.Errorf("写入用户配置文件失败: %w", err)
 	}
 	return nil
@@ -653,8 +654,8 @@ func (a *App) SaveGlobalConfig(config *GlobalConfig) error {
 		return fmt.Errorf("序列化全局配置失败: %w", err)
 	}
 	configPath := filepath.Join(qglDir, "config.json")
-	// 安全加固: 配置文件权限 0600
-	if err := os.WriteFile(configPath, data, 0600); err != nil {
+	// 安全加固: 全局配置原子写、0600、拒绝符号链接写穿
+	if err := secureWritePrivateFile(configPath, data); err != nil {
 		return fmt.Errorf("写入全局配置失败: %w", err)
 	}
 	return nil
@@ -692,8 +693,8 @@ func (a *App) SaveUserConfig(username string, config *UserConfig) error {
 		return fmt.Errorf("序列化用户配置失败: %w", err)
 	}
 	configPath := filepath.Join(userDir, "config.json")
-	// 安全加固: 用户配置文件权限 0600
-	if err := os.WriteFile(configPath, data, 0600); err != nil {
+	// 安全加固: 用户配置原子写、0600、拒绝符号链接写穿
+	if err := secureWritePrivateFile(configPath, data); err != nil {
 		return fmt.Errorf("写入用户配置文件失败: %w", err)
 	}
 	return nil
@@ -955,7 +956,7 @@ func (a *App) GetBingDailyImage() (string, error) {
 		if len(data) >= maxBackgroundImageBytes {
 			return "", fmt.Errorf("Bing 图片过大，已拒绝")
 		}
-		if err := os.WriteFile(cachePath, data, 0600); err != nil {
+		if err := secureWritePrivateFile(cachePath, data); err != nil {
 			return "", fmt.Errorf("缓存图片失败: %w", err)
 		}
 		return a.fileToDataURL(cachePath)
@@ -985,8 +986,8 @@ func (a *App) GetBingDailyImage() (string, error) {
 	if len(data) >= maxBackgroundImageBytes {
 		return "", fmt.Errorf("图片过大，已拒绝")
 	}
-	// 缓存到本地
-	if err := os.WriteFile(cachePath, data, 0600); err != nil {
+	// 缓存到本地（原子写，防止预置符号链接把图片数据写穿到其它文件）
+	if err := secureWritePrivateFile(cachePath, data); err != nil {
 		return fmt.Errorf("缓存图片失败: %w", err)
 	}
 	// 设置为当前背景
