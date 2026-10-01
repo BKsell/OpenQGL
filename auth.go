@@ -46,6 +46,21 @@ const (
 	// authJSONMaxBytes 限制每个认证 JSON 响应最多 1 MiB。
 	// 认证接口本应返回小体量的 token 结构，超过这个尺寸基本就是恶意响应或错误页面。
 	authJSONMaxBytes = 1 << 20
+
+	// 设备码轮询参数。interval / expires_in 都来自微软的响应，不能无条件信任：
+	// 被劫持或畸形的响应可以给个超大值，让轮询 goroutine 睡几个小时、或把登录
+	// 有效期拉到几天。这里按官方正常范围（间隔 5s、设备码约 15min 失效）钳制。
+	deviceCodeMinInterval = 5 * time.Second
+	deviceCodeMaxInterval = 5 * time.Minute
+	deviceCodeDefaultTTL  = 5 * time.Minute
+	deviceCodeMaxTTL      = 15 * time.Minute
+	// slow_down 要求每次间隔 +5s，但加多少次必须有上限，否则服务器一直回
+	// slow_down 就能把这个 goroutine 无限期挂住。
+	deviceCodeMaxSlowDowns = 60
+	// token expires_in 的合理上限（一年）。正常 MSA/MC 令牌都是 24h，
+	// 给极大值只会把过期时间写到未来很久，掩盖"该刷新了"的判断。
+	tokenMaxLifetimeSeconds = 365 * 24 * 3600
+	tokenDefaultLifetimeSec = 24 * 3600
 )
 
 // MSAuthData 微软认证数据（存储在用户目录的 ms_auth.json）
@@ -238,6 +253,62 @@ type MCEntitlementResponse struct {
 	} `json:"items"`
 }
 
+// clampPollInterval 钳制设备码轮询间隔：下限 5s（微软规定不得更快，否则会
+// 被判定滥用），上限 5min（防远程响应给超大 interval 挂住 goroutine）。
+func clampPollInterval(seconds int) time.Duration {
+	if seconds < int(deviceCodeMinInterval/time.Second) {
+		return deviceCodeMinInterval
+	}
+	d := time.Duration(seconds) * time.Second
+	if d > deviceCodeMaxInterval {
+		return deviceCodeMaxInterval
+	}
+	return d
+}
+
+// clampDeviceTTL 钳制设备码有效期：非正用默认 5min，最大不超过 15min。
+func clampDeviceTTL(seconds int) time.Duration {
+	if seconds <= 0 {
+		return deviceCodeDefaultTTL
+	}
+	d := time.Duration(seconds) * time.Second
+	if d > deviceCodeMaxTTL {
+		return deviceCodeMaxTTL
+	}
+	return d
+}
+
+// tokenExpiryUnix 根据远程给的 expires_in 计算过期时间戳。
+// 非正值回退 24h（MSA/MC 令牌的常规有效期），超大值钳到一年，避免把刷新
+// 判断写到错误的未来。
+func tokenExpiryUnix(now time.Time, seconds int) int64 {
+	if seconds <= 0 {
+		seconds = tokenDefaultLifetimeSec
+	}
+	if seconds > tokenMaxLifetimeSeconds {
+		seconds = tokenMaxLifetimeSeconds
+	}
+	return now.Add(time.Duration(seconds) * time.Second).Unix()
+}
+
+// isAllowedVerificationURL 限定设备码验证页只能落在微软自家域名。
+// 仅校验 https:// 前缀并不够：被劫持的响应可以给一个 https:// 钓鱼站，
+// 用户在系统浏览器里输入的 user code 会直接进攻击者手里。这里再收紧：
+// 必须是 https、无 userinfo、主机为 microsoft.com / live.com（含子域，
+// 官方设备码验证页为 www.microsoft.com/link、login.live.com 等）。
+func isAllowedVerificationURL(raw string) bool {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Scheme != "https" || u.User != nil {
+		return false
+	}
+	host := strings.ToLower(u.Hostname())
+	if host == "" {
+		return false
+	}
+	return host == "microsoft.com" || strings.HasSuffix(host, ".microsoft.com") ||
+		host == "live.com" || strings.HasSuffix(host, ".live.com")
+}
+
 // StartMicrosoftLogin 开始微软登录流程（Device Code Flow）
 func (a *App) StartMicrosoftLogin() (string, error) {
 	if !authRateLimiter.Allow("ms-start") {
@@ -264,9 +335,9 @@ func (a *App) StartMicrosoftLogin() (string, error) {
 		return "", fmt.Errorf("设备代码错误: %s - %s", dcResp.Error, dcResp.ErrorDescription)
 	}
 
-	// 只允许 https，避免协议被篡改成 file:// / javascript: 等
-	if !strings.HasPrefix(dcResp.VerificationURL, "https://") {
-		return "", fmt.Errorf("无效的验证 URL 协议")
+	// 验证页必须是 https 且落在微软自家域名，避免被劫持响应导向钓鱼站骗取 user code。
+	if !isAllowedVerificationURL(dcResp.VerificationURL) {
+		return "", fmt.Errorf("验证 URL 不在微软可信域名内，拒绝打开")
 	}
 
 	// 安全修复：不要走 cmd.exe /c start，那会把 URL 拼进 shell 命令行，
@@ -284,19 +355,11 @@ func (a *App) StartMicrosoftLogin() (string, error) {
 
 // pollMicrosoftToken 轮询微软令牌，到达设备码过期时间后自动退出
 func (a *App) pollMicrosoftToken(dc DeviceCodeResponse) {
-	interval := 5
-	if dc.Interval >= 5 {
-		interval = dc.Interval
-	} else if dc.Interval > 0 {
-		interval = 5
-	}
-	ttl := time.Duration(dc.ExpiresIn) * time.Second
-	if ttl <= 0 {
-		ttl = 5 * time.Minute
-	}
-	deadline := time.Now().Add(ttl)
+	interval := clampPollInterval(dc.Interval)
+	deadline := time.Now().Add(clampDeviceTTL(dc.ExpiresIn))
+	slowDowns := 0
 	for {
-		time.Sleep(time.Duration(interval) * time.Second)
+		time.Sleep(interval)
 		if time.Now().After(deadline) {
 			runtime.EventsEmit(a.ctx, "msLoginError", "登录已过期，请重新尝试")
 			return
@@ -321,7 +384,17 @@ func (a *App) pollMicrosoftToken(dc DeviceCodeResponse) {
 				continue
 			}
 			if tokenResp.Error == "slow_down" {
-				interval += 5
+				// 每次 +5s，但有总次数上限；到上限按设备码过期处理，
+				// 防止服务器持续 slow_down 把 goroutine 无限挂住。
+				if slowDowns >= deviceCodeMaxSlowDowns {
+					runtime.EventsEmit(a.ctx, "msLoginError", "登录轮询超时，请重新尝试")
+					return
+				}
+				slowDowns++
+				interval += 5 * time.Second
+				if interval > deviceCodeMaxInterval {
+					interval = deviceCodeMaxInterval
+				}
 				continue
 			}
 			if tokenResp.Error == "expired_token" {
@@ -331,8 +404,7 @@ func (a *App) pollMicrosoftToken(dc DeviceCodeResponse) {
 			runtime.EventsEmit(a.ctx, "msLoginError", fmt.Sprintf("登录失败: %s", tokenResp.ErrorDescription))
 			return
 		}
-		a.completeMicrosoftLogin(tokenResp.AccessToken, tokenResp.RefreshToken, tokenResp.ExpiresIn)
-		return
+		a.completeMicrosoftLogin(tokenResp.AccessToken, tokenResp.RefreshToken, tokenResp.ExpiresIn)		return
 	}
 }
 
@@ -373,14 +445,17 @@ func (a *App) completeMicrosoftLogin(msAccessToken string, msRefreshToken string
 		return
 	}
 
+	now := time.Now()
 	authData := MSAuthData{
 		AccessToken:   msAccessToken,
 		RefreshToken:  msRefreshToken,
 		MCAccessToken: mcAccessToken,
 		UUID:          profile.ID,
 		Username:      profile.Name,
-		ExpiresAt:     time.Now().Add(time.Duration(msExpiresIn) * time.Second).Unix(),
-		MCExpiresAt:   time.Now().Add(time.Duration(msExpiresIn) * time.Second).Unix(),
+		// MSA 令牌与 MC 令牌各自独立，过期时间必须分别记录：
+		// ExpiresAt 用微软令牌 expires_in，MCExpiresAt 用 MC 登录返回的值。
+		ExpiresAt:   tokenExpiryUnix(now, msExpiresIn),
+		MCExpiresAt: tokenExpiryUnix(now, mcExpiresIn),
 	}
 
 	if err := a.CreatePremiumUser(profile.Name, authData); err != nil {
@@ -648,11 +723,16 @@ func (a *App) RefreshMicrosoftToken(username string) error {
 	if err != nil {
 		return err
 	}
+	now := time.Now()
 	authData.AccessToken = tokenResp.AccessToken
-	authData.RefreshToken = tokenResp.RefreshToken
+	// 微软刷新响应可能不重复下发 refresh_token（令牌轮转但本响应缺字段）；
+	// 此时绝不能用空串覆盖掉旧的 refresh_token，否则下一次刷新会直接废掉。
+	if tokenResp.RefreshToken != "" {
+		authData.RefreshToken = tokenResp.RefreshToken
+	}
 	authData.MCAccessToken = mcAccessToken
-	authData.ExpiresAt = time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second).Unix()
-	authData.MCExpiresAt = time.Now().Add(time.Duration(mcExpiresIn) * time.Second).Unix()
+	authData.ExpiresAt = tokenExpiryUnix(now, tokenResp.ExpiresIn)
+	authData.MCExpiresAt = tokenExpiryUnix(now, mcExpiresIn)
 	return a.SaveMSAuthData(username, authData)
 }
 
