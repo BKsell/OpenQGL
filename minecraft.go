@@ -1271,7 +1271,14 @@ func (a *App) extractNativesFromJSON(mcDir string, nativesDir string, versionJSO
 		if !ok || classifier == nil {
 			continue
 		}
-		nativeJarPath := filepath.Join(mcDir, "libraries", classifier.Path)
+		// 与下载阶段一致，这里必须再次校验 classifier.Path：版本 JSON 来自镜像
+		// 站（不可信），而本函数也会被非 DownloadVersion 的其它启动流程调用。
+		safeClassifierPath := isSafeRelPath(classifier.Path)
+		if safeClassifierPath == "" {
+			a.writeLog("跳过不安全的 native jar 路径: %s", classifier.Path)
+			continue
+		}
+		nativeJarPath := filepath.Join(mcDir, "libraries", safeClassifierPath)
 		if _, err := os.Stat(nativeJarPath); os.IsNotExist(err) {
 			a.writeLog("native jar 不存在(跳过): %s", nativeJarPath)
 			continue
@@ -1612,19 +1619,62 @@ func libGroupArtifact(name string) string {
 	return name
 }
 
+// isValidMavenToken 校验 Maven 坐标中的单个片段（groupId 段 / artifactId /
+// version / classifier）。版本 JSON 来自镜像站，属于不可信输入：只要片段里出现
+// 路径分隔符、盘符、".." 或 Maven 坐标不允许的空白 / 控制字符，就判为非法，
+// 防止恶意坐标经 mavenNameToPath 拼出逃逸 libraries 目录的路径。
+func isValidMavenToken(token string) bool {
+	if token == "" || token == "." || token == ".." {
+		return false
+	}
+	if len(token) > 255 {
+		return false
+	}
+	for _, r := range token {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+			// 字母数字
+		case strings.ContainsRune("-_.@+", r):
+			// Maven 常见合法字符
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 func mavenNameToPath(name string, libsDir string) string {
 	parts := strings.Split(name, ":")
 	if len(parts) < 3 {
 		return ""
 	}
-	group := strings.ReplaceAll(parts[0], ".", string(os.PathSeparator))
+	// 坐标的每一段都必须是干净的 Maven token；groupId 的每个 "." 分段也要
+	// 单独校验，否则 "..\.." 之类会在 ReplaceAll 之后变成路径穿越。
+	groupParts := strings.Split(parts[0], ".")
+	for _, seg := range groupParts {
+		if !isValidMavenToken(seg) {
+			return ""
+		}
+	}
 	artifact, version := parts[1], parts[2]
+	if !isValidMavenToken(artifact) || !isValidMavenToken(version) {
+		return ""
+	}
 	classifier := ""
 	if len(parts) >= 4 {
+		if !isValidMavenToken(parts[3]) {
+			return ""
+		}
 		classifier = "-" + parts[3]
 	}
+	group := strings.Join(groupParts, string(os.PathSeparator))
 	fileName := fmt.Sprintf("%s-%s%s.jar", artifact, version, classifier)
-	return filepath.Join(libsDir, group, artifact, version, fileName)
+	rel := filepath.Join(group, artifact, version, fileName)
+	// 拼好后再用统一的相对路径校验兜底，确保结果一定在 libraries 内。
+	if isSafeRelPath(rel) == "" {
+		return ""
+	}
+	return filepath.Join(libsDir, rel)
 }
 
 func (a *App) resolveVersionJSON(versionID string) (*VersionJSON, error) {
@@ -1724,7 +1774,13 @@ func (a *App) buildClasspath(mcDir string, versionID string, versionJSON *Versio
 			}
 			libPath = filepath.Join(libsDir, safePath)
 		} else if lib.JarPath != "" {
-			libPath = filepath.Join(libsDir, lib.JarPath)
+			// lib.JarPath 是镜像 JSON 直接给的相对路径，必须校验，
+			// 否则恶意条目可以把 libraries 之外的任意 jar 塞进启动 classpath。
+			safeJarPath := isSafeRelPath(lib.JarPath)
+			if safeJarPath == "" {
+				continue
+			}
+			libPath = filepath.Join(libsDir, safeJarPath)
 		} else if lib.Name != "" {
 			libPath = mavenNameToPath(lib.Name, libsDir)
 		}
