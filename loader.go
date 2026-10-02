@@ -164,7 +164,9 @@ func isSafeRelPath(relPath string) string {
 
 // writeLog 将信息写入日志文件（用户可随时查看和复制）
 func (a *App) writeLog(format string, args ...interface{}) {
-	msg := fmt.Sprintf(format, args...)
+	// 在写控制台 / qgl_install.log / 启动日志之前统一脱敏：启动参数与游戏输出里
+	// 可能带微软 access token、Bearer、JWT、密码等，任何一处落盘/外发都算泄密。
+	msg := sanitizeLogLine(fmt.Sprintf(format, args...))
 	timestamp := time.Now().Format("2006-01-02 15:04:05")
 	logLine := fmt.Sprintf("[%s] %s\n", timestamp, msg)
 
