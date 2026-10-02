@@ -92,6 +92,12 @@ func jvmArgThreat(lower string) (dangerous bool, consumesOperand bool) {
 		}
 	}
 
+	// 4) 危险 -D 系统属性（换信任库 / 覆盖安全属性 / JMX / 任意类加载等）。
+	//    权威判定在 jvmprops.go；普通业务属性（-Dfabric.* / -Djna.tmpdir 等）放行。
+	if jvmPropArgThreat(lower) {
+		return true, false
+	}
+
 	return false, false
 }
 
@@ -110,6 +116,11 @@ func classifyUntrustedJvmArg(lower string) (reason string, dangerous, consumesOp
 		}
 		if strings.HasPrefix(lower, t.flag+":") || strings.HasPrefix(lower, t.flag+"=") {
 			return t.reason, true, false
+		}
+	}
+	if name, value, isProp := parseSystemPropertyArg(lower); isProp {
+		if reason, bad := jvmSystemPropertyThreat(name, value); bad {
+			return reason, true, false
 		}
 	}
 	return "", false, false
