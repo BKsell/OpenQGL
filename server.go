@@ -465,6 +465,9 @@ func (a *App) StartServer(name string) error {
 	cmd := exec.Command(javaPath, args...)
 	cmd.Dir = cfg.ServerDir
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	// 内置服务端是长期运行的独立 JVM，同样必须剥离 JAVA_TOOL_OPTIONS
+	// 一族隐式参数变量，避免服务端进程被环境注入 javaagent / 恶意类路径。
+	a.applySanitizedJVMEnv(cmd, "DedicatedServer", nil)
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
