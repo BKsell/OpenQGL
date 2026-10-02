@@ -375,6 +375,15 @@ func validateJava(javawPath string) *JavaEntry {
 	if _, err := os.Stat(javaExePath); err != nil {
 		return nil
 	}
+	// 供应链防护：标准布局下 java.exe 位于 <JDK_HOME>//bin。若该文件（或其上级）
+	// 是指向 JDK 目录之外的符号链接 / junction，解析后的真实路径会逃出 JDK_HOME，
+	// 这常见于被篡改的 JAVA_HOME 或预置的链接型“影子 JDK”，命中即拒绝信任。
+	if strings.EqualFold(filepath.Base(dir), "bin") {
+		jdkHome := filepath.Dir(dir)
+		if _, ok := ResolvedPathWithinRoot(javaExePath, jdkHome); !ok {
+			return nil
+		}
+	}
 	// 判断是否为 JDK（检查 javac.exe）
 	javacPath := filepath.Join(dir, "javac.exe")
 	isJDK := false
