@@ -386,6 +386,10 @@ func validateJava(javawPath string) *JavaEntry {
 	defer cancel()
 	cmd := exec.CommandContext(ctx, javaExePath, "-version")
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	// 版本探测同样会真正启动一次 JVM：不净化环境的话，
+	// JAVA_TOOL_OPTIONS 里的 javaagent 会在探测阶段就被加载并执行。
+	probeEnv, _ := currentGameEnvironment(nil)
+	cmd.Env = probeEnv
 	var outBuf bytes.Buffer
 	lw := &limitedWriter{buf: &outBuf, max: maxJavaVersionOutput}
 	cmd.Stdout = lw
