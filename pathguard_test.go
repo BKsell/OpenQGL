@@ -109,3 +109,65 @@ func mustGetwd(t *testing.T) string {
 	}
 	return wd
 }
+
+func TestSafeMavenRelPath(t *testing.T) {
+	good := []string{
+		"com/mojang/netty/1.6/netty-1.6.jar",
+		"org/lwjgl/lwjgl/3.3.3/lwjgl-3.3.3-natives-windows.jar",
+		"a/b_c/1.0-rc1+x86/ok~1.jar",
+	}
+	for _, s := range good {
+		if got := SafeMavenRelPath(s); got != s {
+			t.Errorf("合法 Maven 路径被拒或被改写: %q -> %q", s, got)
+		}
+	}
+	bad := []string{
+		"",
+		"../evil.jar",
+		"com/../../evil.jar",
+		`com\xxx\evil.jar`,
+		"/etc/evil.jar",
+		"C:/Windows/evil.jar",
+		"com/evil:1.jar",
+		"com/evil.jar/../x",
+		"com/a b/evil.jar",
+		"com/CON/evil.jar",
+		"com/evil.jar:",
+		"com/evil|.jar",
+		"com/nul",
+	}
+	for _, s := range bad {
+		if got := SafeMavenRelPath(s); got != "" {
+			t.Errorf("非法 Maven 路径应被拒绝: %q -> %q", s, got)
+		}
+	}
+}
+
+func TestSafeSimpleName(t *testing.T) {
+	if SafeSimpleName("1.21.4") != "1.21.4" {
+		t.Error("合法资源索引 ID 应通过")
+	}
+	if SafeSimpleName("24w14a") != "24w14a" {
+		t.Error("合法快照 ID 应通过")
+	}
+	for _, s := range []string{"../x", "a/b", `a\b`, "a:b", "", "x ", "x.", "CON"} {
+		if SafeSimpleName(s) != "" {
+			t.Errorf("非法简单名应被拒绝: %q", s)
+		}
+	}
+}
+
+func TestIsLowerHex(t *testing.T) {
+	if !IsLowerHex("0123456789abcdef0123456789abcdef01234567", 40) {
+		t.Error("40 位小写十六进制应通过")
+	}
+	for _, s := range []string{"", "abc", "0123456789ABCDEF0123456789ABCDEF01234567", "g123456789012345678901234567890123456789", "0123456789abcdef0123456789abcdef0123456"} {
+		if IsLowerHex(s, 40) {
+			t.Errorf("非法/长度错误的十六进制应被拒绝: %q", s)
+		}
+	}
+	// 短哈希绝不能让调用方的 hash[:2] 越界——这里先保证校验本身失败。
+	if IsLowerHex("a", 40) {
+		t.Error("长度 1 的“哈希”必须判非法，防止切片越界 panic")
+	}
+}
