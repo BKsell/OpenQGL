@@ -830,13 +830,14 @@ func (a *App) installOldForge(installerPath string, mcDir string, mcVersion stri
 		pathStr, _ := installInfo["path"].(string)
 
 		if pathStr != "" && filePath != "" {
-			// Zip Slip 防护：验证路径不逃逸
-			safePathStr := isSafeRelPath(pathStr)
-			safeFilePath := isSafeRelPath(filePath)
+			// Zip Slip 防护：安装器给出的 Maven 路径与 zip 内条目名均走严格
+			// 正斜杠相对路径白名单（拒盘符、反斜杠、冒号、保留设备名、.. 段）。
+			safePathStr := SafeMavenRelPath(pathStr)
+			safeFilePath := SafeMavenRelPath(filePath)
 			if safePathStr == "" || safeFilePath == "" {
 				return fmt.Errorf("安装器中路径不安全，跳过")
 			}
-			libPath := filepath.Join(mcDir, "libraries", safePathStr)
+			libPath := filepath.Join(mcDir, "libraries", filepath.FromSlash(safePathStr))
 			os.MkdirAll(filepath.Dir(libPath), 0700)
 
 			for _, f := range r.File {
@@ -1002,13 +1003,13 @@ func (a *App) downloadForgeLibraries(installerPath string, mcDir string, mcVersi
 		url = strings.Replace(url, "https://maven.neoforged.net/releases/", "https://bmclapi2.bangbang93.com/maven/", 1)
 		url = strings.Replace(url, "https://maven.fabricmc.net/", "https://bmclapi2.bangbang93.com/maven/", 1)
 
-		// Zip Slip 防护：验证库路径不逃逸
-		safePath := isSafeRelPath(path)
+		// Zip Slip 防护：库路径走严格 Maven 相对路径白名单
+		safePath := SafeMavenRelPath(path)
 		if safePath == "" {
 			fmt.Printf("跳过不安全的库路径: %s\n", path)
 			continue
 		}
-		destPath := filepath.Join(libsDir, safePath)
+		destPath := filepath.Join(libsDir, filepath.FromSlash(safePath))
 
 		// 走带官方 sha1 的下载：已存在的库也会经侧车摘要链复核，
 		// 避免“文件在就直接信任”导致被替换的 jar 被加载。
@@ -1602,13 +1603,13 @@ func (a *App) downloadFabricLibraries(profileJSON map[string]interface{}, mcDir 
 		url = strings.Replace(url, "https://repo1.maven.org/maven2/", "https://bmclapi2.bangbang93.com/maven/", 1)
 		url = strings.Replace(url, "https://libraries.minecraft.net/", "https://bmclapi2.bangbang93.com/libraries/", 1)
 
-		// Zip Slip 防护：验证库路径不逃逸
-		safePath := isSafeRelPath(path)
+		// Zip Slip 防护：库路径走严格 Maven 相对路径白名单
+		safePath := SafeMavenRelPath(path)
 		if safePath == "" {
 			fmt.Printf("跳过不安全的库路径: %s\n", path)
 			continue
 		}
-		destPath := filepath.Join(libsDir, safePath)
+		destPath := filepath.Join(libsDir, filepath.FromSlash(safePath))
 
 		os.MkdirAll(filepath.Dir(destPath), 0700)
 		// 走带官方 sha1 锚点的下载（缺失时退化为侧车 UMFS/SHA512/SHA1 复核），
