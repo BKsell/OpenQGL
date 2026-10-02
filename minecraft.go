@@ -1962,23 +1962,14 @@ const maxUntrustedJvmArgs = 256
 // 启动器自身生成的 -Xmx、-Djava.library.path、-cp、--add-opens 等在过滤
 // 完成之后才追加，不受影响；官方加载器使用的 -p/--module-path、--add-modules、
 // --enable-native-access 不在列表中。
-var dangerousJvmFlagPrefixes = []string{
-	"-javaagent", "-agentlib", "-agentpath",
-	"-xx:onerror", "-xx:onoutofmemoryerror", "-xx:vmoptionsfile",
-	"-xxaltjvm", "-xxaltjvms",
-	"-xrun",
-	"-jar", "-m", "--module",
-}
+// 危险 JVM 参数的权威判定已抽到 jvmargs.go 的 jvmArgThreat，
+// 在原 -javaagent 等前缀之外补齐了 @argfile / -noverify / 动态 agent 加载等绕过形态。
 
 // isDangerousJvmFlag 判断单个 JVM 参数是否命中危险前缀。
 // 兼容 "flag:operand"、"flag=operand" 和 "flag operand"（下一条参数）两种写法。
 func isDangerousJvmFlag(lower string) bool {
-	for _, p := range dangerousJvmFlagPrefixes {
-		if lower == p || strings.HasPrefix(lower, p+":") || strings.HasPrefix(lower, p+"=") {
-			return true
-		}
-	}
-	return false
+	dangerous, _ := jvmArgThreat(lower)
+	return dangerous
 }
 
 // filterUntrustedJvmArgs 过滤来自外部版本 JSON 的 JVM 参数。
@@ -1993,14 +1984,12 @@ func filterUntrustedJvmArgs(args []string) (safe []string, blocked []string, tru
 			continue
 		}
 		lower := strings.ToLower(strings.TrimSpace(arg))
-		if isDangerousJvmFlag(lower) {
+		dangerous, consumesOperand := jvmArgThreat(lower)
+		if dangerous {
 			blocked = append(blocked, arg)
 			// 独立 token 形式时，下一条参数是其操作数（路径/命令），一并跳过。
-			for _, p := range dangerousJvmFlagPrefixes {
-				if lower == p {
-					skipOperand = true
-					break
-				}
+			if consumesOperand {
+				skipOperand = true
 			}
 			continue
 		}
