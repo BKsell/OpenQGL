@@ -79,20 +79,11 @@ func secureZipRelPath(name string) (string, bool) {
 
 // secureDestUnder 复核目标绝对路径必须位于 root 之内（或等于 root）。
 // rel 已在 secureZipRelPath 里验过，这里是落盘前的第二道保险，
-// 防止平台路径语义差异或上层拼接失误造成逃逸。
+// 防止平台路径语义差异或上层拼接失误造成逃逸。归属判定统一走
+// pathguard.go 的 PathWithinRoot（Clean + 卷名归一 + 边界前缀比较），
+// 不再在这里各写一份 Abs/HasPrefix。
 func secureDestUnder(root, dest string) bool {
-	absRoot, err := filepath.Abs(root)
-	if err != nil {
-		return false
-	}
-	absDest, err := filepath.Abs(dest)
-	if err != nil {
-		return false
-	}
-	if absDest == absRoot {
-		return true
-	}
-	return strings.HasPrefix(absDest, absRoot+string(os.PathSeparator))
+	return PathWithinRoot(dest, root)
 }
 
 // planZipEntries 对一批 zip 条目做只读预检，返回落盘计划。
