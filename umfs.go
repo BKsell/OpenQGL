@@ -72,22 +72,23 @@ func isPrivateDest(rawURL string) bool {
 	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
 		return true
 	}
-	if ip := net.ParseIP(host); ip != nil {
-		return ip.IsLoopback() || ip.IsPrivate() ||
-			ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
-			ip.IsUnspecified()
+	// 用更宽的 IP 字面量解析器，连十六进制/八进制/扁平整数/IPv4-mapped
+	// IPv6 等非规范写法一并在字符串态识别，防止绕过内网拦截。
+	if ip, ok := parseDestIP(host); ok {
+		return isBlockedIP(ip)
 	}
-	// 没解析成 IP 的（域名），交给 DNS，不在这里拦；
+	// 没解析成 IP 字面量的（域名），交给 DNS，不在这里拦；
 	// 真正解析到内网的边缘情况由 net.Dialer 侧再兜一次。
 	return false
 }
 
 // isBlockedIP 报告 IP 是否属于不该被启动器主动连出的地址段：
-// 回环 / RFC1918 私网 / 链路本地 / 未指定地址（含云元数据 169.254.169.254）。
+// 回环 / RFC1918 私网 / 链路本地 / 未指定地址（含云元数据 169.254.169.254），
+// 以及 0.0.0.0/8 “本网络”段（多数系统建连会落到本机）。
 func isBlockedIP(ip net.IP) bool {
 	return ip.IsLoopback() || ip.IsPrivate() ||
 		ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
-		ip.IsUnspecified()
+		ip.IsUnspecified() || isZeroNetworkIPv4(ip)
 }
 
 // safeDialContext 在 TCP 建连前再做一次 IP 级拦截。
@@ -99,8 +100,15 @@ func safeDialContext(ctx context.Context, network, addr string) (net.Conn, error
 	if err != nil {
 		return nil, err
 	}
-	if ip := net.ParseIP(host); ip != nil && isBlockedIP(ip) {
-		return nil, errDenyPrivateRedirect
+	// 主机本身就是 IP 字面量时（含非规范进制 / IPv4-mapped 写法），直接按
+	// 规范化地址判定并建连，不再交给 resolver：不同平台 resolver 对
+	// "2130706433"、"0x7f.1" 这类写法行为不一致，先归一化可彻底消除歧义。
+	if ip, ok := parseDestIP(host); ok {
+		if isBlockedIP(ip) {
+			return nil, errDenyPrivateRedirect
+		}
+		dialer := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
+		return dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
 	}
 	addrs, err := net.DefaultResolver.LookupIPAddr(ctx, host)
 	if err != nil {
