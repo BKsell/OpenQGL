@@ -26,13 +26,14 @@ import (
 // 是给子进程一份净化过的环境：系统运行必需的变量照旧透传，只剥掉这几个会被
 // JVM 隐式解释成参数 / 类路径的变量。
 var jvmOptionEnvBlocklist = map[string]struct{}{
-	"JAVA_TOOL_OPTIONS": {},
-	"_JAVA_OPTIONS":     {},
-	"JDK_JAVA_OPTIONS":  {},
-	"_JPI_VM_OPTIONS":   {},
-	"IBM_JAVA_OPTIONS":  {},
-	"JAVA_VM_OPTIONS":   {},
-	"CLASSPATH":         {},
+	"JAVA_TOOL_OPTIONS":   {},
+	"_JAVA_OPTIONS":       {},
+	"JDK_JAVA_OPTIONS":    {},
+	"_JPI_VM_OPTIONS":     {},
+	"IBM_JAVA_OPTIONS":    {},
+	"JAVA_VM_OPTIONS":     {},
+	"OPENJ9_JAVA_OPTIONS": {}, // Eclipse OpenJ9 / IBM Semeru：等价于 JAVA_TOOL_OPTIONS 的隐式注入变量
+	"CLASSPATH":           {},
 }
 
 // splitEnvironEntry 解析 "KEY=VALUE" 形式的环境变量条目。

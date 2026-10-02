@@ -35,6 +35,8 @@ func TestIsJVMInjectionEnv(t *testing.T) {
 		"JDK_JAVA_OPTIONS",
 		"_jpi_vm_options",
 		"IBM_JAVA_OPTIONS",
+		"OPENJ9_JAVA_OPTIONS", // Eclipse OpenJ9 / IBM Semeru 隐式注入变量
+		"openj9_java_options", // 大小写不敏感
 		"classpath",
 		"CLASSPATH",
 	}
@@ -70,13 +72,14 @@ func TestBuildGameEnvironmentStripsInjectionVars(t *testing.T) {
 		"JAVA_TOOL_OPTIONS=-javaagent:C:\\evil.jar",
 		"_JAVA_OPTIONS=-agentpath:bad.dll",
 		"JDK_JAVA_OPTIONS=-Xmx9999m",
+		"OPENJ9_JAVA_OPTIONS=-Xdump:system:events=throw", // OpenJ9/Semeru 隐式注入
 		"CLASSPATH=C:\\malicious-classes",
 	}
 	var stripped []string
 	env := buildGameEnvironment(parent, nil, &stripped)
 	m := envMap(env)
 
-	for _, wantGone := range []string{"JAVA_TOOL_OPTIONS", "_JAVA_OPTIONS", "JDK_JAVA_OPTIONS", "CLASSPATH"} {
+	for _, wantGone := range []string{"JAVA_TOOL_OPTIONS", "_JAVA_OPTIONS", "JDK_JAVA_OPTIONS", "OPENJ9_JAVA_OPTIONS", "CLASSPATH"} {
 		if _, exists := m[wantGone]; exists {
 			t.Errorf("黑名单变量 %s 应被剥掉，实际环境: %v", wantGone, env)
 		}
@@ -93,7 +96,7 @@ func TestBuildGameEnvironmentStripsInjectionVars(t *testing.T) {
 
 	gotStripped := append([]string(nil), stripped...)
 	sort.Strings(gotStripped)
-	wantStripped := []string{"_JAVA_OPTIONS", "CLASSPATH", "JAVA_TOOL_OPTIONS", "JDK_JAVA_OPTIONS"}
+	wantStripped := []string{"_JAVA_OPTIONS", "CLASSPATH", "JAVA_TOOL_OPTIONS", "JDK_JAVA_OPTIONS", "OPENJ9_JAVA_OPTIONS"}
 	if !reflect.DeepEqual(gotStripped, wantStripped) {
 		t.Fatalf("stripped = %v, want %v", gotStripped, wantStripped)
 	}
