@@ -849,13 +849,13 @@ func (a *App) DownloadVersion(versionID string, versionURL string, customName st
 		}
 		if lib.Downloads.Artifact != nil {
 			artifact := lib.Downloads.Artifact
-			// Zip Slip 防护：验证库路径不逃逸
-			safePath := isSafeRelPath(artifact.Path)
+			// Zip Slip 防护：库路径走严格 Maven 相对路径白名单（拒盘符/反斜杠/冒号）
+			safePath := SafeMavenRelPath(artifact.Path)
 			if safePath == "" {
 				fmt.Printf("跳过不安全的库路径: %s\n", artifact.Path)
 				continue
 			}
-			libPath := filepath.Join(mcDir, "libraries", safePath)
+			libPath := filepath.Join(mcDir, "libraries", filepath.FromSlash(safePath))
 			libURL := replaceWithBMCLAPI(artifact.URL)
 			a.emitProgress("downloading", filepath.Base(artifact.Path), 0, artifact.Size)
 			if err := a.downloadVerifiedFile(libURL, libPath, artifact.SHA1, false); err != nil {
@@ -875,13 +875,13 @@ func (a *App) DownloadVersion(versionID string, versionURL string, customName st
 			if !ok || classifier == nil {
 				continue
 			}
-			// Zip Slip 防护：验证 native 路径不逃逸
-			safeClassPath := isSafeRelPath(classifier.Path)
+			// Zip Slip 防护：native 路径走严格 Maven 相对路径白名单
+			safeClassPath := SafeMavenRelPath(classifier.Path)
 			if safeClassPath == "" {
 				fmt.Printf("跳过不安全的 native 路径: %s\n", classifier.Path)
 				continue
 			}
-			nativePath := filepath.Join(mcDir, "libraries", safeClassPath)
+			nativePath := filepath.Join(mcDir, "libraries", filepath.FromSlash(safeClassPath))
 			nativeURL := replaceWithBMCLAPI(classifier.URL)
 			a.emitProgress("downloading", filepath.Base(classifier.Path), 0, classifier.Size)
 			if err := a.downloadVerifiedFile(nativeURL, nativePath, classifier.SHA1, false); err != nil {
@@ -891,8 +891,14 @@ func (a *App) DownloadVersion(versionID string, versionURL string, customName st
 	}
 	if versionJSON.AssetIndex != nil {
 		assetIndexRef := versionJSON.AssetIndex
+		// 资产索引 ID 来自外部版本 JSON，会直接拼进文件路径，必须强制为
+		// 单段安全名，防止 "1.21/../../x.json" 之类路径穿越或落到非预期位置。
+		safeIndexID := SafeSimpleName(assetIndexRef.ID)
+		if safeIndexID == "" {
+			return fmt.Errorf("资产索引 ID 不安全，拒绝继续: %q", assetIndexRef.ID)
+		}
 		assetIndexDir := filepath.Join(mcDir, "assets", "indexes")
-		assetIndexPath := filepath.Join(assetIndexDir, assetIndexRef.ID+".json")
+		assetIndexPath := filepath.Join(assetIndexDir, safeIndexID+".json")
 		assetIndexURL := replaceWithBMCLAPI(assetIndexRef.URL)
 		a.emitProgress("downloading", "资源索引", 0, 0)
 		if err := a.downloadFileBounded(assetIndexURL, assetIndexPath, false, maxMetadataJSONBytes); err != nil {
@@ -906,6 +912,13 @@ func (a *App) DownloadVersion(versionID string, versionURL string, customName st
 					count := 0
 					for name, obj := range assetIndex.Objects {
 						count++
+						// 对象哈希既拼下载 URL 也拼本地 objects/xx/<40hex> 路径，
+						// 且会做 hash[:2] 切片：必须严格是 40 位小写十六进制，
+						// 否则既可能路径穿越，也会因长度不足直接 panic 崩溃。
+						if !IsLowerHex(obj.Hash, 40) {
+							a.writeLog("跳过哈希非法的资源 %s: %q", name, obj.Hash)
+							continue
+						}
 						hash := obj.Hash
 						subHash := hash[:2]
 						assetURL := replaceWithBMCLAPI(fmt.Sprintf("https://launcher.mojang.com/v1/objects/%s/%s", hash, name))
