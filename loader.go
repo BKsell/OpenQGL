@@ -1390,6 +1390,9 @@ func (a *App) runForgeInstaller(installerPath string, mcDir string) error {
 	cmd := exec.Command(javaEntry.Path, args...)
 	cmd.Dir = mcDir
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	// Forge 安装器本身是个独立 JVM：不下发净化环境就会继承
+	// JAVA_TOOL_OPTIONS 一族，绕过 JVM 参数过滤注入 javaagent。
+	a.applySanitizedJVMEnv(cmd, "ForgeInstaller", nil)
 
 	output, runErr := cmd.CombinedOutput()
 	outputStr := string(output)
@@ -1749,7 +1752,11 @@ func (a *App) InstallOptiFine(mcVersion string, optifineType string, optifinePat
 	cmd := exec.Command(javaEntry.Path, args...)
 	cmd.Dir = mcDir
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-	cmd.Env = append(os.Environ(), fmt.Sprintf("APPDATA=%s", mcDirParent))
+	// OptiFine 安装器同样是独立 JVM：净化环境并剥离隐式 JVM 参数变量，
+	// APPDATA 仍按原需求指向 mcDir 的父目录（以 extra 覆盖方式安全注入）。
+	a.applySanitizedJVMEnv(cmd, "OptiFineInstaller", map[string]string{
+		"APPDATA": mcDirParent,
+	})
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -1943,6 +1950,9 @@ func (a *App) downloadLoaderItem(item *DownloadItem) error {
 		}
 		cmd := exec.Command(javaEntry[0].Path, "-jar", destPath)
 		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+		// 下载下来的第三方 jar 安装器也是独立 JVM，同样不能继承隐式 JVM
+		// 参数环境变量，否则下载即运行这条链会被 JAVA_TOOL_OPTIONS 劫持。
+		a.applySanitizedJVMEnv(cmd, "DownloadedJarInstaller", nil)
 		if err := cmd.Start(); err != nil {
 			return fmt.Errorf("启动安装器失败: %v", err)
 		}
