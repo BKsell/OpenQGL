@@ -501,28 +501,27 @@ func (a *App) scanVersionFolder(versionFolder string, folderName string) Install
 	return info
 }
 
-func sanitizeVersionName(name string) string {
-	name = strings.TrimSpace(name)
-	replacer := strings.NewReplacer("..", "", "/", "", "\\", "", ":", "", "*", "", "?", "", "\"", "", "<", "", ">", "", "|", "")
-	return replacer.Replace(name)
-}
-
 func (a *App) AddToDownloadList(versionID string, versionURL string, customName string, versionType string) error {
 	a.downloadMutex.Lock()
 	defer a.downloadMutex.Unlock()
-	customName = sanitizeVersionName(customName)
-	if customName == "" {
-		return fmt.Errorf("版本名称无效")
+	// 版本名会直接成为 versions/<name>/<name>.json 的目录段，走严格名单段内核：
+	// 控制字符、路径分隔符、Windows 保留设备名、尾点空格、超长一律拒绝（而不是像旧
+	// sanitizeVersionName 那样静默删字符，导致用户以为写入的目录与实际不一致）。
+	safeName, why := SafeVersionComponent(customName)
+	if why != nameRejectNone {
+		recordSecurityEvent(auditCategoryPrivateWrite, auditSeverityWarn, auditActionRejected,
+			"minecraft", "拒绝非法版本下载名: "+describeNameReject(why))
+		return fmt.Errorf("版本名称无效: %s", describeNameReject(why))
 	}
-	for _, item := range a.downloadList {
-		if item.CustomName == customName {
-			return fmt.Errorf("下载列表中已存在同名版本: %s", customName)
-		}
-	}
-	a.downloadList = append(a.downloadList, DownloadItem{
+	customName = safeName
+	pending := DownloadItem{
 		ID: versionID, URL: versionURL, CustomName: customName,
 		Type: versionType, ItemType: "game", Status: "pending", Progress: 0,
-	})
+	}
+	if why := auditDownloadItemForEnqueue(a.downloadList, pending); why != dqRejectNone {
+		return fmt.Errorf("%s", describeQueueReject(why))
+	}
+	a.downloadList = append(a.downloadList, pending)
 	runtime.EventsEmit(a.ctx, "downloadListUpdated", a.downloadList)
 	return nil
 }
@@ -530,9 +529,29 @@ func (a *App) AddToDownloadList(versionID string, versionURL string, customName 
 func (a *App) AddToDownloadListWithLoader(versionID string, versionURL string, customName string, versionType string, loaderName string, loaderVersion string, optifineType string, optifinePatch string) error {
 	a.downloadMutex.Lock()
 	defer a.downloadMutex.Unlock()
-	customName = sanitizeVersionName(customName)
-	if customName == "" {
-		return fmt.Errorf("版本名称无效")
+	safeName, why := SafeVersionComponent(customName)
+	if why != nameRejectNone {
+		recordSecurityEvent(auditCategoryPrivateWrite, auditSeverityWarn, auditActionRejected,
+			"minecraft", "拒绝非法版本下载名: "+describeNameReject(why))
+		return fmt.Errorf("版本名称无效: %s", describeNameReject(why))
+	}
+	customName = safeName
+	// loaderName / loaderVersion 会被拼进展示名，最终也成为版本目录名，同样必须是
+	// 干净单段（前端可传任意字符串，不能假设它只来自官方加载器版本列表）。
+	if loaderName != "" {
+		safeLoader, whyL := SafeLoaderComponent(loaderName)
+		if whyL != nameRejectNone {
+			recordSecurityEvent(auditCategoryPrivateWrite, auditSeverityWarn, auditActionRejected,
+				"minecraft", "拒绝非法加载器名: "+describeNameReject(whyL))
+			return fmt.Errorf("加载器名称无效: %s", describeNameReject(whyL))
+		}
+		safeLoaderVer, whyV := SafeLoaderComponent(loaderVersion)
+		if whyV != nameRejectNone {
+			recordSecurityEvent(auditCategoryPrivateWrite, auditSeverityWarn, auditActionRejected,
+				"minecraft", "拒绝非法加载器版本: "+describeNameReject(whyV))
+			return fmt.Errorf("加载器版本无效: %s", describeNameReject(whyV))
+		}
+		loaderName, loaderVersion = safeLoader, safeLoaderVer
 	}
 	for _, item := range a.downloadList {
 		if item.CustomName == customName {
@@ -543,11 +562,23 @@ func (a *App) AddToDownloadListWithLoader(versionID string, versionURL string, c
 	if loaderName != "" {
 		displayName += " (" + loaderName + " " + loaderVersion + ")"
 	}
-	a.downloadList = append(a.downloadList, DownloadItem{
+	// 拼接后的完整名也要过长度/单段校验（customName 合法但加上 loader 后缀可能超长）。
+	if finalName, whyD := SafeVersionDisplayName(displayName); whyD != nameRejectNone {
+		recordSecurityEvent(auditCategoryPrivateWrite, auditSeverityWarn, auditActionRejected,
+			"minecraft", "拒绝非法版本展示名: "+describeNameReject(whyD))
+		return fmt.Errorf("版本名称无效: %s", describeNameReject(whyD))
+	} else {
+		displayName = finalName
+	}
+	pending := DownloadItem{
 		ID: versionID, URL: versionURL, CustomName: displayName, Type: versionType,
 		ItemType: "game+loader", LoaderName: loaderName, LoaderVersion: loaderVersion,
 		OptiFineType: optifineType, OptiFinePatch: optifinePatch, Status: "pending", Progress: 0,
-	})
+	}
+	if why := auditDownloadItemForEnqueue(a.downloadList, pending); why != dqRejectNone {
+		return fmt.Errorf("%s", describeQueueReject(why))
+	}
+	a.downloadList = append(a.downloadList, pending)
 	runtime.EventsEmit(a.ctx, "downloadListUpdated", a.downloadList)
 	return nil
 }
@@ -564,18 +595,20 @@ func (a *App) AddJavaToDownloadList(majorVer int) error {
 	if target == nil {
 		return fmt.Errorf("未找到 Java %d 的下载信息", majorVer)
 	}
+	if majorVer < 0 || majorVer > 99 {
+		return fmt.Errorf("Java 主版本号超出合理范围: %d", majorVer)
+	}
 	a.downloadMutex.Lock()
 	defer a.downloadMutex.Unlock()
 	customName := "Java " + fmt.Sprintf("%d", majorVer)
-	for _, item := range a.downloadList {
-		if item.CustomName == customName {
-			return fmt.Errorf("下载列表中已存在: %s", customName)
-		}
-	}
-	a.downloadList = append(a.downloadList, DownloadItem{
+	pending := DownloadItem{
 		ID: fmt.Sprintf("java-%d", majorVer), URL: target.URL, CustomName: customName,
 		Type: "java", ItemType: "java", JavaMajor: majorVer, Status: "pending", Progress: 0,
-	})
+	}
+	if why := auditDownloadItemForEnqueue(a.downloadList, pending); why != dqRejectNone {
+		return fmt.Errorf("%s", describeQueueReject(why))
+	}
+	a.downloadList = append(a.downloadList, pending)
 	runtime.EventsEmit(a.ctx, "downloadListUpdated", a.downloadList)
 	return nil
 }
@@ -814,10 +847,16 @@ func runInstaller(filePath string, isMSI bool) error {
 
 func (a *App) DownloadVersion(versionID string, versionURL string, customName string) error {
 	mcDir := a.getMinecraftDir()
-	customName = sanitizeVersionName(customName)
-	if customName == "" {
-		return fmt.Errorf("无效的版本名称")
+	// customName 既可能来自前端，也可能来自 .mrpack 清单里的 dependencies.minecraft
+	// （installModpack 原样透传到这里），属于外部输入，必须走严格名单段内核，防止
+	// 形如 "../../evil" / "CON" / "a\x00b" 的值把版本文件写到 versions 目录之外。
+	safeName, why := SafeVersionComponent(customName)
+	if why != nameRejectNone {
+		recordSecurityEvent(auditCategoryPrivateWrite, auditSeverityCritical, auditActionBlocked,
+			"minecraft", "拒绝非法版本目录名: "+describeNameReject(why))
+		return fmt.Errorf("无效的版本名称: %s", describeNameReject(why))
 	}
+	customName = safeName
 	versionDir := filepath.Join(mcDir, "versions", customName)
 	if err := os.MkdirAll(versionDir, 0700); err != nil {
 		return fmt.Errorf("创建版本目录失败: %v", err)
