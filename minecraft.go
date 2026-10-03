@@ -1007,9 +1007,15 @@ func (a *App) DownloadVersion(versionID string, versionURL string, customName st
 							a.writeLog("跳过哈希非法的资源 %s: %q", name, obj.Hash)
 							continue
 						}
+						// 对象 key 会原样拼进下载 URL，拒绝穿越段 / 反斜杠 / 控制字符。
+						safeName, whyName := validateAssetObjectName(name)
+						if whyName != aoOK {
+							a.writeLog("跳过资源名非法的对象 %q: %s", name, describeAssetReject(whyName))
+							continue
+						}
 						hash := obj.Hash
 						subHash := hash[:2]
-						assetURL := replaceWithBMCLAPI(fmt.Sprintf("https://launcher.mojang.com/v1/objects/%s/%s", hash, name))
+						assetURL := replaceWithBMCLAPI(fmt.Sprintf("https://launcher.mojang.com/v1/objects/%s/%s", hash, safeName))
 						assetPath := filepath.Join(mcDir, "assets", "objects", subHash, hash)
 						a.emitProgress("downloading", fmt.Sprintf("资源 %d/%d", count, totalAssets), int64(count), int64(totalAssets))
 						if _, err := os.Stat(assetPath); os.IsNotExist(err) {
@@ -1129,12 +1135,20 @@ func (a *App) fixAssetsIndex(mcDir string, versionJSON *VersionJSON) {
 	if versionJSON.AssetIndex == nil || versionJSON.AssetIndex.URL == "" {
 		return
 	}
+	// AssetIndex.ID 来自不可信版本 JSON，会拼成 indexes/<id>.json 落盘路径，
+	// 必须和 DownloadVersion 主路径一样过单段安全名校验，拒绝 "../" 等穿越名。
+	safeID := SafeSimpleName(versionJSON.AssetIndex.ID)
+	if safeID == "" {
+		a.writeLog("资源索引 ID 不安全，拒绝补全: %q", versionJSON.AssetIndex.ID)
+		recordSecurityEvent("asset", "high", "reject-asset-index-id", "fixAssetsIndex", versionJSON.AssetIndex.ID)
+		return
+	}
 	assetIndexDir := filepath.Join(mcDir, "assets", "indexes")
-	assetIndexPath := filepath.Join(assetIndexDir, versionJSON.AssetIndex.ID+".json")
+	assetIndexPath := filepath.Join(assetIndexDir, safeID+".json")
 	if _, err := os.Stat(assetIndexPath); err == nil {
 		return
 	}
-	a.writeLog("资源索引文件缺失，正在下载: %s", versionJSON.AssetIndex.ID)
+	a.writeLog("资源索引文件缺失，正在下载: %s", safeID)
 	os.MkdirAll(assetIndexDir, 0700)
 	urls := a.getMirrorURLs(versionJSON.AssetIndex.URL)
 	for i, u := range urls {
@@ -1142,10 +1156,10 @@ func (a *App) fixAssetsIndex(mcDir string, versionJSON *VersionJSON) {
 		urls[i] = strings.Replace(urls[i], "https://launcher.mojang.com/", "https://bmclapi2.bangbang93.com/", 1)
 	}
 	if a.downloadFromMirrors(urls, assetIndexPath, maxMetadataJSONBytes) {
-		a.writeLog("资源索引文件下载完成: %s", versionJSON.AssetIndex.ID)
+		a.writeLog("资源索引文件下载完成: %s", safeID)
 		a.fixMissingAssets(mcDir, assetIndexPath)
 	} else {
-		a.writeLog("资源索引文件下载失败: %s", versionJSON.AssetIndex.ID)
+		a.writeLog("资源索引文件下载失败: %s", safeID)
 	}
 }
 
@@ -1158,23 +1172,46 @@ func (a *App) fixMissingAssets(mcDir string, assetIndexPath string) {
 	if err := json.Unmarshal(data, &index); err != nil {
 		return
 	}
+	// 统一走 assetguard：哈希严格 40 位小写 hex、对象名相对路径校验、条数与大小收口。
+	// 历史上这里只判 hash != "" 就 obj.Hash[:2]，短哈希会越界 panic，畸形哈希还能让
+	// Join 出的落盘路径逃出 objects 目录（远程 DoS / 路径穿越写）。
+	safeObjects, rejects, why := auditAssetObjects(index.Objects)
+	if why == aoIndexTooMany {
+		a.writeLog("资产索引对象条数超过上限 %d，拒绝补全", maxAssetIndexObjects)
+		recordSecurityEvent("asset", "high", "reject-asset-index-too-many", "fixMissingAssets",
+			fmt.Sprintf("objects=%d limit=%d", len(index.Objects), maxAssetIndexObjects))
+		return
+	}
+	if n := rejects[aoHashBad]; n > 0 {
+		recordSecurityEvent("asset", "high", "reject-bad-asset-hash", "fixMissingAssets",
+			fmt.Sprintf("count=%d", n))
+	}
 	objectsDir := filepath.Join(mcDir, "assets", "objects")
 	missingCount, downloadedCount := 0, 0
-	for _, obj := range index.Objects {
-		if obj.Hash == "" {
+	total := len(safeObjects)
+	for i, obj := range safeObjects {
+		sub, objPath, ok := planAssetObjectDest(objectsDir, obj.Hash)
+		if !ok {
 			continue
 		}
-		objPath := filepath.Join(objectsDir, obj.Hash[:2], obj.Hash)
 		if _, err := os.Stat(objPath); err == nil {
 			continue
 		}
 		missingCount++
-		originalURL := fmt.Sprintf("https://resources.download.minecraft.net/%s/%s", obj.Hash[:2], obj.Hash)
+		originalURL := fmt.Sprintf("https://resources.download.minecraft.net/%s/%s", sub, obj.Hash)
 		urls := a.getMirrorURLs(originalURL)
+		a.emitProgress("downloading", fmt.Sprintf("补全资源 %d/%d", i+1, total), int64(i+1), int64(total))
 		os.MkdirAll(filepath.Dir(objPath), 0700)
 		if a.downloadFromMirrors(urls, objPath, maxAssetObjectBytes) {
 			downloadedCount++
 		}
+	}
+	if len(rejects) > 0 {
+		rejectedTotal := 0
+		for _, n := range rejects {
+			rejectedTotal += n
+		}
+		a.writeLog("资产索引存在 %d 个非法对象，已跳过", rejectedTotal)
 	}
 	if missingCount > 0 {
 		a.writeLog("资源文件补全: 缺失 %d 个, 成功下载 %d 个", missingCount, downloadedCount)
