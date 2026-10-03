@@ -742,11 +742,19 @@ func (a *App) SetSelectedVersion(versionID string) error {
 	if err != nil {
 		return fmt.Errorf("未登录")
 	}
+	// versionID 随后会拼进 versions/<id> 路径，必须按单段安全路径名收口，
+	// 拒绝 "../"、分隔符、保留设备名与控制字符，防止配置投毒演变成路径穿越。
+	safeID, reason := SafeVersionID(versionID)
+	if reason != configRejectNone {
+		recordSecurityEvent(auditCategoryConfig, auditSeverityWarn, auditActionRejected,
+			"SetSelectedVersion", "拒绝非法版本ID: "+reason)
+		return fmt.Errorf("无效的版本标识: %s", reason)
+	}
 	config, err := a.GetUserConfig(currentUser.Username)
 	if err != nil {
 		config = &UserConfig{}
 	}
-	config.SelectedVersion = versionID
+	config.SelectedVersion = safeID
 	return a.SaveUserConfig(currentUser.Username, config)
 }
 
@@ -769,16 +777,24 @@ func (a *App) SetThemeColor(color string) error {
 	if err != nil {
 		return fmt.Errorf("未登录")
 	}
+	// 主题色会被前端读回用于 data-theme / 样式键，落盘前强制白名单，
+	// 拒绝未知值与夹带控制字符 / 标记的配置投毒。
+	safeColor, reason := SafeThemeColor(color)
+	if reason != configRejectNone {
+		recordSecurityEvent(auditCategoryConfig, auditSeverityWarn, auditActionRejected,
+			"SetThemeColor", "拒绝非法主题色: "+reason)
+		return fmt.Errorf("无效的主题色: %s", reason)
+	}
 	config, err := a.GetUserConfig(currentUser.Username)
 	if err != nil {
 		config = &UserConfig{}
 	}
-	config.ThemeColor = color
+	config.ThemeColor = safeColor
 	err = a.SaveUserConfig(currentUser.Username, config)
 	if err != nil {
 		return err
 	}
-	runtime.EventsEmit(a.ctx, "themeChanged", color)
+	runtime.EventsEmit(a.ctx, "themeChanged", safeColor)
 	return nil
 }
 
