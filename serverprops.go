@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -166,6 +167,50 @@ func updateServerProperty(path, key, value string, valueValidator func(string) e
 	}
 	props := parseServerProperties(data)
 	props.Set(key, value)
+
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, props.Marshal(), allowedFilePerm); err != nil {
+		return fmt.Errorf("写入临时配置失败: %w", err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("替换 server.properties 失败: %w", err)
+	}
+	return nil
+}
+
+// maxServerNameLen 服务器展示名 / motd 的长度上限。
+// 名称会同时进目录名（customDir 缺省时）与 server.properties 的 motd，必须给完整路径
+// 与单行配置留余量，取 120。
+const maxServerNameLen = 120
+
+// validateServerMotd 校验写入 server.properties 的 motd 值：
+// 复用单行值规则（拒 CR/LF / 控制字符，长度上限），motd 允许空格与中文等普通可见字符，
+// 但绝不允许借换行注入新的配置键。
+func validateServerMotd(v string) error {
+	if v == "" {
+		return fmt.Errorf("motd 不能为空")
+	}
+	if len(v) > maxServerNameLen {
+		return fmt.Errorf("motd 超过 %d 字符上限", maxServerNameLen)
+	}
+	return validatePropertyValueSingleLine(v)
+}
+
+// writeInitialServerProperties 用统一的安全读写器创建首份 server.properties，
+// 替代旧实现里 fmt.Sprintf 裸拼文本的写法。server-port / online-mode / motd 全部经
+// 键名 / 单行值校验，motd 再单独过展示名规则；先写 .tmp 再 rename，绝不留半成品。
+func writeInitialServerProperties(path string, port int, onlineMode bool, motd string) error {
+	if !isValidPort(port) {
+		return fmt.Errorf("端口号无效: %d", port)
+	}
+	if err := validateServerMotd(motd); err != nil {
+		return err
+	}
+	props := &serverProperties{}
+	props.Set("server-port", strconv.Itoa(port))
+	props.Set("online-mode", strconv.FormatBool(onlineMode))
+	props.Set("motd", motd)
 
 	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, props.Marshal(), allowedFilePerm); err != nil {
