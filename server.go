@@ -464,6 +464,12 @@ func (a *App) StartServer(name string) error {
 		return fmt.Errorf("选择 Java 失败: %v", err)
 	}
 	javaPath := javaEntry.Path
+	// AuditServerLaunch 只收敛了工作目录/版本名拼出的 jar/内存，java 可执行路径由
+	// SelectJavaForVersion 决定，这里在真正 exec 前再做一次绝对/UNC/穿越/扩展名校验，
+	// 防止被改写的 JDK 记录或解析结果把服务器 JVM 指到网络共享或穿越路径。
+	if javaFindings := auditJavaExe(javaPath); len(javaFindings) > 0 {
+		return fmt.Errorf("服务器 java 可执行审计未通过，拒绝启动: %s", javaFindings[0].Code)
+	}
 
 	jarName := cfg.Version + "-server.jar"
 	maxMem := fmt.Sprintf("%dM", cfg.MaxMemory)
