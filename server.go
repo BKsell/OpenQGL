@@ -424,6 +424,12 @@ func (a *App) resolveServerJarDownload(version string) (string, string, error) {
 
 	jarURL = strings.Replace(jarURL, "https://piston-data.mojang.com", "https://bmclapi2.bangbang93.com", 1)
 	jarURL = strings.Replace(jarURL, "https://launcher.mojang.com", "https://bmclapi2.bangbang93.com", 1)
+	// 仅校验 https 前缀不足以防止恶意 / 被篡改的版本清单把 downloads.server.url
+	// 指向任意主机：最终必须落在可信的 Mojang / BMCLAPI 主机白名单上（与依赖库同一
+	// 套 isAllowedMavenLibURL 判定，强制 https、无 userinfo、443、主机精确命中）。
+	if !isAllowedMavenLibURL(jarURL) {
+		return "", "", fmt.Errorf("服务端下载地址不在可信主机白名单内")
+	}
 	return jarURL, expectedHash, nil
 }
 
@@ -441,6 +447,16 @@ func (a *App) StartServer(name string) error {
 	}
 	if isPathTraversal(a.GetServerDir(), cfg.ServerDir) {
 		return fmt.Errorf("服务器目录路径不安全，拒绝启动")
+	}
+
+	// 启动目标审计：cfg.Version 由用户配置可控，直接拼 "<v>-server.jar" 时若版本名
+	// 含分隔符 / ".." / 绝对前缀，-jar 会相对 cmd.Dir 解析到 ServerDir 之外的 jar
+	// （=加载攻击者放置的类）。这里把工作目录、拼出的 jar 与内存边界统一收敛到
+	// launchtarget 内核，critical 一律拒绝启动。
+	serverRoot := a.GetServerDir()
+	launchAudit := AuditServerLaunch(cfg.ServerDir, cfg.Version, cfg.MinMemory, cfg.MaxMemory, []string{serverRoot})
+	if launchAudit.HasCritical() {
+		return fmt.Errorf("服务器启动目标校验失败，拒绝启动: %s", launchAudit.FirstCriticalCode())
 	}
 
 	javaEntry, err := a.SelectJavaForVersion(cfg.Version)
