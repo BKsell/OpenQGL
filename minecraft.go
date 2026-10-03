@@ -730,11 +730,14 @@ func (a *App) downloadJavaItem(majorVer int, url string) error {
 		return fmt.Errorf("未找到 Java %d 的下载信息", majorVer)
 	}
 	if target.IsWebPage {
-		parsedURL, parseErr := url.Parse(url)
-		if parseErr != nil || parsedURL.Scheme != "https" {
-			return fmt.Errorf("Java 下载页面必须使用 HTTPS: %s", url)
+		// 交给系统浏览器前先过结构性校验：只允许 https 公网域名，拒绝危险 scheme、
+		// userinfo 混淆、内网/本机/裸 IP 与控制字符，避免 rundll32 打开到 file:/SSRF。
+		cmd, openErr := BrowserOpenCommand(url)
+		if openErr != nil {
+			recordSecurityEvent(auditCategoryExternalURL, auditSeverityWarn, auditActionRejected,
+				"minecraft", "拒绝打开不安全的 Java 下载页: "+openErr.Error())
+			return fmt.Errorf("Java 下载页链接不安全: %w", openErr)
 		}
-		cmd := exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
 		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 		return cmd.Run()
 	}
