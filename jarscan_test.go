@@ -42,12 +42,13 @@ func findFinding(rep *JarScanReport, rule string) *JarFinding {
 // 正常 Fabric Mod：带 fabric.mod.json、普通 class、一个本地库、一个嵌套 jar，
 // 不应被判为阻断。
 func TestJarScanCleanFabricMod(t *testing.T) {
-	data := buildJarInMemory(t, map[string]string{
-		"fabric.mod.json":          `{"id":"example"}`,
-		"com/example/Main.class":   "CAFEBABE",
-		"natives/windows/x.dll":    "MZ",
-		"META-INF/jars/dep.jar":    "PK",
-		"META-INF/MANIFEST.MF":     "Manifest-Version: 1.0\r\n\r\n",
+	emptyJar := buildJarWithClasses(t, map[string][]byte{})
+	data := buildJarWithClasses(t, map[string][]byte{
+		"fabric.mod.json":        []byte(`{"id":"example"}`),
+		"com/example/Main.class": []byte("CAFEBABE"),
+		"natives/windows/x.dll":  []byte("MZ"),
+		"META-INF/jars/dep.jar":  emptyJar,
+		"META-INF/MANIFEST.MF":   []byte("Manifest-Version: 1.0\r\n\r\n"),
 	})
 	rep, err := scanJarBytes(data)
 	if err != nil {
@@ -354,5 +355,53 @@ func TestJarScanBehaviorBogusMagicSkipped(t *testing.T) {
 	}
 	if rep.ScannedClasses != 0 {
 		t.Fatalf("魔数不符的条目不应计入已扫描 class，得到 %d", rep.ScannedClasses)
+	}
+}
+
+// 嵌套 jar（JarJar）根部携带 .exe 必须被递归扫描发现并阻断，
+// 且 finding 的条目路径带 “外层!/内层” 前缀。
+func TestJarScanNestedRootExecutableBlocked(t *testing.T) {
+	inner := buildJarInMemory(t, map[string]string{
+		"evil.exe": "MZ",
+	})
+	outer := buildJarWithClasses(t, map[string][]byte{
+		"fabric.mod.json":      []byte(`{"id":"outer"}`),
+		"META-INF/jars/x.jar": inner,
+	})
+	rep, err := scanJarBytes(outer)
+	if err != nil {
+		t.Fatalf("扫描报错: %v", err)
+	}
+	if !rep.Blocked() {
+		t.Fatalf("嵌套 jar 根部 .exe 应触发阻断，发现: %+v", rep.Findings)
+	}
+	var hit bool
+	for _, f := range rep.Findings {
+		if f.Rule == "root-executable" &&
+			strings.Contains(f.Entry, "META-INF/jars/x.jar") &&
+			strings.HasSuffix(f.Entry, "evil.exe") {
+			hit = true
+		}
+	}
+	if !hit {
+		t.Fatalf("应报告带嵌套前缀的 root-executable，发现: %+v", rep.Findings)
+	}
+}
+
+// 损坏 / 非 zip 的嵌套条目只记 warn，不阻断整个 Mod（避免误伤）。
+func TestJarScanNestedUnreadableNotBlocked(t *testing.T) {
+	data := buildJarWithClasses(t, map[string][]byte{
+		"fabric.mod.json":     []byte(`{"id":"ok"}`),
+		"META-INF/jars/bad.jar": []byte("this is not a zip at all"),
+	})
+	rep, err := scanJarBytes(data)
+	if err != nil {
+		t.Fatalf("扫描报错: %v", err)
+	}
+	if rep.Blocked() {
+		t.Fatalf("损坏的嵌套 jar 不应阻断整个 Mod: %+v", rep.Findings)
+	}
+	if findFinding(rep, "nested-unreadable") == nil {
+		t.Fatalf("应记录 nested-unreadable warn，发现: %+v", rep.Findings)
 	}
 }
