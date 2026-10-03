@@ -1086,28 +1086,35 @@ func (a *App) LoginYggdrasil(serverURL string, username string, password string)
 	if authResp.AccessToken == "" {
 		return nil, fmt.Errorf("登录失败: 未获取到访问令牌")
 	}
-	var playerName string
-	var playerUUID string
-	if authResp.SelectedProfile != nil {
-		playerName = authResp.SelectedProfile.Name
-		playerUUID = authResp.SelectedProfile.ID
-	} else if len(authResp.AvailableProfiles) > 0 {
-		playerName = authResp.AvailableProfiles[0].Name
-		playerUUID = authResp.AvailableProfiles[0].ID
-	} else {
-		return nil, fmt.Errorf("该账号还没有创建角色，请先在皮肤站创建角色")
+	// 令牌来自不可信外置服务器：限长且禁控制字符 / 空白（防存储膨胀与潜在头注入）。
+	if why := validateYggToken(authResp.AccessToken, false); why != ypOK {
+		recordSecurityEvent("auth", "high", "reject-ygg-token", "LoginYggdrasil", why)
+		return nil, fmt.Errorf("%s", describeYggReject(why))
+	}
+	if why := validateYggToken(authResp.ClientToken, true); why != ypOK {
+		recordSecurityEvent("auth", "high", "reject-ygg-client-token", "LoginYggdrasil", why)
+		authResp.ClientToken = ""
+	}
+	// 角色名 / UUID 会落盘成账号文件并进入启动命令行，必须按 Minecraft 字符集与
+	// 32 位 hex 校验，拒绝恶意服务器返回的穿越名 / 注入名 / 畸形 UUID。
+	profile, ok := pickYggProfile(authResp.SelectedProfile, authResp.AvailableProfiles)
+	if !ok {
+		recordSecurityEvent("auth", "high", "reject-ygg-profile", "LoginYggdrasil", "no valid profile")
+		return nil, fmt.Errorf("外置服务器返回的角色资料不合法，拒绝登录")
 	}
 	serverName := ""
 	serverInfo, infoErr := a.GetYggdrasilServerInfo(serverURL)
-	if infoErr == nil && serverInfo.Meta.ServerName != "" {
-		serverName = serverInfo.Meta.ServerName
+	if infoErr == nil {
+		if safe, ok := validateYggServerName(serverInfo.Meta.ServerName); ok && safe != "" {
+			serverName = safe
+		}
 	}
 	return &ExternalAuthData{
 		ServerURL:   serverURL,
 		AccessToken: authResp.AccessToken,
 		ClientToken: authResp.ClientToken,
-		UUID:        playerUUID,
-		Username:    playerName,
+		UUID:        profile.UUID,
+		Username:    profile.Name,
 		Password:    password,
 		ServerName:  serverName,
 	}, nil
@@ -1162,13 +1169,20 @@ func (a *App) RefreshExternalToken(username string) error {
 		}
 		return fmt.Errorf("令牌刷新失败: %s", authResp.ErrorMessage)
 	}
+	if why := validateYggToken(authResp.AccessToken, false); why != ypOK {
+		recordSecurityEvent("auth", "high", "reject-ygg-token", "RefreshExternalToken", why)
+		return fmt.Errorf("%s", describeYggReject(why))
+	}
 	authData.AccessToken = authResp.AccessToken
-	if authResp.ClientToken != "" {
+	if why := validateYggToken(authResp.ClientToken, true); why == ypOK && authResp.ClientToken != "" {
 		authData.ClientToken = authResp.ClientToken
 	}
-	if authResp.SelectedProfile != nil {
-		authData.UUID = authResp.SelectedProfile.ID
-		authData.Username = authResp.SelectedProfile.Name
+	// 刷新响应若带角色资料，同样必须通过名校验与 UUID 归一；非法则保留旧身份不覆盖。
+	if profile, ok := pickYggProfile(authResp.SelectedProfile, authResp.AvailableProfiles); ok {
+		authData.UUID = profile.UUID
+		authData.Username = profile.Name
+	} else if authResp.SelectedProfile != nil {
+		recordSecurityEvent("auth", "medium", "ignore-ygg-profile", "RefreshExternalToken", "invalid refreshed profile")
 	}
 	return a.SaveExternalAuthData(username, authData)
 }
