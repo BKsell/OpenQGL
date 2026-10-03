@@ -2110,6 +2110,12 @@ func (a *App) LaunchGame(versionID string) error {
 	a.writeLog("===== 启动游戏: %s =====", versionID)
 	a.writeLog("版本目录: %s", versionDir)
 
+	// 拉起 JVM 前对 mods 目录做存量安全扫描（通用恶意形态 + Log4Shell/JNDI），
+	// 覆盖手动拖入 / 其它启动器写入、从未经本程序校验的 jar；命中高危直接拒绝启动。
+	if err := a.enforceInstalledModsBeforeLaunch(versionID); err != nil {
+		return err
+	}
+
 	versionJSON, err := a.resolveVersionJSON(versionID)
 	if err != nil {
 		return fmt.Errorf("解析版本 JSON 失败: %v", err)
