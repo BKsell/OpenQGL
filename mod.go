@@ -718,6 +718,12 @@ func (a *App) ImportMod(versionID string) error {
 		return fmt.Errorf("Mod 文件大小异常（%d 字节），拒绝导入", srcStat.Size())
 	}
 
+	// 用户手动导入的 jar 完全没有下载链的哈希 / 主机白名单背书，更要在落进
+	// mods 目录前做静态扫描，挡掉本地双击“安装”的恶意 jar（critical 阻断）。
+	if _, err := enforceModJarScan(path, "mod-import", filepath.Base(path)); err != nil {
+		return fmt.Errorf("Mod 安全扫描失败: %w", err)
+	}
+
 	fileName := SanitizeFilename(filepath.Base(path))
 	if fileName == "" || !strings.HasSuffix(strings.ToLower(fileName), ".jar") {
 		return fmt.Errorf("Mod 文件名无效")
@@ -871,6 +877,14 @@ func (a *App) downloadModItem(item *DownloadItem) error {
 	if err := verifyModDownloaded(partPath, item.URL); err != nil {
 		os.Remove(partPath)
 		return fmt.Errorf("Mod 完整性校验失败: %w", err)
+	}
+
+	// 哈希只能证明“和源站声明一致”，证明不了作者上传的内容无害。落定成
+	// 最终 jar（即将随 JVM 加载）前做静态内容扫描：根目录可执行载荷、损坏
+	// 压缩包等 critical 项直接阻止安装；warn/info 只记审计不阻断。
+	if _, err := enforceModJarScan(partPath, "mod-download", fileName); err != nil {
+		os.Remove(partPath)
+		return fmt.Errorf("Mod 安全扫描失败: %w", err)
 	}
 	return finalizeDownloadFile(partPath, destPath)
 }
