@@ -34,6 +34,7 @@ import (
 const (
 	// 审计事件类别：新增拦截点时优先复用已有类别，确实是新面再新增常量。
 	auditCategoryZip          = "zip-entry"        // 压缩包条目：Zip Slip / 特殊条目 / 炸弹
+	auditCategoryJarScan      = "jar-scan"         // Mod jar 静态内容扫描：JVM 代理/根可执行/coremod 脚本
 	auditCategoryExternalURL  = "external-url"     // 外部链接白名单拦截
 	auditCategoryJVMEnv       = "jvm-env"          // 游戏 JVM 隐式参数环境变量剥离
 	auditCategoryInstaller    = "java-installer"   // Java 安装包落地 / 执行校验
@@ -154,7 +155,7 @@ func validAuditCategory(c string) bool {
 	switch c {
 	case auditCategoryZip, auditCategoryExternalURL, auditCategoryJVMEnv,
 		auditCategoryInstaller, auditCategoryPrivateWrite, auditCategoryHashVerify,
-		auditCategoryRateLimit, auditCategoryPermission:
+		auditCategoryRateLimit, auditCategoryPermission, auditCategoryJarScan:
 		return true
 	}
 	return false
