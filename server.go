@@ -108,15 +108,36 @@ func safeGet(client *http.Client, url string, maxBytes int64) (*http.Response, e
 	return resp, nil
 }
 
-// sanitizeServerName 清理服务器名称，防止路径遍历和特殊字符注入
-// 安全加固: 同时过滤换行符和回车符，防止 server.properties 配置注入
+// sanitizeServerName 清理服务器名称，防止路径遍历和特殊字符注入。
+// 除历史上的 NewReplacer 删除路径分隔符 / properties 分隔符 / CR/LF 外，再兜底：
+//   - 剩余任何 ASCII 控制字节（NUL/Tab/ESC 等）一律按非法名拒绝（返回空串）；
+//   - 长度超过 maxServerNameLen 拒绝。名称随后会进目录名与 server.properties 的 motd，
+//     不能无限长，也不能夹带终端转义 / NUL 截断。
 func sanitizeServerName(name string) string {
 	name = strings.TrimSpace(name)
 	replacer := strings.NewReplacer(
 		"..", "", "/", "", "\\", "", ":", "", "*", "", "?", "",
 		"\"", "", "<", "", ">", "", "|", "", "\n", "", "\r", "",
 	)
-	return replacer.Replace(name)
+	name = replacer.Replace(name)
+	if name == "" {
+		return ""
+	}
+	if containsControlByte(name) {
+		return ""
+	}
+	// 默认流程会用 name 直接做服务器目录名：拒绝 Windows 保留设备名（CON 等）与尾点，
+	// 避免目录被导向设备或与已存在目录发生静默同名（Windows 会剥掉尾点）。
+	if isReservedDeviceName(stemOfName(name)) {
+		return ""
+	}
+	if strings.HasSuffix(name, ".") {
+		return ""
+	}
+	if len(name) > maxServerNameLen {
+		return ""
+	}
+	return name
 }
 
 // isPathTraversal 检查目标路径是否存在路径遍历风险
@@ -275,8 +296,10 @@ func (a *App) CreateServer(name, version string, port, maxMem, minMem int, onlin
 		return fmt.Errorf("创建 eula.txt 失败: %v", err)
 	}
 
-	properties := fmt.Sprintf("server-port=%d\nonline-mode=%v\nmotd=%s\n", port, onlineMode, name)
-	if err := os.WriteFile(filepath.Join(dir, "server.properties"), []byte(properties), allowedFilePerm); err != nil {
+	// 初始 server.properties 走统一的安全读写器：键名 / 单行值 / motd 全部校验，
+	// 原子写 .tmp 再 rename。旧实现 fmt.Sprintf 裸拼文本，motd 里的特殊语义字符
+	// （前导空格、#、Tab、反斜杠等）没有经过 properties 值规则，存在配置注入不一致面。
+	if err := writeInitialServerProperties(filepath.Join(dir, "server.properties"), port, onlineMode, name); err != nil {
 		return fmt.Errorf("创建 server.properties 失败: %v", err)
 	}
 
