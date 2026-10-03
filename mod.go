@@ -154,12 +154,26 @@ func mirrorModURL(original string) string {
 
 // SearchMods 搜索 Mod
 func (a *App) SearchMods(query string, gameVersion string, loader string, category string, page int, pageSize int) (*ModSearchResponse, error) {
+	// 分页/查询入参全部来自前端，必须收敛，防止被传入超大 limit 打出超长 Modrinth
+	// URL 或巨大的 offset。Modrinth 单页上限是 100，这里对齐并兜底；查询词做长度上限。
+	const (
+		defaultModPageSize = 20
+		maxModPageSize     = 100
+		maxModQueryLen     = 200
+	)
 	if pageSize <= 0 {
-		pageSize = 20
+		pageSize = defaultModPageSize
+	}
+	if pageSize > maxModPageSize {
+		pageSize = maxModPageSize
 	}
 	if page < 0 {
 		page = 0
 	}
+	if len(query) > maxModQueryLen {
+		query = query[:maxModQueryLen]
+	}
+	query = strings.TrimSpace(query)
 
 	params := url.Values{}
 	params.Set("query", query)
@@ -426,25 +440,14 @@ func (a *App) AddModToDownloadList(versionID string, savePath string) error {
 		return fmt.Errorf("创建保存目录失败: %v", err)
 	}
 
-	// 安全：使用 filepath.Base 剥离路径遍历组件
-	customName := filepath.Base(primaryFile.Filename)
-	if customName == "" || customName == "." || customName == string(filepath.Separator) {
-		customName = filepath.Base(version.Name)
-	}
-	if customName == "" || customName == "." {
-		customName = "mod.jar"
-	}
+	// 文件名来自 Modrinth 服务器元数据，filepath.Base 只能剥目录，挡不住控制字符、
+	// Windows 保留设备名、尾点与可执行扩展名；统一走 nameguard，逐级回退到合法默认名。
+	customName := PickSafeModFileName(primaryFile.Filename, version.Name)
 
 	a.downloadMutex.Lock()
 	defer a.downloadMutex.Unlock()
 
-	for _, item := range a.downloadList {
-		if item.CustomName == customName {
-			return fmt.Errorf("下载列表中已存在: %s", customName)
-		}
-	}
-
-	a.downloadList = append(a.downloadList, DownloadItem{
+	pending := DownloadItem{
 		ID:         versionID,
 		URL:        primaryFile.URL,
 		CustomName: customName,
@@ -453,7 +456,12 @@ func (a *App) AddModToDownloadList(versionID string, savePath string) error {
 		SavePath:   savePath,
 		Status:     "pending",
 		Progress:   0,
-	})
+	}
+	if why := auditDownloadItemForEnqueue(a.downloadList, pending); why != dqRejectNone {
+		return fmt.Errorf("%s", describeQueueReject(why))
+	}
+
+	a.downloadList = append(a.downloadList, pending)
 
 	runtime.EventsEmit(a.ctx, "downloadListUpdated", a.downloadList)
 	return nil
