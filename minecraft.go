@@ -1877,7 +1877,27 @@ func (a *App) buildLaunchArgs(versionID string, versionJSON *VersionJSON, mcDir 
 	}
 	nativesDir := filepath.Join(versionDir, versionID+"-natives")
 	classpathEntries := a.buildClasspath(mcDir, versionID, versionJSON)
-	classpath := strings.Join(classpathEntries, ";")
+
+	// 最终归属验收（必须在 resolveJVMArg 使用 classpath 拼出 -cp 之前完成）：不相信
+	// buildClasspath 内各拼路径环节，对整条 classpath 统一收敛——必须全部是 .minecraft
+	// 内的绝对 .jar、无 UNC/穿越/控制符，并去重。越界条目剔除并留痕，用安全去重后的
+	// 条目重建 classpath；后续 Forge 过滤只会再收窄（仍是安全子集）。
+	cpAudit := AuditGameClasspath(classpathEntries, []string{mcDir})
+	for _, f := range cpAudit.Findings {
+		if f.Severity == launchSeverityCritical {
+			recordSecurityEvent(auditCategoryLaunch, auditSeverityCritical, auditActionBlocked,
+				"minecraft", "游戏 classpath 不安全条目已剔除: "+f.Code)
+		}
+	}
+	if len(cpAudit.SafeEntries) != len(classpathEntries) {
+		classpathEntries = cpAudit.SafeEntries
+	}
+	classpath = strings.Join(classpathEntries, ";")
+	if lpAudit := AuditGameLocalPaths(nativesDir, filepath.Join(mcDir, "libraries"),
+		filepath.Join(mcDir, "assets"), []string{mcDir}); lpAudit.HasCritical() {
+		recordSecurityEvent(auditCategoryLaunch, auditSeverityCritical, auditActionBlocked,
+			"minecraft", "游戏本地路径(natives/libraries/assets)审计未通过: "+lpAudit.FirstCriticalCode())
+	}
 	gameDir := versionDir
 	if !a.isVersionIsolation() {
 		gameDir = mcDir
@@ -2002,6 +2022,30 @@ func (a *App) buildLaunchArgs(versionID string, versionJSON *VersionJSON, mcDir 
 		"${resolution_width}": "854", "${resolution_height}": "480",
 	}
 
+	// 启动器自己生成、随后替换进游戏参数的可信值（账号用户名/UUID/会话令牌/资源索引
+	// ID）必须干净：它们一旦含空白、引号或 CR/LF，就会在被字符串替换拼进 argv 时劈开
+	// 额外参数（旧版 MinecraftArgs 是纯字符串替换，尤其敏感）。账号数据可能来自损坏的
+	// 本地账号文件或异常的第三方认证响应，这里统一做控制字符/超长兜底，命中即放弃启动。
+	reservedValues := map[string]string{
+		"username":    username,
+		"uuid":        uuid,
+		"accessToken": accessToken,
+		"assetIndex":  assetIndexName,
+		"version":     versionID,
+		"userType":    userType,
+	}
+	rvAudit := AuditReservedGameValues(reservedValues)
+	if rvAudit.HasCritical() {
+		for _, f := range rvAudit.Findings {
+			if f.Severity == launchSeverityCritical {
+				recordSecurityEvent(auditCategoryLaunch, auditSeverityCritical, auditActionRejected,
+					"minecraft", "启动器保留参数值异常: "+f.Code+" @ "+f.Field)
+			}
+		}
+		a.writeLog("账号/会话参数含非法控制字符或超长，放弃启动")
+		return nil, "", "", ""
+	}
+
 	var gameArgs []string
 	if isOldJSON {
 		for _, part := range strings.Split(versionJSON.MinecraftArgs, " ") {
@@ -2017,6 +2061,23 @@ func (a *App) buildLaunchArgs(versionID string, versionJSON *VersionJSON, mcDir 
 			gameArgs = append(gameArgs, resolveGameArg(arg, replacements)...)
 		}
 	}
+
+	// 游戏参数最终验收：旧版 MinecraftArgs 与 arguments.game 都来自外部版本 JSON。
+	// resolveGameArg 已挡住“一个值夹空格劈成多条”，这里再拦“本身合法成条”的会话劫持
+	// 参数（--server/--port/--quickPlay*/--proxy*，官方 JSON 绝不会自带）与控制字符/
+	// 超长值，并给条数上界。剔除劫持项后可继续；参数表被畸形放大则放弃启动。
+	gaAudit := AuditExternalGameArgs(gameArgs)
+	for _, f := range gaAudit.Findings {
+		if f.Severity == launchSeverityCritical {
+			recordSecurityEvent(auditCategoryLaunch, auditSeverityCritical, auditActionStripped,
+				"minecraft", "外部游戏参数审计: "+f.Code+" @ "+f.Field)
+		}
+	}
+	if gameFindingsContainCode(gaAudit.Findings, "ga-too-many") {
+		a.writeLog("外部游戏参数条数超过上限，放弃启动")
+		return nil, "", "", ""
+	}
+	gameArgs = gaAudit.SafeExternal
 
 	hasCp := false
 	for i, arg := range jvmArgs {
@@ -2253,6 +2314,16 @@ func (a *App) LaunchGame(versionID string) error {
 	}
 	fullCmdLine := strings.Join(cmdParts, " ")
 	a.writeLog("命令行长度: %d 字符", len(fullCmdLine))
+
+	// 最终防线：真正被 CreateProcess 解释的是上面拼好的整条字符串（SysProcAttr.CmdLine），
+	// 其中混入了版本 JSON、账号、外部认证服务器 URL 等多源数据。在启动前按系统分词规则
+	// 还原 argv 并审计：拒绝 CR/LF/NUL 注入、引号不配平、超长串/参数，以及 argv[0] 必须
+	// 仍是安全的 java 可执行。critical 一律不启动游戏。
+	if _, cmdAudit := AuditCommandLine(fullCmdLine, true); cmdAudit.HasCritical() {
+		recordSecurityEvent(auditCategoryJVMEnv, auditSeverityCritical, auditActionBlocked,
+			"minecraft", "游戏启动命令行最终审计未通过: "+cmdAudit.FirstCriticalCode())
+		return fmt.Errorf("游戏启动命令行安全审计未通过，拒绝启动: %s", cmdAudit.FirstCriticalCode())
+	}
 
 	cmd := exec.Command(javaPath)
 	cmd.Dir = gameDir
