@@ -41,6 +41,15 @@ const (
 	// jarScanClassBytesCap 限制一次扫描中所有 class 累计读取的字节数，
 	// 防止超大 class 或海量 class 拖垮安装流程。
 	jarScanClassBytesCap = 16 << 20 // 16 MiB
+	// jarScanMaxNestedDepth 是嵌套 jar（JarJar）递归扫描的最大深度：
+	// 外层 jar 记为第 1 层，最多向内再扫到第 2 层。
+	jarScanMaxNestedDepth = 2
+	// jarScanMaxNestedJars 限制一次扫描中参与递归的嵌套 jar 数量，防“jar 套娃”炸弹。
+	jarScanMaxNestedJars = 32
+	// jarScanNestedBytesCap 限制所有嵌套 jar 累计读取字节数。
+	jarScanNestedBytesCap = 64 << 20 // 64 MiB
+	// jarScanPerNestedCap 限制单个嵌套 jar 的读取字节数。
+	jarScanPerNestedCap = 8 << 20 // 8 MiB
 )
 
 // JarFindingSeverity 与审计事件级别对齐。
@@ -72,6 +81,11 @@ type JarScanReport struct {
 
 	// ruleSeen 对同一规则只报一次，避免一个 jar 里上百个 class 刷屏。
 	ruleSeen map[string]bool
+
+	// 以下为跨嵌套层级共享的扫描状态，不参与 JSON 序列化。
+	limitedEntries    bool
+	nestedLimitDepth  bool
+	nestedLimitCount  bool
 }
 
 // Blocked 报告是否存在必须阻断安装的 critical 发现。
@@ -146,8 +160,18 @@ func scanJarAt(jarPath string) (*JarScanReport, error) {
 
 func scanZipReader(zr *zip.Reader) *JarScanReport {
 	rep := &JarScanReport{Findings: []JarFinding{}, ruleSeen: map[string]bool{}}
-	limited := false
+	nestedCount, nestedBytes := 0, 0
+	scanZipInto(rep, zr, 1, "", &nestedCount, &nestedBytes)
+	rep.finalize()
+	return rep
+}
+
+// scanZipInto 把一个 zip 层级的条目收集进 rep。depth=1 为最外层 jar；prefix 是
+// 嵌套 jar 的路径前缀（外层为空），nestedCount/nestedBytes 是跨层级共享的预算。
+func scanZipInto(rep *JarScanReport, zr *zip.Reader, depth int, prefix string,
+	nestedCount *int, nestedBytes *int) {
 	classScanBytes := 0
+	limited := false
 
 	for i, f := range zr.File {
 		if i >= jarScanMaxEntries {
@@ -161,33 +185,35 @@ func scanZipReader(zr *zip.Reader) *JarScanReport {
 		rep.Entries++
 		lower := strings.ToLower(name)
 		ext := pathExtLower(lower)
+		display := prefix + name
 
 		switch {
 		case ext == ".class":
 			rep.ClassFiles++
 			if rep.ScannedClasses < jarScanMaxScannedClasses && classScanBytes < jarScanClassBytesCap {
-				if n := scanClassBehavior(rep, f, name, classScanBytes); n > 0 {
+				if n := scanClassBehavior(rep, f, display, classScanBytes); n > 0 {
 					classScanBytes += n
 					rep.ScannedClasses++
 				}
 			}
 		case jarNativeLibExts[ext]:
 			rep.NativeLibs++
-			rep.add(JarSeverityInfo, "native-library", name, "jar 携带平台本地库（正常 Mod 可能包含，已记录）")
+			rep.add(JarSeverityInfo, "native-library", display, "jar 携带平台本地库（正常 Mod 可能包含，已记录）")
 		case ext == ".jar":
 			rep.NestedJars++
-			rep.add(JarSeverityInfo, "nested-jar", name, "jar 内嵌 jar（JarJar/依赖遮蔽，内部内容不会被本次外层校验覆盖）")
+			rep.add(JarSeverityInfo, "nested-jar", display, "jar 内嵌 jar（JarJar/依赖遮蔽），已在有界预算内递归扫描其内容")
+			scanNestedJar(rep, f, display, depth, nestedCount, nestedBytes)
 		case ext == ".pack" || strings.HasSuffix(lower, ".pack.gz") || ext == ".pack200":
-			rep.add(JarSeverityWarn, "pack200-carrier", name, "Pack200 载体在类加载时才解包，可藏匿不被静态扫描的类")
+			rep.add(JarSeverityWarn, "pack200-carrier", display, "Pack200 载体在类加载时才解包，可藏匿不被静态扫描的类")
 		}
 
-		// 根目录可执行程序 / 脚本：正常 Mod 绝不会有，critical。
+		// 根目录可执行程序 / 脚本：在其所属 jar 层级的根目录，critical。
 		if isJarRootEntry(lower) && jarRootExecExts[ext] {
-			rep.add(JarSeverityCritical, "root-executable", name,
+			rep.add(JarSeverityCritical, "root-executable", display,
 				"jar 根目录携带可直接运行的可执行文件/脚本，属高置信度恶意载荷")
 		}
 
-		// Mod 存在性标记。
+		// Mod 存在性标记（相对路径判定，不受外层前缀影响）。
 		for _, marker := range jarModMarkers {
 			if bytes.EqualFold([]byte(lower), marker) {
 				rep.HasModMarker = true
@@ -196,44 +222,99 @@ func scanZipReader(zr *zip.Reader) *JarScanReport {
 
 		// Nashorn coremod 脚本：在 ModLauncher 类加载阶段执行 JS。
 		if strings.HasPrefix(lower, "meta-inf/") && ext == ".js" {
-			rep.add(JarSeverityWarn, "coremod-script", name,
+			rep.add(JarSeverityWarn, "coremod-script", display,
 				"META-INF 内脚本会在类加载阶段以 Nashorn 执行，属高权限早期代码")
 		}
 
 		// ModLauncher 转换 / 启动服务：在 Mod 生命周期前挂钩类加载。
 		if strings.HasPrefix(lower, "meta-inf/services/") {
-			scanServiceEntry(rep, f, name)
+			scanServiceEntry(rep, f, display)
 		}
 
 		// 多发行版 jar 覆盖 java.* 基础包可影子替换运行时类。
 		if strings.HasPrefix(lower, "meta-inf/versions/") {
 			if strings.Contains(lower, "/java/") {
-				rep.add(JarSeverityWarn, "multi-release-runtime", name,
+				rep.add(JarSeverityWarn, "multi-release-runtime", display,
 					"多发行版条目覆盖 java.* 运行时类，可影子替换平台实现")
 			}
 		}
 
 		if lower == "meta-inf/manifest.mf" {
-			scanManifestEntry(rep, f, name)
+			scanManifestEntry(rep, f, display)
 		}
 	}
 
 	if limited {
-		rep.add(JarSeverityInfo, "scan-limit-reached", "",
-			fmt.Sprintf("条目数超过 %d，仅扫描了前 %d 条", jarScanMaxEntries, rep.Entries))
+		rep.limitedEntries = true
 	}
-	if rep.ClassFiles > rep.ScannedClasses {
-		rep.add(JarSeverityInfo, "class-scan-limit-reached", "",
+}
+
+// finalize 在最外层扫描结束后统一补充上限提示与“无 Mod 标记”结论。
+func (r *JarScanReport) finalize() {
+	if r.limitedEntries {
+		r.add(JarSeverityInfo, "scan-limit-reached", "",
+			fmt.Sprintf("条目数超过 %d，仅扫描了前 %d 条", jarScanMaxEntries, r.Entries))
+	}
+	if r.ClassFiles > r.ScannedClasses {
+		r.add(JarSeverityInfo, "class-scan-limit-reached", "",
 			fmt.Sprintf("class 条数或总体积超过静态行为分析上限（%d 条 / %d MiB），仅分析了前 %d 个 class",
-				jarScanMaxScannedClasses, jarScanClassBytesCap>>20, rep.ScannedClasses))
+				jarScanMaxScannedClasses, jarScanClassBytesCap>>20, r.ScannedClasses))
+	}
+	if r.nestedLimitDepth {
+		r.add(JarSeverityInfo, "nested-depth-limit", "",
+			fmt.Sprintf("嵌套 jar 深度超过 %d 层，更内层未展开扫描", jarScanMaxNestedDepth))
+	}
+	if r.nestedLimitCount {
+		r.add(JarSeverityInfo, "nested-count-limit", "",
+			fmt.Sprintf("嵌套 jar 数量超过 %d 个或总体积超限，部分未展开扫描", jarScanMaxNestedJars))
 	}
 
 	// 有 .class 却完全没有任何 Mod 标记：可能是伪装成 Mod 的可执行 jar。
-	if rep.ClassFiles > 0 && !rep.HasModMarker {
-		rep.add(JarSeverityWarn, "no-mod-marker", "",
+	if r.ClassFiles > 0 && !r.HasModMarker {
+		r.add(JarSeverityWarn, "no-mod-marker", "",
 			"jar 含编译后的 .class 但没有 fabric.mod.json/mods.toml/mcmod.info 等 Mod 声明，可能并非正常 Mod")
 	}
-	return rep
+}
+
+// scanNestedJar 在有界深度 / 数量 / 字节预算内递归扫描一个嵌套 jar，
+// 直接把内部条目收集进同一个总报告，critical 会正常向上传播触发阻断。
+func scanNestedJar(rep *JarScanReport, f *zip.File, display string, depth int,
+	nestedCount *int, nestedBytes *int) {
+	if depth >= jarScanMaxNestedDepth {
+		rep.nestedLimitDepth = true
+		return
+	}
+	if *nestedCount >= jarScanMaxNestedJars || *nestedBytes >= jarScanNestedBytesCap {
+		rep.nestedLimitCount = true
+		return
+	}
+
+	rc, err := f.Open()
+	if err != nil {
+		return
+	}
+	defer rc.Close()
+
+	left := jarScanNestedBytesCap - *nestedBytes
+	limit := int64(jarScanPerNestedCap)
+	if int64(left) < limit {
+		limit = int64(left)
+	}
+	data, err := io.ReadAll(io.LimitReader(rc, limit))
+	if err != nil || len(data) == 0 {
+		return
+	}
+	childZr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		// 嵌套条目不是合法 zip：可能损坏或伪装，记 warn 但不因此误杀整个 Mod。
+		rep.add(JarSeverityWarn, "nested-unreadable", display,
+			"内嵌 .jar 条目无法解析，可能损坏或被刻意伪装，其内容未纳入校验")
+		return
+	}
+
+	*nestedCount++
+	*nestedBytes += len(data)
+	scanZipInto(rep, childZr, depth+1, display+"!/", nestedCount, nestedBytes)
 }
 
 // scanManifestEntry 读取并解析 MANIFEST.MF 的关键头（处理 CRLF 与续行折叠）。
