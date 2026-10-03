@@ -333,27 +333,24 @@ func (a *App) AddModpackToDownloadList(versionID string, customName string) erro
 		return fmt.Errorf("不安全的下载 URL（非 HTTPS）")
 	}
 
-	displayName := filepath.Base(customName)
-	if displayName == "" || displayName == "." {
-		displayName = filepath.Base(primaryFile.Filename)
+	// 展示名优先用前端传入的 customName，其次服务端文件名 / 版本名；无论哪个来源都可能
+	// 带控制字符或保留设备名，统一走严格版本名内核，全部不可信时回退固定安全名。
+	displayName := ""
+	for _, cand := range []string{customName, primaryFile.Filename, version.Name} {
+		base := filepath.Base(strings.TrimSpace(cand))
+		if clean, why := SafeVersionComponent(base); why == nameRejectNone {
+			displayName = clean
+			break
+		}
 	}
-	if displayName == "" || displayName == "." {
-		displayName = filepath.Base(version.Name)
-	}
-	if displayName == "" || displayName == "." {
+	if displayName == "" {
 		displayName = "modpack"
 	}
 
 	a.downloadMutex.Lock()
 	defer a.downloadMutex.Unlock()
 
-	for _, item := range a.downloadList {
-		if item.CustomName == displayName {
-			return fmt.Errorf("下载列表中已存在: %s", displayName)
-		}
-	}
-
-	a.downloadList = append(a.downloadList, DownloadItem{
+	pending := DownloadItem{
 		ID:         versionID,
 		URL:        primaryFile.URL,
 		CustomName: displayName,
@@ -361,7 +358,12 @@ func (a *App) AddModpackToDownloadList(versionID string, customName string) erro
 		ItemType:   "modpack",
 		Status:     "pending",
 		Progress:   0,
-	})
+	}
+	if why := auditDownloadItemForEnqueue(a.downloadList, pending); why != dqRejectNone {
+		return fmt.Errorf("%s", describeQueueReject(why))
+	}
+
+	a.downloadList = append(a.downloadList, pending)
 
 	runtime.EventsEmit(a.ctx, "downloadListUpdated", a.downloadList)
 	return nil
@@ -491,6 +493,52 @@ func (a *App) installModpack(item *DownloadItem) error {
 
 	if mcVersion == "" {
 		return fmt.Errorf("整合包未指定 Minecraft 版本")
+	}
+
+	// dependencies.* 全部来自不可信的第三方 .mrpack：mcVersion 最终会进
+	// versions/<mcVersion>，fabric/forge/neoforge 版本会拼进出向元数据 URL 与版本
+	// 目录名。这里集中做严格名单段校验，任何控制字符/分隔符/保留设备名/超长都直接
+	// 终止安装，避免畸形清单把文件导向 versions 目录外或污染对 Modrinth/Forge 的请求。
+	if clean, why := SafeVersionComponent(mcVersion); why != nameRejectNone {
+		recordSecurityEvent(auditCategoryPrivateWrite, auditSeverityCritical, auditActionBlocked,
+			"modpack", "整合包 minecraft 版本标识非法: "+describeNameReject(why))
+		return fmt.Errorf("整合包声明的 Minecraft 版本非法: %s", describeNameReject(why))
+	} else {
+		mcVersion = clean
+	}
+	checkLoaderDep := func(label, value string) (string, error) {
+		if value == "" {
+			return "", nil
+		}
+		clean, why := SafeLoaderComponent(value)
+		if why != nameRejectNone {
+			recordSecurityEvent(auditCategoryPrivateWrite, auditSeverityCritical, auditActionBlocked,
+				"modpack", "整合包 "+label+" 版本标识非法: "+describeNameReject(why))
+			return "", fmt.Errorf("整合包声明的 %s 版本非法: %s", label, describeNameReject(why))
+		}
+		return clean, nil
+	}
+	if v, err := checkLoaderDep("fabric-loader", fabricVersion); err != nil {
+		return err
+	} else {
+		fabricVersion = v
+	}
+	if v, err := checkLoaderDep("forge", forgeVersion); err != nil {
+		return err
+	} else {
+		forgeVersion = v
+	}
+	if v, err := checkLoaderDep("neoforge", neoforgeVersion); err != nil {
+		return err
+	} else {
+		neoforgeVersion = v
+	}
+	if quiltVersion != "" {
+		if _, why := SafeLoaderComponent(quiltVersion); why != nameRejectNone {
+			recordSecurityEvent(auditCategoryPrivateWrite, auditSeverityWarn, auditActionRejected,
+				"modpack", "整合包 quilt-loader 版本标识非法: "+describeNameReject(why))
+			return fmt.Errorf("整合包声明的 quilt-loader 版本非法: %s", describeNameReject(why))
+		}
 	}
 
 	// 初始化 UMFS 本地缓存
