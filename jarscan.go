@@ -34,6 +34,13 @@ const (
 	jarScanMaxEntries = 50000
 	// jarScanTextCap 限制单个文本条目（MANIFEST/services）最多读取的字节数。
 	jarScanTextCap = 1 << 20 // 1 MiB
+	// jarScanMaxScannedClasses 限制参与字节码行为分析的 .class 条数。
+	jarScanMaxScannedClasses = 2000
+	// jarScanPerClassCap 限制单个 class 的读取字节数。
+	jarScanPerClassCap = 1 << 20 // 1 MiB
+	// jarScanClassBytesCap 限制一次扫描中所有 class 累计读取的字节数，
+	// 防止超大 class 或海量 class 拖垮安装流程。
+	jarScanClassBytesCap = 16 << 20 // 16 MiB
 )
 
 // JarFindingSeverity 与审计事件级别对齐。
@@ -55,12 +62,16 @@ type JarFinding struct {
 
 // JarScanReport 是一次扫描的完整结果。
 type JarScanReport struct {
-	Entries       int          `json:"entries"`
-	ClassFiles    int          `json:"classFiles"`
-	Findings      []JarFinding `json:"findings"`
-	HasModMarker  bool         `json:"hasModMarker"`
-	NestedJars    int          `json:"nestedJars"`
-	NativeLibs    int          `json:"nativeLibs"`
+	Entries        int          `json:"entries"`
+	ClassFiles     int          `json:"classFiles"`
+	ScannedClasses int          `json:"scannedClasses"`
+	Findings       []JarFinding `json:"findings"`
+	HasModMarker   bool         `json:"hasModMarker"`
+	NestedJars     int          `json:"nestedJars"`
+	NativeLibs     int          `json:"nativeLibs"`
+
+	// ruleSeen 对同一规则只报一次，避免一个 jar 里上百个 class 刷屏。
+	ruleSeen map[string]bool
 }
 
 // Blocked 报告是否存在必须阻断安装的 critical 发现。
@@ -134,8 +145,9 @@ func scanJarAt(jarPath string) (*JarScanReport, error) {
 }
 
 func scanZipReader(zr *zip.Reader) *JarScanReport {
-	rep := &JarScanReport{Findings: []JarFinding{}}
+	rep := &JarScanReport{Findings: []JarFinding{}, ruleSeen: map[string]bool{}}
 	limited := false
+	classScanBytes := 0
 
 	for i, f := range zr.File {
 		if i >= jarScanMaxEntries {
@@ -153,6 +165,12 @@ func scanZipReader(zr *zip.Reader) *JarScanReport {
 		switch {
 		case ext == ".class":
 			rep.ClassFiles++
+			if rep.ScannedClasses < jarScanMaxScannedClasses && classScanBytes < jarScanClassBytesCap {
+				if n := scanClassBehavior(rep, f, name, classScanBytes); n > 0 {
+					classScanBytes += n
+					rep.ScannedClasses++
+				}
+			}
 		case jarNativeLibExts[ext]:
 			rep.NativeLibs++
 			rep.add(JarSeverityInfo, "native-library", name, "jar 携带平台本地库（正常 Mod 可能包含，已记录）")
@@ -203,6 +221,11 @@ func scanZipReader(zr *zip.Reader) *JarScanReport {
 	if limited {
 		rep.add(JarSeverityInfo, "scan-limit-reached", "",
 			fmt.Sprintf("条目数超过 %d，仅扫描了前 %d 条", jarScanMaxEntries, rep.Entries))
+	}
+	if rep.ClassFiles > rep.ScannedClasses {
+		rep.add(JarSeverityInfo, "class-scan-limit-reached", "",
+			fmt.Sprintf("class 条数或总体积超过静态行为分析上限（%d 条 / %d MiB），仅分析了前 %d 个 class",
+				jarScanMaxScannedClasses, jarScanClassBytesCap>>20, rep.ScannedClasses))
 	}
 
 	// 有 .class 却完全没有任何 Mod 标记：可能是伪装成 Mod 的可执行 jar。
@@ -299,6 +322,216 @@ func pathExtLower(name string) string {
 		return ""
 	}
 	return name[dot:]
+}
+
+// jarBehaviorPattern 描述一条字节码行为启发式：常量池文本同时包含
+// require 与 andAlso（andAlso 为空时只要求 require）即命中。
+// 这是“值得人工注意”的能力信号，不直接证明恶意，因此最高只到 warn。
+type jarBehaviorPattern struct {
+	rule    string
+	sev     JarFindingSeverity
+	require string
+	andAlso string
+	detail  string
+}
+
+var jarBehaviorPatterns = []jarBehaviorPattern{
+	{
+		rule:    "behavior-process-exec",
+		sev:     JarSeverityWarn,
+		require: "java/lang/Runtime",
+		andAlso: "exec",
+		detail:  "class 常量池引用 Runtime.exec，具备直接拉起外部进程的能力",
+	},
+	{
+		rule:    "behavior-process-builder",
+		sev:     JarSeverityWarn,
+		require: "java/lang/ProcessBuilder",
+		andAlso: "",
+		detail:  "class 常量池引用 ProcessBuilder，具备组装并启动系统命令的能力",
+	},
+	{
+		rule:    "behavior-url-classloader",
+		sev:     JarSeverityWarn,
+		require: "java/net/URLClassLoader",
+		andAlso: "",
+		detail:  "class 常量池引用 URLClassLoader，可从远端地址动态加载字节码",
+	},
+	{
+		rule:    "behavior-define-class",
+		sev:     JarSeverityWarn,
+		require: "defineClass",
+		andAlso: "",
+		detail:  "class 常量池引用 defineClass，可在运行时把内存字节定义为可执行类",
+	},
+	{
+		rule:    "behavior-script-engine",
+		sev:     JarSeverityInfo,
+		require: "javax/script/",
+		andAlso: "",
+		detail:  "class 常量池引用脚本引擎（javax.script），具备运行期执行脚本的能力",
+	},
+	{
+		rule:    "behavior-reflective-open",
+		sev:     JarSeverityInfo,
+		require: "java/lang/reflect/",
+		andAlso: "setAccessible",
+		detail:  "class 常量池出现反射 + setAccessible，可绕过访问检查触碰内部 API",
+	},
+}
+
+func (r *JarScanReport) addRuleOnce(sev JarFindingSeverity, rule, entry, detail string) {
+	if r.ruleSeen[rule] {
+		return
+	}
+	r.ruleSeen[rule] = true
+	r.add(sev, rule, entry, detail)
+}
+
+// scanClassBehavior 读取单个 class（有字节上限），只解析常量池里的 UTF8 项做能力
+// 特征匹配，绝不加载 / 验证 / 执行字节码。返回实际读取的字节数（用于全局预算）；
+// class 损坏或被截断时返回 0，跳过而不影响其他条目。
+func scanClassBehavior(rep *JarScanReport, f *zip.File, entryName string, spent int) int {
+	rc, err := f.Open()
+	if err != nil {
+		return 0
+	}
+	defer rc.Close()
+
+	capLeft := jarScanClassBytesCap - spent
+	if capLeft <= 0 {
+		return 0
+	}
+	limit := int64(jarScanPerClassCap)
+	if int64(capLeft) < limit {
+		limit = int64(capLeft)
+	}
+	data, err := io.ReadAll(io.LimitReader(rc, limit))
+	if err != nil || len(data) == 0 {
+		return 0
+	}
+
+	texts := classConstantPoolUTF8(data)
+	if texts == nil {
+		// 不是可识别的 class 结构（可能被截断），不计入已扫描配额之外的噪音。
+		return 0
+	}
+	var blob strings.Builder
+	blob.Grow(len(data))
+	for _, s := range texts {
+		blob.WriteString(s)
+		blob.WriteByte('\n')
+	}
+	joined := blob.String()
+	lowerJoined := strings.ToLower(joined)
+	for _, p := range jarBehaviorPatterns {
+		needle := strings.ToLower(p.require)
+		if !strings.Contains(lowerJoined, needle) {
+			continue
+		}
+		if p.andAlso != "" && !strings.Contains(lowerJoined, strings.ToLower(p.andAlso)) {
+			continue
+		}
+		rep.addRuleOnce(p.sev, p.rule, entryName, p.detail)
+	}
+	return len(data)
+}
+
+// classReader 是带边界检查的 class 文件只读游标，越界后 ok=false 并短路。
+type classReader struct {
+	b   []byte
+	off int
+	ok  bool
+}
+
+func (r *classReader) u1() int {
+	if !r.ok || r.off+1 > len(r.b) {
+		r.ok = false
+		return 0
+	}
+	v := int(r.b[r.off])
+	r.off++
+	return v
+}
+
+func (r *classReader) u2() int {
+	if !r.ok || r.off+2 > len(r.b) {
+		r.ok = false
+		return 0
+	}
+	v := int(r.b[r.off])<<8 | int(r.b[r.off+1])
+	r.off += 2
+	return v
+}
+
+func (r *classReader) u4() int {
+	if !r.ok || r.off+4 > len(r.b) {
+		r.ok = false
+		return 0
+	}
+	v := int(r.b[r.off])<<24 | int(r.b[r.off+1])<<16 | int(r.b[r.off+2])<<8 | int(r.b[r.off+3])
+	r.off += 4
+	return v
+}
+
+func (r *classReader) take(n int) []byte {
+	if !r.ok || n < 0 || r.off+n > len(r.b) {
+		r.ok = false
+		return nil
+	}
+	v := r.b[r.off : r.off+n]
+	r.off += n
+	return v
+}
+
+// classConstantPoolUTF8 最小化解析 class 文件，仅提取常量池 CONSTANT_Utf8 项。
+// JVM 规范里类名 / 方法名字符串都以 UTF8 常量存放，能力特征匹配只需要这些文本。
+// 结构非法（魔数不符 / 长度越界）返回 nil。
+func classConstantPoolUTF8(data []byte) []string {
+	if len(data) < 10 {
+		return nil
+	}
+	r := &classReader{b: data, ok: true}
+	if r.u4() != 0xCAFEBABE {
+		return nil
+	}
+	r.u2() // minor_version
+	r.u2() // major_version
+	cpCount := r.u2()
+	if cpCount == 0 {
+		return nil
+	}
+
+	out := make([]string, 0, 16)
+	// 常量池索引从 1 开始；Long/Double 占两个槽位。
+	for idx := 1; idx < cpCount && r.ok; idx++ {
+		tag := r.u1()
+		switch tag {
+		case 1: // CONSTANT_Utf8
+			n := r.u2()
+			if b := r.take(n); b != nil {
+				out = append(out, string(b))
+			}
+		case 3, 4: // Integer, Float
+			r.take(4)
+		case 5, 6: // Long, Double（占两个槽位）
+			r.take(8)
+			idx++
+		case 7, 8, 16, 19, 20: // Class, String, MethodType, Module, Package
+			r.take(2)
+		case 9, 10, 11, 12, 17, 18: // Fieldref..NameAndType, Dynamic, InvokeDynamic
+			r.take(4)
+		case 15: // MethodHandle: reference_kind(u1) + reference_index(u2)
+			r.take(3)
+		default:
+			// 未知 / 截断的 tag：该 class 不可信，放弃解析。
+			return nil
+		}
+	}
+	if !r.ok {
+		return nil
+	}
+	return out
 }
 
 // enforceModJarScan 是 Mod 安装链统一入口：扫描磁盘上的 jar，把每条发现写入
