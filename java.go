@@ -610,21 +610,21 @@ func (a *App) getSecureJarHandlerVersion(versionID string, versionJSON *VersionJ
 }
 
 // parseMCVersion 解析 MC 版本号，返回 (major, minor, patch)
+// r34：实现改为复用 semverguard 的严格解析内核。旧实现用 strconv.Atoi 逐段转换且
+// 完全忽略错误，"1.abc" 会得到 major=1/minor=0、"1.20.x" 的 patch 静默变 0，负数与
+// 溢出段也不被识别，导致“按版本挑 Java”落到错误默认值。现在先剥离 forge/fabric 等
+// 加载器后缀，再要求上游版本核心严格可解析；release / prerelease 返回真实主.次.
+// 修订，快照（24w14a）与任何畸形串统一返回 0,0,0（与历史“无法解析”默认值一致）。
 func parseMCVersion(versionID string) (int, int, int) {
-	// 去除可能的快照后缀
-	versionID = strings.Split(versionID, "-")[0]
-	versionID = strings.Split(versionID, " ")[0]
-	parts := strings.Split(versionID, ".")
-	major, _ := strconv.Atoi(parts[0])
-	minor := 0
-	patch := 0
-	if len(parts) >= 2 {
-		minor, _ = strconv.Atoi(parts[1])
+	core := stripLoaderSuffix(versionID)
+	parsed, ok := ParseMinecraftVersion(core)
+	if !ok {
+		return 0, 0, 0
 	}
-	if len(parts) >= 3 {
-		patch, _ = strconv.Atoi(parts[2])
+	if parsed.Kind != mcVersionRelease && parsed.Kind != mcVersionPrerelease {
+		return 0, 0, 0
 	}
-	return major, minor, patch
+	return parsed.Major, parsed.Minor, parsed.Patch
 }
 
 // SelectJavaForVersion 为指定 MC 版本选择合适的 Java
