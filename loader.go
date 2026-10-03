@@ -1390,6 +1390,22 @@ func (a *App) runForgeInstaller(installerPath string, mcDir string) error {
 
 	a.writeLog("完整命令: %s %s", javaEntry.Path, strings.Join(args, " "))
 
+	// 启动前对安装器 JVM 做目标审计：java 可执行、工作目录、绝对 classpath 的目录归属
+	// （bbInstaller / installer 各自的父目录 + mcDir）、主类与程序参数，阻止任何指向
+	// UNC / 目录穿越 / 允许目录之外的 jar/classpath。
+	forgeRoots := []string{mcDir, filepath.Dir(bbInstallerPath), filepath.Dir(installerPath)}
+	forgeAudit := AuditExternalJVM(ExternalJVMPlan{
+		JavaExe:      javaEntry.Path,
+		WorkDir:      mcDir,
+		Classpath:    []string{bbInstallerPath, installerPath},
+		MainClass:    "com.bangbang93.ForgeInstaller",
+		ProgramArgs:  []string{mcDir},
+		AllowedRoots: forgeRoots,
+	})
+	if forgeAudit.HasCritical() {
+		return fmt.Errorf("Forge 安装器启动审计未通过: %s", forgeAudit.FirstCriticalCode())
+	}
+
 	cmd := exec.Command(javaEntry.Path, args...)
 	cmd.Dir = mcDir
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
@@ -1752,6 +1768,19 @@ func (a *App) InstallOptiFine(mcVersion string, optifineType string, optifinePat
 	}
 	args = append(args, fmt.Sprintf("-Duser.home=%s", mcDirParent), "-cp", installerPath, "optifine.Installer")
 
+	// 启动前审计 OptiFine 安装器 JVM：安装 jar 必须位于 mcDir 或其自身所在目录之内，
+	// 阻止被 mcVersion/optifineType 等清单字段间接带到 UNC / 穿越 / 目录之外的 jar。
+	ofAudit := AuditExternalJVM(ExternalJVMPlan{
+		JavaExe:      javaEntry.Path,
+		WorkDir:      mcDir,
+		Classpath:    []string{installerPath},
+		MainClass:    "optifine.Installer",
+		AllowedRoots: []string{mcDir, filepath.Dir(installerPath)},
+	})
+	if ofAudit.HasCritical() {
+		return fmt.Errorf("OptiFine 安装器启动审计未通过: %s", ofAudit.FirstCriticalCode())
+	}
+
 	cmd := exec.Command(javaEntry.Path, args...)
 	cmd.Dir = mcDir
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
@@ -1950,6 +1979,17 @@ func (a *App) downloadLoaderItem(item *DownloadItem) error {
 		javaEntry := a.SearchJava()
 		if len(javaEntry) == 0 {
 			return fmt.Errorf("下载完成但未找到 Java 来运行安装器，请手动运行: %s", destPath)
+		}
+		// “下载即运行”的第三方 jar 风险最高：审计目标 jar 必须是 tempDir 内的绝对
+		// .jar，阻止 UNC / 穿越 / 目录之外目标，java 可执行同样过绝对/扩展名校验。
+		dlAudit := AuditExternalJVM(ExternalJVMPlan{
+			JavaExe:      javaEntry[0].Path,
+			WorkDir:      tempDir,
+			JarAbsPath:   destPath,
+			AllowedRoots: []string{tempDir},
+		})
+		if dlAudit.HasCritical() {
+			return fmt.Errorf("下载的安装器启动审计未通过: %s", dlAudit.FirstCriticalCode())
 		}
 		cmd := exec.Command(javaEntry[0].Path, "-jar", destPath)
 		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
