@@ -35,6 +35,7 @@ const (
 	// 审计事件类别：新增拦截点时优先复用已有类别，确实是新面再新增常量。
 	auditCategoryZip          = "zip-entry"        // 压缩包条目：Zip Slip / 特殊条目 / 炸弹
 	auditCategoryJarScan      = "jar-scan"         // Mod jar 静态内容扫描：JVM 代理/根可执行/coremod 脚本
+	auditCategoryLog4Shell    = "log4shell"        // Log4Shell/JNDI 静态扫描：JndiLookup 类 / ${jndi:} / 外联命名
 	auditCategoryExternalURL  = "external-url"     // 外部链接白名单拦截
 	auditCategoryJVMEnv       = "jvm-env"          // 游戏 JVM 隐式参数环境变量剥离
 	auditCategoryInstaller    = "java-installer"   // Java 安装包落地 / 执行校验
@@ -51,6 +52,7 @@ const (
 	auditActionStripped = "stripped" // 危险成分被移除后流程继续
 	auditActionRejected = "rejected" // 请求被拒绝（权限 / 白名单）
 	auditActionRepeated = "repeated" // 前一条事件在窗口内重复出现的聚合记录
+	auditActionDetected = "detected" // 静态扫描发现风险但未阻断（warn/info 记录）
 
 	auditRingCap          = 1000                 // 内存环形缓冲容量（条）
 	auditMaxFileBytes     = int64(1024 * 1024)   // 单文件 1 MiB
@@ -155,7 +157,8 @@ func validAuditCategory(c string) bool {
 	switch c {
 	case auditCategoryZip, auditCategoryExternalURL, auditCategoryJVMEnv,
 		auditCategoryInstaller, auditCategoryPrivateWrite, auditCategoryHashVerify,
-		auditCategoryRateLimit, auditCategoryPermission, auditCategoryJarScan:
+		auditCategoryRateLimit, auditCategoryPermission, auditCategoryJarScan,
+		auditCategoryLog4Shell:
 		return true
 	}
 	return false
@@ -167,7 +170,7 @@ func validAuditSeverity(v string) bool {
 
 func validAuditAction(a string) bool {
 	return a == auditActionBlocked || a == auditActionRejected ||
-		a == auditActionStripped || a == auditActionRepeated
+		a == auditActionStripped || a == auditActionRepeated || a == auditActionDetected
 }
 
 func auditDedupKey(category, action, source, detail string) string {
