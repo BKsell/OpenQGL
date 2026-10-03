@@ -545,6 +545,8 @@ func (a *App) StartServer(name string) error {
 		PID:     cmd.Process.Pid,
 		Ready:   false,
 	}
+	// 新一轮服务端进程：清空上一会话遗留的控制台灌入冷却 / 窗口计数。
+	serverConsoleGate.reset()
 
 	go func() {
 		scanner := make(chan string, 200)
@@ -650,10 +652,21 @@ func (a *App) SendServerCommand(cmd string) error {
 	if !serverMgr.status.Running || serverMgr.stdin == nil {
 		return fmt.Errorf("服务器未在运行")
 	}
-	if strings.ContainsAny(cmd, "\n\r") {
-		return fmt.Errorf("命令不能包含换行符")
+	// 统一走控制台净化内核：拒绝夹带换行 / NUL / 其它控制字符 / 非法 UTF-8 的行，
+	// 并限制单行长度，防止渲染层借 stdin 通道做命令注入或打爆服务端日志与存档。
+	safeCmd, reason := SanitizeConsoleCommand(cmd)
+	if reason != consoleRejectNone {
+		recordSecurityEvent(auditCategoryConsole, auditSeverityWarn, auditActionRejected,
+			"SendServerCommand", "拒绝非法控制台命令: "+reason)
+		return fmt.Errorf("非法的服务器命令: %s", reason)
 	}
-	_, err := serverMgr.stdin.Write([]byte(cmd + "\n"))
+	// 高速灌入限流：超窗即进入冷却，循环刷 say/fill 等会落盘的命令会被挡下。
+	if !serverConsoleGate.allow(time.Now()) {
+		recordSecurityEvent(auditCategoryConsole, auditSeverityWarn, auditActionRepeated,
+			"SendServerCommand", "控制台命令触发灌入限流，进入冷却")
+		return fmt.Errorf("命令发送过于频繁，请稍后再试")
+	}
+	_, err := serverMgr.stdin.Write([]byte(safeCmd + "\n"))
 	return err
 }
 
