@@ -1916,18 +1916,35 @@ func (a *App) CheckLoaderInstalled(mcVersion string, loaderName string) bool {
 }
 
 func (a *App) AddLoaderToDownloadList(loaderName string, mcVersion string, loaderVersion string, downloadURL string) error {
+	// 三个标识全部来自前端，最终拼进下载列表展示名并参与安装分发，必须收敛：
+	// loaderName 走固定白名单（它决定后续 switch 分支），mc/loader 版本走严格名单段。
+	loaderName = strings.ToLower(strings.TrimSpace(loaderName))
+	switch loaderName {
+	case "forge", "fabric", "neoforge", "optifine":
+	default:
+		return fmt.Errorf("不支持的加载器类型: %s", loaderName)
+	}
+	safeMC, whyM := SafeVersionComponent(mcVersion)
+	if whyM != nameRejectNone {
+		return fmt.Errorf("Minecraft 版本无效: %s", describeNameReject(whyM))
+	}
+	mcVersion = safeMC
+	safeLV, whyL := SafeLoaderComponent(loaderVersion)
+	if whyL != nameRejectNone {
+		return fmt.Errorf("加载器版本无效: %s", describeNameReject(whyL))
+	}
+	loaderVersion = safeLV
 	customName := fmt.Sprintf("%s %s (%s)", loaderName, loaderVersion, mcVersion)
+	if safeName, why := SafeVersionDisplayName(customName); why != nameRejectNone {
+		return fmt.Errorf("加载器任务名称无效: %s", describeNameReject(why))
+	} else {
+		customName = safeName
+	}
 
 	a.downloadMutex.Lock()
 	defer a.downloadMutex.Unlock()
 
-	for _, item := range a.downloadList {
-		if item.CustomName == customName {
-			return fmt.Errorf("下载列表中已存在: %s", customName)
-		}
-	}
-
-	a.downloadList = append(a.downloadList, DownloadItem{
+	pending := DownloadItem{
 		ID:         fmt.Sprintf("loader-%s-%s", loaderName, loaderVersion),
 		URL:        downloadURL,
 		CustomName: customName,
@@ -1935,7 +1952,12 @@ func (a *App) AddLoaderToDownloadList(loaderName string, mcVersion string, loade
 		ItemType:   "loader",
 		Status:     "pending",
 		Progress:   0,
-	})
+	}
+	if why := auditDownloadItemForEnqueue(a.downloadList, pending); why != dqRejectNone {
+		return fmt.Errorf("%s", describeQueueReject(why))
+	}
+
+	a.downloadList = append(a.downloadList, pending)
 
 	runtime.EventsEmit(a.ctx, "downloadListUpdated", a.downloadList)
 	return nil
