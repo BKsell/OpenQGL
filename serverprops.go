@@ -142,8 +142,18 @@ func (p *serverProperties) Keys() []string {
 // updateServerProperty 以保序方式更新 server.properties 中的单个键并原子落盘。
 // valueValidator 非空时用于校验待写入的值（防配置注入）；文件不存在时返回错误。
 func updateServerProperty(path, key, value string, valueValidator func(string) error) error {
-	if strings.TrimSpace(key) == "" {
+	key = strings.TrimSpace(key)
+	if key == "" {
 		return fmt.Errorf("配置键不能为空")
+	}
+	// 键名 / 单行值的净化是“无条件”的底线：即使调用方忘了传 valueValidator，也绝不
+	// 允许借 properties 文本注入新行（value 里塞 "\nmalicious=true" 会被解析成新键），
+	// 也不允许出现 java.util.Properties 键名字符集之外的内容。
+	if err := validatePropertyKey(key); err != nil {
+		return fmt.Errorf("配置键不合法: %w", err)
+	}
+	if err := validatePropertyValueSingleLine(value); err != nil {
+		return fmt.Errorf("配置值不合法: %w", err)
 	}
 	if valueValidator != nil {
 		if err := valueValidator(value); err != nil {
@@ -176,4 +186,49 @@ func validateBoolProperty(v string) error {
 	default:
 		return fmt.Errorf("布尔配置只允许 true/false，收到 %q", v)
 	}
+}
+
+// maxPropertyKeyLen 限制单个配置键长度，正常 server.properties 键远小于此。
+const maxPropertyKeyLen = 256
+
+// validatePropertyKey 校验配置键只含 java.util.Properties 实际可用的标识字符
+// （字母数字与 . _ -），拒绝空白、分隔符（= :，会被解析成键值边界）、换行与任何
+// 控制字符，从源头杜绝借键名注入。
+func validatePropertyKey(key string) error {
+	if key == "" {
+		return fmt.Errorf("配置键为空")
+	}
+	if len(key) > maxPropertyKeyLen {
+		return fmt.Errorf("配置键过长")
+	}
+	for i := 0; i < len(key); i++ {
+		c := key[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+			continue
+		case c == '.' || c == '_' || c == '-':
+			continue
+		default:
+			return fmt.Errorf("配置键含非法字符 %q", c)
+		}
+	}
+	return nil
+}
+
+// validatePropertyValueSingleLine 强制配置值不得跨行：拒绝 CR/LF（可注入新键）、
+// NUL 与其它 ASCII 控制字符，并给一个与配置读取一致的长度上限。
+func validatePropertyValueSingleLine(value string) error {
+	if len(value) > maxServerLogLineBytes {
+		return fmt.Errorf("配置值过长")
+	}
+	for i := 0; i < len(value); i++ {
+		c := value[i]
+		if c == '\n' || c == '\r' {
+			return fmt.Errorf("配置值不允许跨行")
+		}
+		if c == 0x00 || (c < 0x20 && c != '\t') || c == 0x7f {
+			return fmt.Errorf("配置值含控制字符")
+		}
+	}
+	return nil
 }
