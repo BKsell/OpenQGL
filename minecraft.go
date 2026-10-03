@@ -833,6 +833,52 @@ func (a *App) DownloadVersion(versionID string, versionURL string, customName st
 	if err := json.Unmarshal(jsonData, &versionJSON); err != nil {
 		return fmt.Errorf("解析版本 JSON 失败: %v", err)
 	}
+	// 先把清单内 URL 归一化为真正发起请求时的地址（BMCLAPI 重写是确定性、受信任的），
+	// 白名单审计必须针对“实际抓取主机”，否则会误杀走 launcher.mojang.com 的老清单，
+	// 也避免攻击者靠“审计看 A、实际请求 B”的差异绕过。
+	if versionJSON.Downloads != nil {
+		if versionJSON.Downloads.Client != nil {
+			versionJSON.Downloads.Client.URL = replaceWithBMCLAPI(versionJSON.Downloads.Client.URL)
+		}
+		if versionJSON.Downloads.Server != nil {
+			versionJSON.Downloads.Server.URL = replaceWithBMCLAPI(versionJSON.Downloads.Server.URL)
+		}
+	}
+	for i := range versionJSON.Libraries {
+		dl := versionJSON.Libraries[i].Downloads
+		if dl == nil {
+			continue
+		}
+		if dl.Artifact != nil {
+			dl.Artifact.URL = replaceWithBMCLAPI(dl.Artifact.URL)
+		}
+		for _, art := range dl.Classifiers {
+			if art != nil {
+				art.URL = replaceWithBMCLAPI(art.URL)
+			}
+		}
+	}
+	if versionJSON.AssetIndex != nil {
+		versionJSON.AssetIndex.URL = replaceWithBMCLAPI(versionJSON.AssetIndex.URL)
+	}
+	// 版本 JSON 来自可由前端指定的第三方 versionURL，client / library / native 的
+	// url/path/sha1 全部不受信任：下载主机必须落在官方 / 镜像白名单，可执行产物必须
+	// 带合法 SHA1，库路径必须是严格 Maven 相对路径，资源索引 ID 必须是单段安全名。
+	// critical 一律拒绝下载（防止攻击者把 jar 指向自己的服务器落进 classpath）。
+	manifestFindings := auditVersionManifest(&versionJSON)
+	for i := range manifestFindings {
+		f := &manifestFindings[i]
+		if f.Severity == manifestCritical {
+			recordSecurityEvent(auditCategoryExternalURL, auditSeverityCritical, auditActionBlocked,
+				"version-manifest", f.Field+": "+f.Detail)
+		} else {
+			recordSecurityEvent(auditCategoryExternalURL, auditSeverityWarn, auditActionDetected,
+				"version-manifest", f.Field+": "+f.Detail)
+		}
+	}
+	if manifestHasCritical(manifestFindings) {
+		return manifestCriticalError(manifestFindings)
+	}
 	if versionJSON.Downloads != nil && versionJSON.Downloads.Client != nil {
 		client := versionJSON.Downloads.Client
 		clientURL := replaceWithBMCLAPI(client.URL)
@@ -1317,12 +1363,15 @@ func (a *App) setGameLanguage(gameDir string, versionID string) {
 }
 
 func (a *App) ensureNativesForLoader(mcDir string, versionID string, versionDir string, nativesDir string, versionJSON *VersionJSON) {
-	if versionJSON.InheritsFrom != "" {
-		parentNativesDir := filepath.Join(mcDir, "versions", versionJSON.InheritsFrom, versionJSON.InheritsFrom+"-natives")
-		if entries, err := os.ReadDir(parentNativesDir); err == nil && len(entries) > 0 {
-			fmt.Printf("从父版本复制 natives: %s -> %s\n", parentNativesDir, nativesDir)
-			copyDirContents(parentNativesDir, nativesDir)
-			return
+	if rawParent := strings.TrimSpace(versionJSON.InheritsFrom); rawParent != "" {
+		parentName := safeVersionName(rawParent)
+		if parentName != "" {
+			parentNativesDir := filepath.Join(mcDir, "versions", parentName, parentName+"-natives")
+			if entries, err := os.ReadDir(parentNativesDir); err == nil && len(entries) > 0 {
+				fmt.Printf("从父版本复制 natives: %s -> %s\n", parentNativesDir, nativesDir)
+				copyDirContents(parentNativesDir, nativesDir)
+				return
+			}
 		}
 	}
 	versionsDir := filepath.Join(mcDir, "versions")
@@ -1628,6 +1677,18 @@ func mavenNameToPath(name string, libsDir string) string {
 }
 
 func (a *App) resolveVersionJSON(versionID string) (*VersionJSON, error) {
+	// 入口版本 ID 同样来自外部（版本目录扫描 / 前端），必须先收敛成单段安全名，
+	// 避免把 "../../x" 之类直接拼进 versions/<id>/<id>.json 造成路径穿越。
+	// 版本名允许空格 / 中文等，只拦分隔符、盘符与控制符（见 safeVersionName）。
+	safeID := safeVersionName(versionID)
+	if safeID == "" {
+		return nil, fmt.Errorf("版本 ID 不是合法的单段名称，拒绝解析: %q", versionID)
+	}
+	return a.resolveVersionJSONSafe(safeID, 0, map[string]bool{})
+}
+
+// resolveVersionJSONSafe 在继承深度 / 成环检测下递归解析版本 JSON。
+func (a *App) resolveVersionJSONSafe(versionID string, depth int, seen map[string]bool) (*VersionJSON, error) {
 	mcDir := a.getMinecraftDir()
 	versionDir := filepath.Join(mcDir, "versions", versionID)
 	jsonPath := filepath.Join(versionDir, versionID+".json")
@@ -1645,10 +1706,17 @@ func (a *App) resolveVersionJSON(versionID string) (*VersionJSON, error) {
 	if err := json.Unmarshal(jsonData, &versionJSON); err != nil {
 		return nil, fmt.Errorf("解析版本 JSON 失败: %v", err)
 	}
-	if versionJSON.InheritsFrom != "" {
-		parentJSON, err := a.resolveVersionJSON(versionJSON.InheritsFrom)
-		if err != nil {
-			fmt.Printf("解析父版本 JSON 失败: %v（继续使用当前版本信息）\n", err)
+	if rawParent := strings.TrimSpace(versionJSON.InheritsFrom); rawParent != "" {
+		parentID, perr := validateInheritStep(rawParent, depth, seen)
+		if perr != nil {
+			recordSecurityEvent(auditCategoryExternalURL, auditSeverityCritical, auditActionBlocked,
+				"version-manifest", "inheritsFrom: "+perr.Error())
+			return nil, perr
+		}
+		seen[versionID] = true
+		parentJSON, perr := a.resolveVersionJSONSafe(parentID, depth+1, seen)
+		if perr != nil {
+			fmt.Printf("解析父版本 JSON 失败: %v（继续使用当前版本信息）\n", perr)
 		} else {
 			versionJSON = *a.mergeVersionJSON(parentJSON, &versionJSON)
 		}
@@ -1742,21 +1810,27 @@ func (a *App) buildClasspath(mcDir string, versionID string, versionJSON *Versio
 		}
 		entries = append(entries, libPath)
 	}
-	jarName := versionJSON.Jar
-	if jarName == "" {
-		jarName = versionJSON.InheritsFrom
-	}
-	if jarName == "" {
-		jarName = versionID
-	}
-	versionJar := filepath.Join(mcDir, "versions", jarName, jarName+".jar")
-	if _, err := os.Stat(versionJar); err != nil {
-		altJar := filepath.Join(mcDir, "versions", versionID, versionID+".jar")
-		if _, err2 := os.Stat(altJar); err2 == nil {
-			versionJar = altJar
+	// Jar / InheritsFrom 来自外部版本 JSON，会拼进 versions/<name>/<name>.jar，
+	// 必须逐个收敛成单段安全名；三者都非法时跳过该 classpath 条目而不是拼出穿越路径。
+	jarName := ""
+	for _, c := range []string{versionJSON.Jar, versionJSON.InheritsFrom, versionID} {
+		if s := safeVersionName(c); s != "" {
+			jarName = s
+			break
 		}
 	}
-	entries = append(entries, versionJar)
+	if jarName != "" {
+		versionJar := filepath.Join(mcDir, "versions", jarName, jarName+".jar")
+		if _, err := os.Stat(versionJar); err != nil {
+			if self := safeVersionName(versionID); self != "" {
+				altJar := filepath.Join(mcDir, "versions", self, self+".jar")
+				if _, err2 := os.Stat(altJar); err2 == nil {
+					versionJar = altJar
+				}
+			}
+		}
+		entries = append(entries, versionJar)
+	}
 	return entries
 }
 
