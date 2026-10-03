@@ -789,92 +789,40 @@ func (a *App) GenerateConnectionCode(serverName string) (map[string]string, erro
 	if err != nil {
 		return nil, fmt.Errorf("获取本机 IP 失败: %v", err)
 	}
-	parts := strings.Split(ip, ".")
-	if len(parts) != 4 {
+	// 生成侧也走严格 IPv4 归一：本机网卡返回的地址必须是合法四段 IPv4，
+	// 否则宁可不生成连接码，也不把脏地址编进码里。
+	normIP, ok := NormalizeIPv4(strings.TrimSpace(ip))
+	if !ok {
 		return nil, fmt.Errorf("IP 地址格式异常: %s", ip)
 	}
-	firstSeg, _ := strconv.Atoi(parts[0])
-	var prefix string
-	switch {
-	case firstSeg == 10:
-		prefix = "A"
-	case firstSeg == 172:
-		prefix = "B"
-	case firstSeg == 192:
-		prefix = "C"
-	case firstSeg == 1:
-		prefix = "D"
-	default:
-		prefix = fmt.Sprintf("X%d", firstSeg)
+	if !isValidPort(cfg.Port) {
+		return nil, fmt.Errorf("服务器端口号无效: %d", cfg.Port)
 	}
-	seg2, _ := strconv.Atoi(parts[1])
-	seg3, _ := strconv.Atoi(parts[2])
-	seg4, _ := strconv.Atoi(parts[3])
-	port := cfg.Port
-	code := fmt.Sprintf("%s-%s-%s-%s-%s",
-		prefix,
-		strconv.FormatInt(int64(seg2), 16),
-		strconv.FormatInt(int64(seg3), 16),
-		strconv.FormatInt(int64(seg4), 16),
-		strconv.FormatInt(int64(port), 16),
-	)
-	directAddr := fmt.Sprintf("%s:%d", ip, port)
+	// 编码统一交给连接码内核，保证“编得出就解得回”，不再在本方法内手拼。
+	code, why := EncodeConnectionCode(normIP, cfg.Port)
+	if why != connRejectNone {
+		return nil, fmt.Errorf("生成连接码失败: %s", describeConnReject(why))
+	}
+	directAddr := fmt.Sprintf("%s:%d", normIP, cfg.Port)
 	return map[string]string{
 		"code":       code,
 		"directAddr": directAddr,
 	}, nil
 }
 
-// ParseConnectionCode 解析连接码
-// 安全加固: 校验每个 IP 段在 0-255 范围内，防止无效 IP
+// ParseConnectionCode 解析连接码。
+// 安全加固: 解析逻辑全部收敛到 connectioncodeguard 纯函数内核——
+// 首段（含 X<n>）严格 0-255 与位数限制，后三段十六进制 0-255，端口走统一
+// isValidPort，末端再过 netaddrguard 形态校验。畸形连接码（X999 / X-1 / 超长
+// 前缀 / 越界段或端口）一律拒绝并留审计，绝不返回半残地址。
 func (a *App) ParseConnectionCode(code string) (string, error) {
-	parts := strings.Split(code, "-")
-	if len(parts) != 5 {
-		return "", fmt.Errorf("连接码格式错误")
+	address, why := DecodeConnectionCode(strings.TrimSpace(code))
+	if why != connRejectNone {
+		recordSecurityEvent(auditCategoryConfig, auditSeverityWarn, auditActionRejected,
+			"server", "拒绝畸形局域网连接码("+why+")")
+		return "", fmt.Errorf("%s", describeConnReject(why))
 	}
-	prefix := parts[0]
-	var firstSeg int
-	switch prefix {
-	case "A":
-		firstSeg = 10
-	case "B":
-		firstSeg = 172
-	case "C":
-		firstSeg = 192
-	case "D":
-		firstSeg = 1
-	default:
-		if strings.HasPrefix(prefix, "X") {
-			val, err := strconv.Atoi(prefix[1:])
-			if err != nil {
-				return "", fmt.Errorf("连接码前缀无法解析")
-			}
-			firstSeg = val
-		} else {
-			return "", fmt.Errorf("连接码前缀无法解析")
-		}
-	}
-	seg2, err := strconv.ParseInt(parts[1], 16, 64)
-	if err != nil || seg2 < 0 || seg2 > 255 {
-		return "", fmt.Errorf("连接码第2段解析失败")
-	}
-	seg3, err := strconv.ParseInt(parts[2], 16, 64)
-	if err != nil || seg3 < 0 || seg3 > 255 {
-		return "", fmt.Errorf("连接码第3段解析失败")
-	}
-	seg4, err := strconv.ParseInt(parts[3], 16, 64)
-	if err != nil || seg4 < 0 || seg4 > 255 {
-		return "", fmt.Errorf("连接码第4段解析失败")
-	}
-	port, err := strconv.ParseInt(parts[4], 16, 64)
-	if err != nil {
-		return fmt.Errorf("连接码端口解析失败")
-	}
-	if !isValidPort(int(port)) {
-		return fmt.Errorf("解析出的端口号无效")
-	}
-	ip := fmt.Sprintf("%d.%d.%d.%d:%d", firstSeg, seg2, seg3, seg4, port)
-	return ip, nil
+	return address, nil
 }
 
 // getLocalIP 获取本机局域网 IP
