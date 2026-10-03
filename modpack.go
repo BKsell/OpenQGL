@@ -485,6 +485,14 @@ func (a *App) installModpack(item *DownloadItem) error {
 		return fmt.Errorf("解析 manifest 失败: %v", err)
 	}
 
+	// 清单整体结构 / 落盘路径 / 哈希 / 镜像 URL 校验。.mrpack 完全不可信，且清单哈希
+	// 由打包者自填、不是信任锚；files[].path 旧实现只挡 ".."/NUL，可被命名成实例目录
+	// 根部的 <id>.json 覆盖启动配置（mainClass 指向随包恶意类，下次启动即 RCE）。
+	// 这里在使用任何字段前先整体校验并就地规范化，越界即中止安装。
+	if err := validateMrpackManifest(&manifest); err != nil {
+		return fmt.Errorf("整合包清单不安全，已中止安装: %v", err)
+	}
+
 	mcVersion := manifest.Dependencies["minecraft"]
 	fabricVersion := manifest.Dependencies["fabric-loader"]
 	forgeVersion := manifest.Dependencies["forge"]
@@ -604,10 +612,13 @@ func (a *App) installModpack(item *DownloadItem) error {
 
 	totalFiles := len(manifest.Files)
 	for i, mf := range manifest.Files {
-		destPath, err := safeJoin(versionDir, mf.Path)
+		// 落盘路径走 mrpackguard：已在 validateMrpackManifest 规范化，这里再做一次
+		// “必须在实例目录内”的拼接复核；任何越界都中止安装，而不是静默跳过。
+		destPath, err := secureMrpackDest(versionDir, mf.Path)
 		if err != nil {
-			fmt.Printf("跳过不安全的文件路径(Zip Slip防护): %s, 错误: %v\n", mf.Path, err)
-			continue
+			recordSecurityEvent(auditCategoryPrivateWrite, auditSeverityCritical, auditActionBlocked,
+				"modpack", err.Error())
+			return fmt.Errorf("整合包文件落盘路径不安全，已中止安装: %v", err)
 		}
 
 		destDir := filepath.Dir(destPath)
@@ -663,10 +674,22 @@ func (a *App) installModpack(item *DownloadItem) error {
 		TotalMax:   maxOverridesTotalBytes,
 		MaxEntries: maxOverridesEntries,
 	}
-	extractedBytes, extractedFiles, err := extractZipPrefixes(
-		r.File, versionDir,
-		[]string{"overrides/", "client-overrides/"},
-		lim,
+	overridesPrefixes := []string{"overrides/", "client-overrides/"}
+	plan, declared, err := planZipEntries(r.File, overridesPrefixes, lim)
+	if err != nil {
+		return fmt.Errorf("解压覆写文件预检失败: %w", err)
+	}
+	if declared > lim.TotalMax {
+		return fmt.Errorf("覆写文件声明总量 %d 超过上限 %d(解压炸弹防护)", declared, lim.TotalMax)
+	}
+	// 在 zipextract 的 Zip Slip / 特殊条目防护之上，再施加实例目录写入策略：
+	// 拒绝 QGL/ 私有目录、根部启动配置 / 可执行（<id>.json、.jar、.exe 等），
+	// 防止覆写目录覆盖启动 profile 或落地可执行文件。
+	if err := validateMrpackPlannedEntries(plan); err != nil {
+		return fmt.Errorf("覆写文件包含不安全条目，已中止安装: %w", err)
+	}
+	extractedBytes, extractedFiles, err := extractPlannedZipEntries(
+		plan, versionDir, lim,
 		func(format string, args ...any) { fmt.Printf(format+"\n", args...) },
 	)
 	if err != nil {
