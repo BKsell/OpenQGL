@@ -6,7 +6,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"unicode"
 )
 
 //go:embed resources/ModData.txt
@@ -190,65 +189,6 @@ func (a *App) GetTranslationCount() int {
 	translationMutex.RLock()
 	defer translationMutex.RUnlock()
 	return len(translationEntries)
-}
-
-func fuzzyMatch(s, t string) float64 {
-	s = strings.ToLower(s)
-	t = strings.ToLower(t)
-	if s == t {
-		return 1.0
-	}
-	lenS := len(s)
-	lenT := len(t)
-	if lenS == 0 || lenT == 0 {
-		return 0
-	}
-
-	matrix := make([][]int, lenS+1)
-	for i := range matrix {
-		matrix[i] = make([]int, lenT+1)
-		matrix[i][0] = i
-	}
-	for j := 0; j <= lenT; j++ {
-		matrix[0][j] = j
-	}
-	for i := 1; i <= lenS; i++ {
-		for j := 1; j <= lenT; j++ {
-			cost := 1
-			if s[i-1] == t[j-1] {
-				cost = 0
-			}
-			matrix[i][j] = min(
-				matrix[i-1][j]+1,
-				matrix[i][j-1]+1,
-				matrix[i][j-1]+cost,
-			)
-		}
-	}
-	maxLen := lenS
-	if lenT > maxLen {
-		maxLen = lenT
-	}
-	return 1.0 - float64(matrix[lenS][lenT])/float64(maxLen)
-}
-
-func min(a, b, c int) int {
-	if a < b && a < c {
-		return a
-	}
-	if b < c {
-		return b
-	}
-	return c
-}
-
-func isChinese(s string) bool {
-	for _, r := range s {
-		if unicode.Is(unicode.Han, r) {
-			return true
-		}
-	}
-	return false
 }
 
 func (a *App) GetModTranslationFileContent() (string, error) {
