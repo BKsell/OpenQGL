@@ -38,6 +38,7 @@ const (
 	auditCategoryLog4Shell    = "log4shell"        // Log4Shell/JNDI 静态扫描：JndiLookup 类 / ${jndi:} / 外联命名
 	auditCategoryExternalURL  = "external-url"     // 外部链接白名单拦截
 	auditCategoryJVMEnv       = "jvm-env"          // 游戏 JVM 隐式参数环境变量剥离
+	auditCategoryLaunch       = "launch-audit"     // 游戏/服务器启动目标、命令行与 classpath 归属审计
 	auditCategoryInstaller    = "java-installer"   // Java 安装包落地 / 执行校验
 	auditCategoryPrivateWrite = "private-write"    // 凭证 / 配置文件写入防护
 	auditCategoryHashVerify   = "hash-verify"      // 下载文件哈希校验失败
