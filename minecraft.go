@@ -1944,12 +1944,17 @@ func (a *App) buildLaunchArgs(versionID string, versionJSON *VersionJSON, mcDir 
 	javaEntry, _ := a.SelectJavaForVersion(versionID)
 	maxMem, minMem := "2G", "1G"
 	if config, _ := a.GetGlobalConfig(); config != nil {
-		if config.MaxMemory > 0 {
-			maxMem = fmt.Sprintf("%dG", config.MaxMemory)
+		// r34：-Xmx/-Xms 不再裸拼 config 整数。SaveGlobalConfig 不校验堆配置，旧实现
+		// 会把 0 / 负数 / 极大值 / min>max 原样拼成 "-Xmx1000000G" 等非法参数导致 JVM
+		// 启动失败。统一在拼接点走 heapsizeguard 归一（GB 口径、1TiB 上界、min<=max），
+		// 任何收敛都记录一次安全审计，便于排查被改脏的配置。
+		safeMin, safeMax, heapCodes := ResolveHeapSizesGB(config.MinMemory, config.MaxMemory)
+		if len(heapCodes) > 0 {
+			recordSecurityEvent(auditCategoryLaunch, auditSeverityWarn, auditActionStripped,
+				"minecraft", "游戏堆内存配置已归一: "+strings.Join(heapCodes, ","))
 		}
-		if config.MinMemory > 0 {
-			minMem = fmt.Sprintf("%dG", config.MinMemory)
-		}
+		maxMem = FormatHeapSizeGB(safeMax)
+		minMem = FormatHeapSizeGB(safeMin)
 	}
 	nativesDir := filepath.Join(versionDir, versionID+"-natives")
 	classpathEntries := a.buildClasspath(mcDir, versionID, versionJSON)
