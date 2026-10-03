@@ -126,3 +126,58 @@ func TestUpdateServerPropertyRejectsEmptyKey(t *testing.T) {
 		t.Fatal("空键应被拒绝")
 	}
 }
+
+func TestValidatePropertyKey(t *testing.T) {
+	good := []string{"server-port", "level-name", "a.b_c", "MOTD1", "x-y.z"}
+	for _, k := range good {
+		if err := validatePropertyKey(k); err != nil {
+			t.Fatalf("合法键 %q 应放行: %v", k, err)
+		}
+	}
+	bad := []string{"", "a=b", "c:d", "a b", "x\ny", "p\tq", string([]byte{'k', 0x00})}
+	for _, k := range bad {
+		if err := validatePropertyKey(k); err == nil {
+			t.Fatalf("非法键 %q 应被拒绝", k)
+		}
+	}
+}
+
+func TestValidatePropertyValueSingleLine(t *testing.T) {
+	for _, v := range []string{"25565", "true", "A Server", "hello world"} {
+		if err := validatePropertyValueSingleLine(v); err != nil {
+			t.Fatalf("正常值 %q 应放行: %v", v, err)
+		}
+	}
+	for _, v := range []string{"a\nb", "a\rb", "a\r\nb", string([]byte{'a', 0x00}), "x\x1by"} {
+		if err := validatePropertyValueSingleLine(v); err == nil {
+			t.Fatalf("含换行/控制字符的值 %q 应被拒绝", v)
+		}
+	}
+}
+
+// 即便调用方完全不传 valueValidator（nil），键名与单行值底线也必须生效，防止借
+// value 注入新配置行。
+func TestUpdateServerPropertyRejectsInjectionWithoutValidator(t *testing.T) {
+	dir := t.TempDir()
+	fp := filepath.Join(dir, "server.properties")
+	original := "online-mode=true\nserver-port=25565\n"
+	if err := os.WriteFile(fp, []byte(original), 0o600); err != nil {
+		t.Fatalf("写文件失败: %v", err)
+	}
+	before, _ := os.ReadFile(fp)
+
+	inject := "false\nwhite-list=false"
+	if err := updateServerProperty(fp, "motd", inject, nil); err == nil {
+		t.Fatal("含换行的注入值必须被拒绝（即使 validator 为 nil）")
+	}
+	if err := updateServerProperty(fp, "bad key", "v", nil); err == nil {
+		t.Fatal("含空格的非法键必须被拒绝")
+	}
+	if err := updateServerProperty(fp, "a=b", "v", nil); err == nil {
+		t.Fatal("含分隔符的非法键必须被拒绝")
+	}
+	after, _ := os.ReadFile(fp)
+	if string(after) != string(before) {
+		t.Fatalf("拒绝注入时文件不应被改动\nbefore:\n%s\nafter:\n%s", before, after)
+	}
+}
