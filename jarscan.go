@@ -1,0 +1,333 @@
+package main
+
+// jarscan.go —— 在“把文件放进 mods 目录并随 JVM 启动”之前做一层静态内容安检。
+//
+// 哈希校验只能证明“下载到的字节和 Modrinth 声明的一致”，证明不了“作者上传的
+// 东西本身安全”。一个 Minecraft Mod 本质是会被加载进同一个 JVM 的 jar：
+//
+//   - MANIFEST.MF 里带 Premain-Class / Agent-Class / Launcher-Agent-Class 就是
+//     JVM 代理（instrumentation / attach）入口，能在 Mod 正常初始化前挂钩任意类，
+//     是账号窃取类恶意 Mod 的常见自启动手法；
+//   - ModLauncher 的 TransformationService、coremods 下的 Nashorn .js 会在类加载
+//     阶段执行任意代码 / 脚本，且不经 Mod 加载器的常规生命周期；
+//   - jar 根部直接放 .exe/.bat/.cmd/.ps1 等可执行脚本、或 pack200（.pack）这种
+//     “启动时才解包”的载体，明显偏离正常 Mod 形态，属于高置信度危险信号；
+//   - 根目录 Main-Class 让它可被当成普通可执行 jar 双击运行。
+//
+// 这里只做只读静态扫描，绝不执行、不解压任何条目（用 archive/zip 读中央目录与
+// 小体积文本条目），对读取条数和单条目读取字节数都有硬上限，避免被恶意构造的
+// 巨型 / 海量条目拖垮。结论分 info / warn / critical：critical 阻断安装，
+// warn / info 只记审计事件放行，避免误伤带本地库（.dll/.so）的正常 Mod。
+
+import (
+	"archive/zip"
+	"bufio"
+	"bytes"
+	"fmt"
+	"io"
+	"path"
+	"strings"
+)
+
+const (
+	// jarScanMaxEntries 限制单个 jar 参与分析的条目数，防海量条目耗尽 CPU。
+	jarScanMaxEntries = 50000
+	// jarScanTextCap 限制单个文本条目（MANIFEST/services）最多读取的字节数。
+	jarScanTextCap = 1 << 20 // 1 MiB
+)
+
+// JarFindingSeverity 与审计事件级别对齐。
+type JarFindingSeverity string
+
+const (
+	JarSeverityInfo     JarFindingSeverity = "info"
+	JarSeverityWarn     JarFindingSeverity = "warn"
+	JarSeverityCritical JarFindingSeverity = "critical"
+)
+
+// JarFinding 是一条命中规则的发现。
+type JarFinding struct {
+	Rule     string             `json:"rule"`
+	Severity JarFindingSeverity `json:"severity"`
+	Entry    string             `json:"entry"`
+	Detail   string             `json:"detail"`
+}
+
+// JarScanReport 是一次扫描的完整结果。
+type JarScanReport struct {
+	Entries       int          `json:"entries"`
+	ClassFiles    int          `json:"classFiles"`
+	Findings      []JarFinding `json:"findings"`
+	HasModMarker  bool         `json:"hasModMarker"`
+	NestedJars    int          `json:"nestedJars"`
+	NativeLibs    int          `json:"nativeLibs"`
+}
+
+// Blocked 报告是否存在必须阻断安装的 critical 发现。
+func (r *JarScanReport) Blocked() bool {
+	if r == nil {
+		return false
+	}
+	for _, f := range r.Findings {
+		if f.Severity == JarSeverityCritical {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *JarScanReport) add(sev JarFindingSeverity, rule, entry, detail string) {
+	r.Findings = append(r.Findings, JarFinding{
+		Rule:     rule,
+		Severity: sev,
+		Entry:    entry,
+		Detail:   detail,
+	})
+}
+
+// 已知的 Mod 存在性标记：命中任一即认为“它确实声明自己是个 Mod”。
+var jarModMarkers = [][]byte{
+	[]byte("fabric.mod.json"),
+	[]byte("META-INF/mods.toml"),
+	[]byte("META-INF/neoforge.mods.toml"),
+	[]byte("mcmod.info"),
+	[]byte("quilt.mod.json"),
+}
+
+// 根目录出现这些扩展名 = 随 jar 携带可直接运行的程序 / 脚本，critical。
+var jarRootExecExts = map[string]bool{
+	".exe": true, ".scr": true, ".bat": true, ".cmd": true,
+	".ps1": true, ".vbs": true, ".vbe": true, ".jse": true,
+	".com": true, ".msi": true,
+}
+
+// 任意位置出现这些扩展名 = 平台本地库，常见于带原生绑定的正常 Mod，仅 info。
+var jarNativeLibExts = map[string]bool{
+	".dll": true, ".so": true, ".dylib": true,
+}
+
+// 这些 MANIFEST 头声明 JVM 代理 / 自启动入口。
+var jarAgentManifestKeys = []string{
+	"Premain-Class",
+	"Agent-Class",
+	"Launcher-Agent-Class",
+	"LoopLoader-Class",
+}
+
+// scanJarBytes 对内存中的 jar 字节做静态扫描（便于测试直接构造 zip）。
+func scanJarBytes(data []byte) (*JarScanReport, error) {
+	zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		return nil, fmt.Errorf("不是有效的 jar/zip 文件: %v", err)
+	}
+	return scanZipReader(zr), nil
+}
+
+// scanJarAt 扫描磁盘上已下载完成的 jar；只读、不执行、不解压。
+func scanJarAt(jarPath string) (*JarScanReport, error) {
+	zr, err := zip.OpenReader(jarPath)
+	if err != nil {
+		return nil, fmt.Errorf("打开 jar 失败: %v", err)
+	}
+	defer zr.Close()
+	return scanZipReader(&zr.Reader), nil
+}
+
+func scanZipReader(zr *zip.Reader) *JarScanReport {
+	rep := &JarScanReport{Findings: []JarFinding{}}
+	limited := false
+
+	for i, f := range zr.File {
+		if i >= jarScanMaxEntries {
+			limited = true
+			break
+		}
+		name := strings.ReplaceAll(f.Name, "\\", "/")
+		if name == "" {
+			continue
+		}
+		rep.Entries++
+		lower := strings.ToLower(name)
+		ext := pathExtLower(lower)
+
+		switch {
+		case ext == ".class":
+			rep.ClassFiles++
+		case jarNativeLibExts[ext]:
+			rep.NativeLibs++
+			rep.add(JarSeverityInfo, "native-library", name, "jar 携带平台本地库（正常 Mod 可能包含，已记录）")
+		case ext == ".jar":
+			rep.NestedJars++
+			rep.add(JarSeverityInfo, "nested-jar", name, "jar 内嵌 jar（JarJar/依赖遮蔽，内部内容不会被本次外层校验覆盖）")
+		case ext == ".pack" || strings.HasSuffix(lower, ".pack.gz") || ext == ".pack200":
+			rep.add(JarSeverityWarn, "pack200-carrier", name, "Pack200 载体在类加载时才解包，可藏匿不被静态扫描的类")
+		}
+
+		// 根目录可执行程序 / 脚本：正常 Mod 绝不会有，critical。
+		if isJarRootEntry(lower) && jarRootExecExts[ext] {
+			rep.add(JarSeverityCritical, "root-executable", name,
+				"jar 根目录携带可直接运行的可执行文件/脚本，属高置信度恶意载荷")
+		}
+
+		// Mod 存在性标记。
+		for _, marker := range jarModMarkers {
+			if bytes.EqualFold([]byte(lower), marker) {
+				rep.HasModMarker = true
+			}
+		}
+
+		// Nashorn coremod 脚本：在 ModLauncher 类加载阶段执行 JS。
+		if strings.HasPrefix(lower, "meta-inf/") && ext == ".js" {
+			rep.add(JarSeverityWarn, "coremod-script", name,
+				"META-INF 内脚本会在类加载阶段以 Nashorn 执行，属高权限早期代码")
+		}
+
+		// ModLauncher 转换 / 启动服务：在 Mod 生命周期前挂钩类加载。
+		if strings.HasPrefix(lower, "meta-inf/services/") {
+			scanServiceEntry(rep, f, name)
+		}
+
+		// 多发行版 jar 覆盖 java.* 基础包可影子替换运行时类。
+		if strings.HasPrefix(lower, "meta-inf/versions/") {
+			if strings.Contains(lower, "/java/") {
+				rep.add(JarSeverityWarn, "multi-release-runtime", name,
+					"多发行版条目覆盖 java.* 运行时类，可影子替换平台实现")
+			}
+		}
+
+		if lower == "meta-inf/manifest.mf" {
+			scanManifestEntry(rep, f, name)
+		}
+	}
+
+	if limited {
+		rep.add(JarSeverityInfo, "scan-limit-reached", "",
+			fmt.Sprintf("条目数超过 %d，仅扫描了前 %d 条", jarScanMaxEntries, rep.Entries))
+	}
+
+	// 有 .class 却完全没有任何 Mod 标记：可能是伪装成 Mod 的可执行 jar。
+	if rep.ClassFiles > 0 && !rep.HasModMarker {
+		rep.add(JarSeverityWarn, "no-mod-marker", "",
+			"jar 含编译后的 .class 但没有 fabric.mod.json/mods.toml/mcmod.info 等 Mod 声明，可能并非正常 Mod")
+	}
+	return rep
+}
+
+// scanManifestEntry 读取并解析 MANIFEST.MF 的关键头（处理 CRLF 与续行折叠）。
+func scanManifestEntry(rep *JarScanReport, f *zip.File, entryName string) {
+	heads := readManifestHeaders(f)
+	if heads == nil {
+		return
+	}
+	for _, key := range jarAgentManifestKeys {
+		if v := heads[key]; v != "" {
+			sev := JarSeverityWarn
+			rep.add(sev, "jvm-agent-manifest", entryName,
+				fmt.Sprintf("MANIFEST 声明 %s=%s，具备 JVM 代理/注入自启动入口", key, v))
+		}
+	}
+	if heads["Main-Class"] != "" {
+		rep.add(JarSeverityInfo, "main-class", entryName,
+			"MANIFEST 含 Main-Class="+heads["Main-Class"]+"，该 jar 可被当作可执行程序直接运行")
+	}
+}
+
+// scanServiceEntry 只看少数与早期类加载挂钩相关的服务契约。
+func scanServiceEntry(rep *JarScanReport, f *zip.File, entryName string) {
+	base := strings.ToLower(path.Base(f.Name))
+	switch base {
+	case "cpw.mods.modlauncher.itransformationservice",
+		"cpw.mods.modlauncher.ilaunchhandlerservice",
+		"cpw.mods.bootstraplauncher.ibootstraplistener",
+		"net.minecraftforge.forgespi.locating.imodlocator":
+		rep.add(JarSeverityWarn, "classloader-transform-service", entryName,
+			"声明类加载转换/启动服务，会早于 Mod 生命周期执行，属高权限挂钩点")
+	}
+}
+
+// readManifestHeaders 读取 MANIFEST（有上限），折叠续行，返回大写键映射。
+func readManifestHeaders(f *zip.File) map[string]string {
+	rc, err := f.Open()
+	if err != nil {
+		return nil
+	}
+	defer rc.Close()
+	limited := io.LimitReader(rc, jarScanTextCap)
+	sc := bufio.NewScanner(limited)
+	sc.Buffer(make([]byte, 0, 64*1024), jarScanTextCap)
+
+	heads := map[string]string{}
+	var curKey, curVal string
+	flush := func() {
+		if curKey != "" {
+			heads[strings.ToUpper(curKey)] = strings.TrimSpace(curVal)
+		}
+		curKey, curVal = "", ""
+	}
+	for sc.Scan() {
+		line := sc.Text()
+		if line == "" {
+			flush()
+			continue
+		}
+		// MANIFEST 续行：以空格或制表符开头的行拼接到上一个值。
+		if line[0] == ' ' || line[0] == '\t' {
+			curVal += strings.TrimLeft(line, " \t")
+			continue
+		}
+		flush()
+		colon := strings.IndexByte(line, ':')
+		if colon <= 0 {
+			continue
+		}
+		curKey = line[:colon]
+		curVal = strings.TrimSpace(line[colon+1:])
+	}
+	flush()
+	return heads
+}
+
+// isJarRootEntry 判断条目是否位于 jar 根目录（不含目录分隔符）。
+func isJarRootEntry(lowerName string) bool {
+	return !strings.Contains(lowerName, "/")
+}
+
+// pathExtLower 返回小写扩展名（含点），无扩展名返回空串。
+func pathExtLower(name string) string {
+	dot := strings.LastIndexByte(name, '.')
+	if dot < 0 || strings.LastIndexByte(name, '/') > dot {
+		return ""
+	}
+	return name[dot:]
+}
+
+// enforceModJarScan 是 Mod 安装链统一入口：扫描磁盘上的 jar，把每条发现写入
+// 安全审计日志，出现 critical 或文件本身损坏时返回错误（调用方负责删除未落定
+// 成的临时文件 / 终止导入）。source 仅用于审计，取值如 "mod-download" /
+// "mod-import"；label 是文件名或 URL，会被脱敏限长。
+func enforceModJarScan(jarPath, source, label string) (*JarScanReport, error) {
+	rep, err := scanJarAt(jarPath)
+	if err != nil {
+		recordSecurityEvent(auditCategoryJarScan, auditSeverityCritical, auditActionBlocked,
+			source, "jar 无法解析，拒绝进入 mods 目录: "+sanitizeLogLine(label))
+		return nil, err
+	}
+
+	var critical int
+	for _, f := range rep.Findings {
+		action := auditActionStripped
+		if f.Severity == JarSeverityCritical {
+			action = auditActionBlocked
+			critical++
+		}
+		detail := fmt.Sprintf("[%s] %s %s", f.Rule, f.Entry, f.Detail)
+		recordSecurityEvent(auditCategoryJarScan, string(f.Severity), action, source,
+			sanitizeLogLine(detail))
+	}
+
+	if critical > 0 {
+		return rep, fmt.Errorf("Mod jar 静态扫描发现 %d 个高危项（如根目录可执行载荷），已阻止安装: %s",
+			critical, sanitizeLogLine(label))
+	}
+	return rep, nil
+}
