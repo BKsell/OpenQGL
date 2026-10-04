@@ -632,29 +632,44 @@ func (a *App) GetModList(versionID string) ([]ModFileInfo, error) {
 // ToggleMod 切换 Mod 启用/禁用状态
 func (a *App) ToggleMod(modFilePath string, enable bool) error {
 	mcDir := a.GetMinecraftDir()
-	if _, ok := PathWithin(mcDir, modFilePath); !ok {
-		return fmt.Errorf("文件路径越界，必须在.minecraft目录内")
+	// 只允许操作“受管 mods 目录”（全局 mods 或版本隔离 mods）顶层的 .jar/.jar.disabled。
+	// 旧实现只判定 PathWithin(mcDir)，等于放权整个 .minecraft，渲染层可借改名禁用
+	// libraries/versions 里的任意 jar（破坏依赖）；这里收口到受管集合。
+	curAbs, ok := resolveManagedModPath(mcDir, modFilePath)
+	if !ok {
+		recordSecurityEvent(auditCategoryPermission, auditSeverityWarn, auditActionRejected,
+			"ToggleMod", "拒绝切换受管 Mods 目录之外的文件: "+modFilePath)
+		return fmt.Errorf("只能切换 Mods 目录内的 .jar 文件")
 	}
-	if _, err := os.Stat(modFilePath); err != nil {
+	if _, err := os.Stat(curAbs); err != nil {
 		return fmt.Errorf("文件不存在: %s", modFilePath)
 	}
 
 	var newPath string
 	if enable {
-		if strings.HasSuffix(strings.ToLower(modFilePath), ".jar.disabled") {
-			newPath = modFilePath[:len(modFilePath)-len(".disabled")]
+		if strings.HasSuffix(strings.ToLower(curAbs), disabledJarSuffix) {
+			newPath = curAbs[:len(curAbs)-len(".disabled")]
 		} else {
 			return nil
 		}
 	} else {
-		if strings.HasSuffix(strings.ToLower(modFilePath), ".jar") {
-			newPath = modFilePath + ".disabled"
+		if strings.HasSuffix(strings.ToLower(curAbs), jarSuffix) {
+			newPath = curAbs + ".disabled"
 		} else {
 			return nil
 		}
 	}
 
-	if err := os.Rename(modFilePath, newPath); err != nil {
+	// 改名目标也必须落在同一受管 mods 目录、且仍是受管 jar，防止借启用/禁用把文件
+	// 挪出 mods 目录或挪成非受管文件（防御纵深：正常情况下仅后缀变化，父目录不变）。
+	toAbs, ok := resolveManagedModPath(mcDir, newPath)
+	if !ok || !sameManagedModDir(curAbs, toAbs) {
+		recordSecurityEvent(auditCategoryPermission, auditSeverityWarn, auditActionRejected,
+			"ToggleMod", "拒绝把 Mod 改名到受管 Mods 目录之外: "+newPath)
+		return fmt.Errorf("非法的 Mod 目标路径")
+	}
+
+	if err := os.Rename(curAbs, toAbs); err != nil {
 		return fmt.Errorf("重命名失败: %v", err)
 	}
 
@@ -727,13 +742,18 @@ func (a *App) ImportMod(versionID string) error {
 // DeleteMod 删除 Mod 文件
 func (a *App) DeleteMod(modFilePath string) error {
 	mcDir := a.GetMinecraftDir()
-	if _, ok := PathWithin(mcDir, modFilePath); !ok {
-		return fmt.Errorf("文件路径越界，必须在.minecraft目录内")
+	// 与 ToggleMod 同一收口：只能删除受管 mods 目录顶层的 .jar/.jar.disabled。
+	// 旧实现 PathWithin(mcDir) 允许删除 .minecraft 内任意文件（saves 世界、版本库等）。
+	targetAbs, ok := resolveManagedModPath(mcDir, modFilePath)
+	if !ok {
+		recordSecurityEvent(auditCategoryPermission, auditSeverityWarn, auditActionRejected,
+			"DeleteMod", "拒绝删除受管 Mods 目录之外的文件: "+modFilePath)
+		return fmt.Errorf("只能删除 Mods 目录内的 .jar 文件")
 	}
-	if _, err := os.Stat(modFilePath); err != nil {
+	if _, err := os.Stat(targetAbs); err != nil {
 		return fmt.Errorf("文件不存在: %s", modFilePath)
 	}
-	return os.Remove(modFilePath)
+	return os.Remove(targetAbs)
 }
 
 // downloadModItem 下载 Mod 文件
