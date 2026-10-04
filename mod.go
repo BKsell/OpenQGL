@@ -359,12 +359,18 @@ func (a *App) AddModToDownloadList(versionID string, savePath string) error {
 		return fmt.Errorf("无效的版本 ID 格式")
 	}
 
-	// 安全校验: savePath必须在.minecraft目录内
+	// 安全校验: savePath 若由前端指定，只能是受管 mods 目录（全局 mods 或版本隔离
+	// mods）本身。旧实现只判定 PathWithin(mcDir)，渲染层可把下载的 jar 投放到
+	// libraries / versions / mcDir 根等任意子目录（越权落盘）。
 	if savePath != "" {
 		mcDir := a.GetMinecraftDir()
-		if _, ok := PathWithin(mcDir, savePath); !ok {
-			return fmt.Errorf("保存路径越界，必须在.minecraft目录内")
+		dirAbs, ok := resolveManagedModsDir(mcDir, savePath)
+		if !ok {
+			recordSecurityEvent(auditCategoryPermission, auditSeverityWarn, auditActionRejected,
+				"AddModToDownloadList", "拒绝把 Mod 下载到受管 Mods 目录之外: "+savePath)
+			return fmt.Errorf("保存路径必须是 Mods 目录")
 		}
+		savePath = dirAbs
 	}
 
 	apiURL := fmt.Sprintf("%s/version/%s", modrinthBaseURL, versionID)
