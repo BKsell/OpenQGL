@@ -1,11 +1,13 @@
 package main
 
 import (
-	"encoding/json"
 	"os"
-	"path/filepath"
 	"strings"
 )
+
+// maxCachedFileMetaBytes 是下载侧车元数据（.qglmeta）读取上限：正常仅数百字节，
+// 取 1MiB 这种极宽值，只拦截被改写成异常巨大文件导致的整体读入 OOM。
+const maxCachedFileMetaBytes int64 = 1 << 20
 
 // 本文件为本地下载缓存引入侧车完整性元数据（<file>.qglmeta）。
 //
@@ -35,11 +37,9 @@ func metaPathFor(destPath string) string {
 // loadCachedFileMeta 读取并解析侧车元数据；不存在或损坏时返回 ok=false。
 func loadCachedFileMeta(destPath string) (cachedFileMeta, bool) {
 	var m cachedFileMeta
-	b, err := os.ReadFile(metaPathFor(destPath))
-	if err != nil {
-		return m, false
-	}
-	if err := json.Unmarshal(b, &m); err != nil {
+	// 侧车是本地小 JSON，走有界读取：缺失 / 损坏 / 被改成超大体积都按“无缓存”回退，
+	// 绝不无界整体读入；超量由 readLocalJSONBounded 写安全审计。
+	if err := readLocalJSONBounded(metaPathFor(destPath), &m, maxCachedFileMetaBytes, "下载缓存侧车元数据"); err != nil {
 		return m, false
 	}
 	return m, true
@@ -62,38 +62,10 @@ func (a *App) saveCachedFileMeta(destPath, officialSHA1 string) error {
 	if sum, err := sha512File(destPath); err == nil && sum != "" {
 		m.SHA512 = sum
 	}
-	b, err := json.MarshalIndent(m, "", "  ")
-	if err != nil {
-		return err
-	}
-
-	// 原子写：先写同目录临时文件再 rename，避免并发读到半截 JSON。
-	dir := filepath.Dir(destPath)
-	tmp, err := os.CreateTemp(dir, ".qglmeta-*")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	cleanup := func() { os.Remove(tmpName) }
-	if _, err := tmp.Write(b); err != nil {
-		tmp.Close()
-		cleanup()
-		return err
-	}
-	if err := tmp.Chmod(0o600); err != nil {
-		tmp.Close()
-		cleanup()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		cleanup()
-		return err
-	}
-	if err := os.Rename(tmpName, metaPathFor(destPath)); err != nil {
-		cleanup()
-		return err
-	}
-	return nil
+	// 统一走有界原子私有写内核（0700 + fsync + rename + 拒符号链接 + 父目录收权），
+	// 替换本函数此前手写的 CreateTemp/Write/Chmod/Close/Rename——旧实现缺 fsync 与
+	// 符号链接防护，崩溃或预置链接时可能留下半截 / 写穿的侧车。
+	return writePrivateJSON(metaPathFor(destPath), m)
 }
 
 // verifyCachedFile 判断已缓存文件能否直接复用，摘要顺序 UMFS -> SHA512 -> SHA1。
