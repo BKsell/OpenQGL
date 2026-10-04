@@ -105,6 +105,9 @@ func getEncryptionKey(username string, salt []byte) []byte {
 	return pbkdf2.Key([]byte(username), salt, pbkdf2Iterations, pbkdf2KeyLength, NewUMFSHash)
 }
 
+// maxAuthSaltBytes 是本地认证盐文件读取上限：盐本身仅 16 字节，取 1KiB 极宽值。
+const maxAuthSaltBytes int64 = 1 << 10
+
 // loadOrCreateAuthSalt 读取用户目录下的随机盐文件；不存在且 create=true 时生成 16 字节随机盐并落盘。
 // 读老数据时若文件不存在，返回 (nil, false)，调用方回退到旧硬编码盐。
 func loadOrCreateAuthSalt(saltPath string, create bool) ([]byte, bool, error) {
@@ -114,7 +117,9 @@ func loadOrCreateAuthSalt(saltPath string, create bool) ([]byte, bool, error) {
 	} else if bad {
 		return nil, false, fmt.Errorf("盐文件是符号链接或非普通文件，已拒绝: %s", saltPath)
 	}
-	if data, err := os.ReadFile(saltPath); err == nil && len(data) >= 16 {
+	// 盐正常就是 16 字节随机串，取 1KiB 这种极宽上限只拦被塞成超大文件的异常读入；
+	// 读取失败（含超量）沿用旧逻辑：create 时重新生成，否则回退旧硬编码盐。
+	if data, err := readBoundedFile(saltPath, maxAuthSaltBytes); err == nil && len(data) >= 16 {
 		return data, false, nil
 	}
 	if !create {
@@ -859,7 +864,8 @@ func (a *App) GetMSAuthData(username string) (*MSAuthData, error) {
 		return nil, err
 	}
 	authPath := filepath.Join(a.GetUsersDir(), username, "ms_auth.json")
-	data, err := os.ReadFile(authPath)
+	// 凭据文件走有界读取（默认 64MiB 本地文本上限）并拒绝符号链接，防止超大 / 预置链接读入。
+	data, err := readBoundedFile(authPath, localTextConfigMaxBytes)
 	if err != nil {
 		return nil, err
 	}
