@@ -141,6 +141,41 @@ func TestSameManagedModDir(t *testing.T) {
 	}
 }
 
+func TestResolveManagedModsDir(t *testing.T) {
+	mc := t.TempDir()
+	join := filepath.Join
+
+	okDirs := []string{
+		join(mc, "mods"),
+		join(mc, "versions", "1.20.1", "mods"),
+		join(mc, "versions", "1.20.1-forge-47.2.0", "mods"),
+	}
+	for _, d := range okDirs {
+		if _, ok := resolveManagedModsDir(mc, d); !ok {
+			t.Errorf("expected managed dir: %s", d)
+		}
+	}
+
+	badDirs := []string{
+		mc,                                  // mcDir 根
+		join(mc, "libraries"),              // 非 mods
+		join(mc, "libraries", "com"),       // 任意库目录
+		join(mc, "saves"),
+		join(mc, "versions"),               // versions 根
+		join(mc, "versions", "1.20.1"),     // 版本目录本身
+		join(mc, "mods", "sub"),            // mods 子目录
+		join(mc, "versions", "1.20", "mods", "sub"),
+		join(mc, "mods", "..", "libraries"),
+		filepath.Join(filepath.Dir(mc), "outside"),
+		"",
+	}
+	for _, d := range badDirs {
+		if _, ok := resolveManagedModsDir(mc, d); ok {
+			t.Errorf("expected NOT managed dir: %q", d)
+		}
+	}
+}
+
 func TestSameManagedModDirCrossPlatform(t *testing.T) {
 	base := t.TempDir()
 	g := filepath.Join(base, "mods", "a.jar.disabled")
