@@ -13,30 +13,8 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
-// isPathInDir 校验路径是否在指定目录内，防止路径遍历。
-// 用 Rel 的结果做“边界”判定：只有等于目录本身、或第一段不是 ".." 时才算在目录内，
-// 避免把目录内合法的 "..foo" 这类名字误判成越界（单纯 HasPrefix("..") 会误杀）。
-func isPathInDir(path, dir string) bool {
-	absPath, err := filepath.Abs(path)
-	if err != nil {
-		return false
-	}
-	absDir, err := filepath.Abs(dir)
-	if err != nil {
-		return false
-	}
-	rel, err := filepath.Rel(absDir, absPath)
-	if err != nil {
-		return false
-	}
-	if rel == "." {
-		return true
-	}
-	if rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
-		return false
-	}
-	return true
-}
+// 目录包含判定统一使用 sanitize.PathWithin：它除了词法边界检查，还做真实符号链接
+// 解析（isPathInDir 旧实现只看 filepath.Rel，root 内被预置指向外部的链接时会漏判）。
 
 // isValidModID 验证 Mod ID 格式，防止 URL 注入
 func isValidModID(id string) bool {
@@ -384,7 +362,7 @@ func (a *App) AddModToDownloadList(versionID string, savePath string) error {
 	// 安全校验: savePath必须在.minecraft目录内
 	if savePath != "" {
 		mcDir := a.GetMinecraftDir()
-		if !isPathInDir(savePath, mcDir) {
+		if _, ok := PathWithin(mcDir, savePath); !ok {
 			return fmt.Errorf("保存路径越界，必须在.minecraft目录内")
 		}
 	}
@@ -654,7 +632,7 @@ func (a *App) GetModList(versionID string) ([]ModFileInfo, error) {
 // ToggleMod 切换 Mod 启用/禁用状态
 func (a *App) ToggleMod(modFilePath string, enable bool) error {
 	mcDir := a.GetMinecraftDir()
-	if !isPathInDir(modFilePath, mcDir) {
+	if _, ok := PathWithin(mcDir, modFilePath); !ok {
 		return fmt.Errorf("文件路径越界，必须在.minecraft目录内")
 	}
 	if _, err := os.Stat(modFilePath); err != nil {
@@ -761,7 +739,7 @@ func (a *App) ImportMod(versionID string) error {
 // DeleteMod 删除 Mod 文件
 func (a *App) DeleteMod(modFilePath string) error {
 	mcDir := a.GetMinecraftDir()
-	if !isPathInDir(modFilePath, mcDir) {
+	if _, ok := PathWithin(mcDir, modFilePath); !ok {
 		return fmt.Errorf("文件路径越界，必须在.minecraft目录内")
 	}
 	if _, err := os.Stat(modFilePath); err != nil {
@@ -777,7 +755,7 @@ func (a *App) downloadModItem(item *DownloadItem) error {
 	destDir := item.SavePath
 	if destDir == "" {
 		destDir = filepath.Join(mcDir, "mods")
-	} else if !isPathInDir(destDir, mcDir) {
+	} else if _, ok := PathWithin(mcDir, destDir); !ok {
 		return fmt.Errorf("Mod 保存路径越界，必须位于 .minecraft 目录内: %s", destDir)
 	}
 
