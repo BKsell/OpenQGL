@@ -28,13 +28,17 @@ const (
 
 // 入队拒绝原因码。
 const (
-	dqRejectNone     = ""
-	dqRejectFull     = "queue-full"      // 队列达到容量上限
-	dqRejectType     = "bad-item-type"   // ItemType 不在白名单
-	dqRejectEmptyName = "empty-name"     // CustomName 为空
-	dqRejectIDLen    = "id-too-long"     // ID 超长
-	dqRejectURLLen   = "url-too-long"    // URL 超长
-	dqRejectDup      = "duplicate-name"  // 同名条目已存在
+	dqRejectNone       = ""
+	dqRejectFull       = "queue-full"        // 队列达到容量上限
+	dqRejectType       = "bad-item-type"     // ItemType 不在白名单
+	dqRejectEmptyName  = "empty-name"        // CustomName 为空
+	dqRejectIDLen      = "id-too-long"       // ID 超长
+	dqRejectURLLen     = "url-too-long"      // URL 超长
+	dqRejectDup        = "duplicate-name"    // 同名条目已存在
+	dqRejectSizeNegative      = "negative-size"             // 声明字节数为负
+	dqRejectItemTooLarge      = "item-too-large"            // 单条声明大小超过 512GiB
+	dqRejectBudgetOverflow    = "size-overflow"             // 聚合字节数溢出 int64
+	dqRejectAggregateBudget   = "aggregate-budget-exceeded" // 队列聚合超过 1TiB
 )
 
 // allowedDownloadItemTypes 是 StartDownloadList 真正能分发处理的全部类型。
@@ -67,6 +71,14 @@ func auditDownloadItemForEnqueue(list []DownloadItem, item DownloadItem) string 
 	if len(item.URL) > maxDownloadItemURLLen {
 		return dqRejectURLLen
 	}
+	// r35：聚合字节预算——条数 / 单文件上限挡不住“合法大小 × 海量条目”的聚合放大。
+	// 以队列现有声明大小之和 + 新条目声明大小判预算；size<=0 表示未知，按 0 计不影响
+	// 正常下载，只有真的声称要写 1TiB 级或单条 512GiB 级才拒绝（炸磁盘才限制）。
+	if why := mapByteBudgetToQueueReason(
+		assessQueueByteBudget(declaredSizesFromQueue(list), item.SizeBytes).Reason,
+	); why != dqRejectNone {
+		return why
+	}
 	// 名称是落盘目录/文件名的来源，统一以名字去重，避免两个任务并发写同一目标。
 	for i := range list {
 		if list[i].CustomName == item.CustomName {
@@ -91,6 +103,14 @@ func describeQueueReject(why string) string {
 		return "下载地址超过长度上限"
 	case dqRejectDup:
 		return "已存在同名下载任务"
+	case dqRejectSizeNegative:
+		return "下载任务声明大小为负数，已拒绝"
+	case dqRejectItemTooLarge:
+		return "单个下载任务声明大小超过 " + FormatBytes(maxSingleDownloadDeclaredBytes) + " 上限"
+	case dqRejectBudgetOverflow:
+		return "下载队列聚合大小溢出，已拒绝"
+	case dqRejectAggregateBudget:
+		return "下载队列聚合大小超过 " + FormatBytes(maxDownloadBudgetBytes) + " 上限，避免写满磁盘"
 	default:
 		return "下载任务未通过入队校验"
 	}
