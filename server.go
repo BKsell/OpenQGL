@@ -495,15 +495,18 @@ func (a *App) StartServer(name string) error {
 	jarName := cfg.Version + "-server.jar"
 	maxMem := fmt.Sprintf("%dM", cfg.MaxMemory)
 	minMem := fmt.Sprintf("%dM", cfg.MinMemory)
-	args := []string{
+	// 专用服务端会把玩家名 / 聊天经 log4j 记入控制台，旧版服务端 jar 同样受 Log4Shell
+	// 影响（攻击者进服即可投递 JNDI 载荷）。这些 JVM 参数全由启动器生成，没有外部
+	// JSON 覆盖问题，但仍统一走强制内核：补 log4j 消息 lookup 关闭与 JNDI 远程
+	// codebase 禁用，再拼 -jar / nogui 程序参数。
+	jvmArgs := applyEnforcedJvmProperties([]string{
 		"-server",
 		"-XX:+UseG1GC",
 		fmt.Sprintf("-Xmx%s", maxMem),
 		fmt.Sprintf("-Xms%s", minMem),
 		"-XX:+UseCompressedOops",
-		"-jar", jarName,
-		"nogui",
-	}
+	})
+	args := append(jvmArgs, "-jar", jarName, "nogui")
 
 	cmd := exec.Command(javaPath, args...)
 	cmd.Dir = cfg.ServerDir
