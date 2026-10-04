@@ -49,31 +49,9 @@ type ModrinthModpackFile struct {
 	Hashes    map[string]string `json:"hashes"`
 	Downloads []string          `json:"downloads"`
 	FileSize  int64             `json:"fileSize"`
-}
-
-// hasPathTraversalChars 检查路径是否包含路径遍历字符
-func hasPathTraversalChars(path string) bool {
-	return strings.Contains(path, "..") || strings.Contains(path, "\x00")
-}
-
-// safeJoin 安全地拼接路径，防止路径遍历
-func safeJoin(baseDir, relPath string) (string, error) {
-	if hasPathTraversalChars(relPath) {
-		return "", fmt.Errorf("路径遍历检测: %s", relPath)
-	}
-	destPath := filepath.Join(baseDir, relPath)
-	absBase, err := filepath.Abs(baseDir)
-	if err != nil {
-		return "", err
-	}
-	absDest, err := filepath.Abs(destPath)
-	if err != nil {
-		return "", err
-	}
-	if !strings.HasPrefix(absDest, absBase+string(os.PathSeparator)) && absDest != absBase {
-		return "", fmt.Errorf("路径越界: %s", relPath)
-	}
-	return destPath, nil
+	// Env 是 Modrinth 规范的端侧声明 {"client","server"} = required|optional|unsupported。
+	// 客户端安装时只选取 client != unsupported 的文件；缺失视为两侧都需要。
+	Env map[string]string `json:"env"`
 }
 
 // sha1File 计算文件 SHA1（仅作 sha512 缺失时的回退）
@@ -210,12 +188,26 @@ func verifyDownloadedFile(path string, hashes map[string]string, cache *umfsCach
 
 // SearchModpacks 搜索 Modrinth 整合包
 func (a *App) SearchModpacks(query string, gameVersion string, page int, pageSize int) (*ModpackSearchResponse, error) {
+	// r35：与 SearchMods 对齐——分页 / 查询入参全部来自前端，必须收敛，防止被塞入
+	// 超大 limit 打出超长 Modrinth URL 或巨大 offset；Modrinth 单页上限 100，此处兜底。
+	const (
+		defaultModpackPageSize = 20
+		maxModpackPageSize     = 100
+		maxModpackQueryLen     = 200
+	)
 	if pageSize <= 0 {
-		pageSize = 20
+		pageSize = defaultModpackPageSize
+	}
+	if pageSize > maxModpackPageSize {
+		pageSize = maxModpackPageSize
 	}
 	if page < 0 {
 		page = 0
 	}
+	if len(query) > maxModpackQueryLen {
+		query = query[:maxModpackQueryLen]
+	}
+	query = strings.TrimSpace(query)
 	params := url.Values{}
 	params.Set("query", query)
 	params.Set("limit", fmt.Sprintf("%d", pageSize))
@@ -358,6 +350,9 @@ func (a *App) AddModpackToDownloadList(versionID string, customName string) erro
 		ItemType:   "modpack",
 		Status:     "pending",
 		Progress:   0,
+		// r35：整合包 .mrpack 声明大小进入聚合预算；解压后更大但单文件与 mrpack
+		// 清单本身另有 maxMrpack* 上限，这里只统计可直接获知的下载字节。
+		SizeBytes: primaryFile.Size,
 	}
 	if why := auditDownloadItemForEnqueue(a.downloadList, pending); why != dqRejectNone {
 		return fmt.Errorf("%s", describeQueueReject(why))
@@ -416,12 +411,28 @@ func (a *App) installModpack(item *DownloadItem) error {
 		return fmt.Errorf("创建临时文件失败: %v", err)
 	}
 
+	// 实时磁盘守卫：整合包本体可能是 chunked 响应（ContentLength 不可信），除既有
+	// maxMrpackDownloadBytes 声明上限外，再按临时目录真实剩余空间逐块判定，写穿安全
+	// 水位立刻中止并删除残片；探测失败 unknown 时停用，不误杀。
+	mrpackAvail := diskAvailUnknown
+	if availBytes, availErr := availableDiskBytes(filepath.Dir(mrpackPath)); availErr == nil {
+		mrpackAvail = availBytes
+	}
+	mrpackGuard := newDiskWriteGuard(mrpackAvail, 0)
+
 	total := resp.ContentLength
 	var downloaded int64
 	buf := make([]byte, 32*1024)
 	for {
 		n, readErr := resp.Body.Read(buf)
 		if n > 0 {
+			if ok, _ := mrpackGuard.recordChunk(int64(n)); !ok {
+				out.Close()
+				os.Remove(mrpackPath)
+				recordSecurityEvent("download", auditSeverityCritical, auditActionBlocked,
+					"disk-space", describeDiskWriteAbort(mrpackGuard))
+				return fmt.Errorf("%s", describeDiskWriteAbort(mrpackGuard))
+			}
 			if downloaded+int64(n) > maxMrpackDownloadBytes {
 				out.Close()
 				os.Remove(mrpackPath)
@@ -610,8 +621,29 @@ func (a *App) installModpack(item *DownloadItem) error {
 		return fmt.Errorf("创建 mods 目录失败: %v", err)
 	}
 
-	totalFiles := len(manifest.Files)
-	for i, mf := range manifest.Files {
+	// r35：按 files[].env 选取客户端需要的文件。client=unsupported 的服务器专用 mod
+	// 不再下载安装（省磁盘 / 下载量，也避免服务端专用 mod 在客户端加载崩溃）；同路径
+	// 重复条目只装首个，避免对同一目标重复下载与覆盖。
+	clientPlan := planClientMrpackFiles(manifest.Files)
+	if len(clientPlan.SkippedEnv) > 0 {
+		recordSecurityEvent(auditCategoryPrivateWrite, auditSeverityInfo, auditActionStripped,
+			"modpack", fmt.Sprintf("整合包含 %d 个非客户端文件(client=unsupported)，已跳过安装",
+				len(clientPlan.SkippedEnv)))
+	}
+
+	// 聚合字节预算：单文件虽各自不超过上限，但一批文件声明总量仍可能是天文数字。
+	// 在下载前对“客户端选中文件”的声明体积求和，超 1TiB 预算 / int64 溢出即中止。
+	// 未知大小条目按 0 计入（预算是保守下限），实际风险由实时磁盘写入守卫兜底。
+	installBudget := assessMrpackInstallBudget(manifest.Files, clientPlan.Kept)
+	if !installBudget.OK() {
+		recordSecurityEvent(auditCategoryPrivateWrite, auditSeverityCritical, auditActionBlocked,
+			"modpack", describeMrpackInstallBudget(installBudget))
+		return fmt.Errorf("%s", describeMrpackInstallBudget(installBudget))
+	}
+
+	totalFiles := len(clientPlan.Kept)
+	for pos, i := range clientPlan.Kept {
+		mf := manifest.Files[i]
 		// 落盘路径走 mrpackguard：已在 validateMrpackManifest 规范化，这里再做一次
 		// “必须在实例目录内”的拼接复核；任何越界都中止安装，而不是静默跳过。
 		destPath, err := secureMrpackDest(versionDir, mf.Path)
@@ -631,7 +663,7 @@ func (a *App) installModpack(item *DownloadItem) error {
 		}
 
 		fileName := filepath.Base(mf.Path)
-		a.emitProgress("downloading", fmt.Sprintf("Mod %d/%d: %s", i+1, totalFiles, fileName), 0, mf.FileSize)
+		a.emitProgress("downloading", fmt.Sprintf("Mod %d/%d: %s", pos+1, totalFiles, fileName), 0, mf.FileSize)
 
 		tryOne := func(dlURL string) bool {
 			if err := a.downloadFile(dlURL, destPath, false); err != nil {
