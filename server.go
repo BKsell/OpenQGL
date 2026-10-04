@@ -212,12 +212,8 @@ func (a *App) GetServerList() ([]ServerConfig, error) {
 			continue
 		}
 		configPath := filepath.Join(serverDir, entry.Name(), "QGL", "config.json")
-		data, err := os.ReadFile(configPath)
-		if err != nil {
-			continue
-		}
 		var cfg ServerConfig
-		if err := json.Unmarshal(data, &cfg); err != nil {
+		if err := readPrivateStoreJSON(configPath, &cfg, "服务器配置"); err != nil {
 			continue
 		}
 		// 跳过任何被篡改 / 字段非法的配置，避免把带病条目暴露给前端和执行路径。
@@ -284,7 +280,9 @@ func (a *App) CreateServer(name, version string, port, maxMem, minMem int, onlin
 		ServerDir:  dir,
 	}
 	cfgData, _ := json.MarshalIndent(cfg, "", "  ")
-	if err := os.WriteFile(filepath.Join(qglDir, "config.json"), cfgData, allowedFilePerm); err != nil {
+	// config.json 随后会进入 java -jar 执行路径，按敏感状态文件走原子私有写：
+	// 防半截写、防预置符号链接写穿、强制 0600。
+	if err := secureWritePrivateFile(filepath.Join(qglDir, "config.json"), cfgData); err != nil {
 		return fmt.Errorf("保存配置失败: %v", err)
 	}
 
@@ -727,12 +725,8 @@ func (a *App) getServerConfig(name string) (*ServerConfig, error) {
 	}
 	serverDir := a.GetServerDir()
 	configPath := filepath.Join(serverDir, name, "QGL", "config.json")
-	info, statErr := os.Stat(configPath)
-	if statErr == nil && info.Size() > (1<<20) {
-		return nil, fmt.Errorf("服务器配置文件过大（>1 MiB），拒绝加载")
-	}
-	data, err := os.ReadFile(configPath)
-	if err != nil {
+	var cfg ServerConfig
+	if err := readPrivateStoreJSON(configPath, &cfg, "服务器配置"); err != nil {
 		list, listErr := a.GetServerList()
 		if listErr != nil {
 			return nil, fmt.Errorf("读取配置失败: %v", listErr)
@@ -743,10 +737,6 @@ func (a *App) getServerConfig(name string) (*ServerConfig, error) {
 			}
 		}
 		return nil, fmt.Errorf("找不到服务器 %s", name)
-	}
-	var cfg ServerConfig
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		return nil, fmt.Errorf("解析配置失败: %v", err)
 	}
 	// 加载即校验：拒绝被篡改 / 写坏的配置进入后续 java -jar 执行路径。
 	if err := a.validateLoadedServerConfig(&cfg); err != nil {
@@ -773,7 +763,7 @@ func (a *App) SetServerOnlineMode(name string, onlineMode bool) error {
 	cfg.OnlineMode = onlineMode
 	qglDir := filepath.Join(cfg.ServerDir, "QGL")
 	cfgData, _ := json.MarshalIndent(cfg, "", "  ")
-	if err := os.WriteFile(filepath.Join(qglDir, "config.json"), cfgData, allowedFilePerm); err != nil {
+	if err := secureWritePrivateFile(filepath.Join(qglDir, "config.json"), cfgData); err != nil {
 		return fmt.Errorf("同步配置失败: %v", err)
 	}
 	return nil
