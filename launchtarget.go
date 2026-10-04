@@ -150,7 +150,7 @@ func containedInAnyRoot(target string, roots []string) bool {
 		return false
 	}
 	for _, root := range roots {
-		if isPathInDir(absTarget, root) {
+		if _, ok := PathWithin(root, absTarget); ok {
 			return true
 		}
 	}
@@ -235,7 +235,7 @@ func auditJarRelPath(workDir, jar string, roots []string) []LaunchFinding {
 		return append(out, LaunchFinding{"jar-not-jar", launchSeverityCritical, "jar", "-jar 目标必须以 .jar 结尾"})
 	}
 	joined := filepath.Join(workDir, jar)
-	if !isPathInDir(joined, workDir) {
+	if _, ok := PathWithin(workDir, joined); !ok {
 		out = append(out, LaunchFinding{"jar-escapes-workdir", launchSeverityCritical, "jar", "jar 解析后逃逸出工作目录"})
 	}
 	if !containedInAnyRoot(joined, roots) {
@@ -274,7 +274,7 @@ func auditClasspath(workDir string, entries []string, roots []string) []LaunchFi
 			continue
 		}
 		joined := filepath.Join(workDir, entry)
-		if !isPathInDir(joined, workDir) || !containedInAnyRoot(joined, roots) {
+		if _, inWork := PathWithin(workDir, joined); !inWork || !containedInAnyRoot(joined, roots) {
 			out = append(out, LaunchFinding{"cp-outside", launchSeverityCritical, field, "classpath 条目逃逸出允许目录"})
 		}
 	}
