@@ -85,8 +85,10 @@ var umfsCacheOnce sync.Once
 func getUMFSCache(cachePath string) *umfsCache {
 	umfsCacheOnce.Do(func() {
 		globalUMFSCache = &umfsCache{path: cachePath, data: map[string]string{}}
-		if raw, err := os.ReadFile(cachePath); err == nil {
-			_ = json.Unmarshal(raw, &globalUMFSCache.data)
+		// 缓存是本地文本 JSON，走有界读取（默认 64MiB）：文件缺失 / 损坏 / 被改成
+		// 超大体积都从空缓存起步，绝不整体读进内存，也不阻断后续下载。
+		if err := readLocalJSONBounded(cachePath, &globalUMFSCache.data, 0, "umfs完整性缓存"); err != nil {
+			globalUMFSCache.data = map[string]string{}
 		}
 	})
 	return globalUMFSCache
@@ -113,9 +115,9 @@ func (c *umfsCache) set(key, umfsHex string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.data[key] = umfsHex
-	raw, _ := json.MarshalIndent(c.data, "", "  ")
-	os.MkdirAll(filepath.Dir(c.path), 0700)
-	os.WriteFile(c.path, raw, 0600)
+	// 原子私有写（含 0700 目录收敛、0600、fsync/rename、拒符号链接），替换原先
+	// 裸 Marshal+MkdirAll+WriteFile；失败仅表示本次指纹未持久化，不影响当次校验结果。
+	_ = writePrivateJSON(c.path, c.data)
 }
 
 // verifyDownloadedFile 按优先级校验：缓存 UMFS → sha512 → sha1。
@@ -730,24 +732,23 @@ func (a *App) installModpack(item *DownloadItem) error {
 	fmt.Printf("覆写文件解压完成: %d 个文件，共 %d 字节\n", extractedFiles, extractedBytes)
 
 	configDir := filepath.Join(versionDir, "QGL")
-	if err := os.MkdirAll(configDir, 0700); err == nil {
-		loaderType := ""
-		if fabricVersion != "" {
-			loaderType = "fabric"
-		} else if forgeVersion != "" {
-			loaderType = "forge"
-		} else if neoforgeVersion != "" {
-			loaderType = "neoforge"
-		}
-		config := map[string]string{
-			"type":    "modpack",
-			"name":    item.CustomName,
-			"version": mcVersion,
-			"loader":  loaderType,
-		}
-		configData, _ := json.MarshalIndent(config, "", "  ")
-		os.WriteFile(filepath.Join(configDir, "config.json"), configData, 0600)
+	loaderType := ""
+	if fabricVersion != "" {
+		loaderType = "fabric"
+	} else if forgeVersion != "" {
+		loaderType = "forge"
+	} else if neoforgeVersion != "" {
+		loaderType = "neoforge"
 	}
+	config := map[string]string{
+		"type":    "modpack",
+		"name":    item.CustomName,
+		"version": mcVersion,
+		"loader":  loaderType,
+	}
+	// 版本标记 config.json 走有界原子私有写（内部统一 0700 建目录/收权），
+	// 避免原地截断写 / 符号链接写穿；不再用 MkdirAll 错误门控包裹。
+	_ = writePrivateJSON(filepath.Join(configDir, "config.json"), config)
 
 	return nil
 }
