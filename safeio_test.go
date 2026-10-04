@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -110,6 +111,48 @@ func TestWritePrivateJSONRoundtrip(t *testing.T) {
 	}
 	if got.User != want.User || len(got.Tag) != 3 || got.Tag[2] != 3 {
 		t.Fatalf("JSON 往返不一致: %+v", got)
+	}
+}
+
+func TestWritePrivateJSONBoundedRejectsOversize(t *testing.T) {
+	type doc struct {
+		Big string `json:"big"`
+	}
+	path := filepath.Join(t.TempDir(), "oversize.json")
+	payload := doc{Big: strings.Repeat("x", 256)}
+	// 上限设到远小于序列化结果，必须返回超限哨兵且目标文件绝不落盘。
+	err := writePrivateJSONBounded(path, payload, 16)
+	if err == nil {
+		t.Fatal("序列化结果超过上限时必须拒绝写入")
+	}
+	if !errors.Is(err, errLocalFileTooLarge) {
+		t.Fatalf("应包装 errLocalFileTooLarge，实际 %v", err)
+	}
+	if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
+		t.Fatalf("超限时不得创建目标文件，statErr=%v", statErr)
+	}
+}
+
+func TestWritePrivateJSONBoundedRejectsUnserializable(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "bad.json")
+	// channel 无法被 encoding/json 序列化：Marshal 阶段就应失败，且不留任何文件。
+	err := writePrivateJSONBounded(path, make(chan int), 0)
+	if err == nil {
+		t.Fatal("不可序列化的值必须返回错误")
+	}
+	if errors.Is(err, errLocalFileTooLarge) {
+		t.Fatalf("序列化失败不应被误判成超量，实际 %v", err)
+	}
+	if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
+		t.Fatalf("序列化失败时不得创建目标文件，statErr=%v", statErr)
+	}
+}
+
+func TestWritePrivateJSONDefaultLimitIsWide(t *testing.T) {
+	// 默认上限故意取极宽（64MiB），只拦炸磁盘量级：固化该常量，防止被人无意调小到
+	// 会误伤正常版本 / 配置 JSON（KB 量级）的程度。
+	if defaultPrivateJSONWriteMaxBytes != int64(64<<20) {
+		t.Fatalf("默认私有 JSON 写入上限应为 64MiB，实际 %d", defaultPrivateJSONWriteMaxBytes)
 	}
 }
 
