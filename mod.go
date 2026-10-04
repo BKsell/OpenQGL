@@ -456,6 +456,8 @@ func (a *App) AddModToDownloadList(versionID string, savePath string) error {
 		SavePath:   savePath,
 		Status:     "pending",
 		Progress:   0,
+		// r35：把 Modrinth 声明大小带进队列，供聚合字节预算裁决；远端未给时为 0（未知）。
+		SizeBytes: primaryFile.Size,
 	}
 	if why := auditDownloadItemForEnqueue(a.downloadList, pending); why != dqRejectNone {
 		return fmt.Errorf("%s", describeQueueReject(why))
@@ -854,6 +856,15 @@ func (a *App) downloadModItem(item *DownloadItem) error {
 		return fmt.Errorf("创建文件失败: %v", err)
 	}
 
+	// 实时磁盘守卫：chunked 响应没有可信 ContentLength，effectiveCap 只能按声明大小
+	// 兜底；这里按落盘目录的真实剩余空间逐块累计实际写入，一旦会击穿安全水位立刻停写
+	// 并删除残片。探测失败（unknown）时守卫停用，绝不误杀正常下载。
+	startAvail := diskAvailUnknown
+	if availBytes, availErr := availableDiskBytes(filepath.Dir(partPath)); availErr == nil {
+		startAvail = availBytes
+	}
+	diskGuard := newDiskWriteGuard(startAvail, 0)
+
 	total := resp.ContentLength
 	var downloaded int64
 	buf := make([]byte, 32*1024)
@@ -861,6 +872,13 @@ func (a *App) downloadModItem(item *DownloadItem) error {
 	for {
 		n, readErr := resp.Body.Read(buf)
 		if n > 0 {
+			if ok, _ := diskGuard.recordChunk(int64(n)); !ok {
+				out.Close()
+				os.Remove(partPath)
+				recordSecurityEvent("download", auditSeverityCritical, auditActionBlocked,
+					"disk-space", describeDiskWriteAbort(diskGuard))
+				return fmt.Errorf("%s", describeDiskWriteAbort(diskGuard))
+			}
 			if _, werr := out.Write(buf[:n]); werr != nil {
 				out.Close()
 				os.Remove(partPath)
