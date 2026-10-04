@@ -1124,14 +1124,11 @@ func (a *App) ensureForgeMappings(installerPath string, mcDir string) {
 	versionDir := filepath.Join(mcDir, "versions", mcVersion)
 	jsonPath := filepath.Join(versionDir, mcVersion+".json")
 
-	jsonData, err := os.ReadFile(jsonPath)
-	if err != nil {
-		a.writeLog("无法读取原版版本 JSON: %v", err)
+	var rawJSON map[string]interface{}
+	if err := readLocalJSONBounded(jsonPath, &rawJSON, 0, "原版版本 JSON"); err != nil {
+		a.writeLog("无法读取/解析原版版本 JSON: %v", err)
 		return
 	}
-
-	var rawJSON map[string]interface{}
-	json.Unmarshal(jsonData, &rawJSON)
 
 	downloads, _ := rawJSON["downloads"].(map[string]interface{})
 	if downloads == nil {
@@ -1274,15 +1271,9 @@ func (a *App) downloadForgeMappings(mcDir string, mcVersion string, installerPat
 	versionDir := filepath.Join(mcDir, "versions", mcVersion)
 	jsonPath := filepath.Join(versionDir, mcVersion+".json")
 
-	jsonData, err := os.ReadFile(jsonPath)
-	if err != nil {
-		fmt.Printf("无法读取原版版本 JSON（跳过 Mappings 下载）: %v\n", err)
-		return
-	}
-
 	var rawJSON map[string]interface{}
-	if err := json.Unmarshal(jsonData, &rawJSON); err != nil {
-		fmt.Printf("解析原版版本 JSON 失败（跳过 Mappings 下载）: %v\n", err)
+	if err := readLocalJSONBounded(jsonPath, &rawJSON, 0, "原版版本 JSON"); err != nil {
+		fmt.Printf("无法读取/解析原版版本 JSON（跳过 Mappings 下载）: %v\n", err)
 		return
 	}
 
@@ -1825,13 +1816,8 @@ func (a *App) validateVersionInstallation(versionFolder string) bool {
 	}
 
 	for _, jsonFile := range jsonFiles {
-		data, err := os.ReadFile(jsonFile)
-		if err != nil {
-			continue
-		}
-
 		var jsonData map[string]interface{}
-		if err := json.Unmarshal(data, &jsonData); err != nil {
+		if err := readLocalJSONBounded(jsonFile, &jsonData, 0, "版本 JSON"); err != nil {
 			continue
 		}
 
