@@ -96,6 +96,10 @@ type DownloadItem struct {
 	Status         string  `json:"status"`
 	Progress       float64 `json:"progress"`
 	ErrorMsg       string  `json:"errorMsg"`
+	// SizeBytes 是该任务“声明”的下载字节数（来自可信镜像/Modrinth files[].size）。
+	// 0 表示未知（服务端未给大小），不参与聚合字节预算求和；负数永远不应出现，
+	// 预算内核会拒绝。该字段仅用于下载队列的聚合磁盘预算，不改变分发逻辑。
+	SizeBytes int64 `json:"sizeBytes"`
 }
 
 // 版本 JSON 相关结构体
@@ -649,6 +653,19 @@ func (a *App) StartDownloadList() error {
 	if len(a.downloadList) == 0 {
 		a.downloadMutex.Unlock()
 		return fmt.Errorf("下载列表为空")
+	}
+	// r35：开始下载前做“分目录磁盘余量预检”。按各 pending 条目的 SavePath 聚合已知
+	// 声明大小，逐卷探测剩余空间，任何目录写入会击穿 1GiB 安全水位就整体拒绝开始，
+	// 避免把盘写到耗尽。未知大小 / 探测失败一律不拦（没有证据不能误杀）。
+	demands := groupDownloadDiskDemand(a.downloadList)
+	plans := planDownloadDiskFit(demands, probeDownloadDiskFit)
+	if blocked := blockingDiskPlans(plans); len(blocked) > 0 {
+		for _, bp := range blocked {
+			recordSecurityEvent("download", auditSeverityCritical, auditActionBlocked,
+				"disk-space", describeDiskPlanBlock(bp))
+		}
+		a.downloadMutex.Unlock()
+		return fmt.Errorf("%s", describeDiskPlanBlock(blocked[0]))
 	}
 	a.isDownloading = true
 	a.downloadCancel = make(chan struct{})
