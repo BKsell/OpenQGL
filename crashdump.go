@@ -351,6 +351,21 @@ func readDumpBounded(path string) ([]byte, bool) {
 	return data, true
 }
 
+// resolveCrashReportsDir 返回可信的 crash-reports 目录。它必须不是符号链接、
+// 且解析后仍位于 gameDir 内——否则若该子目录被预置成指向游戏目录外的链接，
+// 直接对其 os.ReadDir 会枚举到外部目录，后续 PathWithin(dir, file) 还会以
+// 这个“外部真实目录”为根而误判为合法。
+func resolveCrashReportsDir(gameDir string) (string, bool) {
+	dir := filepath.Join(gameDir, "crash-reports")
+	if IsSymlink(dir) {
+		return "", false
+	}
+	if _, ok := PathWithin(gameDir, dir); !ok {
+		return "", false
+	}
+	return dir, true
+}
+
 // collectLatestCrashDump 收集本局最新的崩溃产物摘要。
 // 优先结构化的 crash-reports，其次 JVM hs_err；两者都按 notBefore（进程启动时间）
 // 过滤陈旧文件。任何候选都不可信，路径、体积、行级全部有界。
@@ -361,9 +376,11 @@ func collectLatestCrashDump(gameDir string, notBefore time.Time) (CrashDumpSumma
 	var minecraftCand, hsCand candidate
 	hasMC, hasHS := false, false
 
-	if p, n, _, ok := pickLatestDumpEntry(filepath.Join(gameDir, "crash-reports"),
-		"crash-", ".txt", notBefore); ok {
-		minecraftCand, hasMC = candidate{p, n}, true
+	if reportsDir, ok := resolveCrashReportsDir(gameDir); ok {
+		if p, n, _, found := pickLatestDumpEntry(reportsDir,
+			"crash-", ".txt", notBefore); found {
+			minecraftCand, hasMC = candidate{p, n}, true
+		}
 	}
 	if p, n, _, ok := pickLatestDumpEntry(gameDir,
 		"hs_err_pid", ".log", notBefore); ok {
