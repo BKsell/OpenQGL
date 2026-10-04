@@ -633,8 +633,10 @@ func (a *App) extractForgeInstaller() (string, error) {
 		return installerPath, nil
 	}
 
-	if err := os.WriteFile(installerPath, forgeInstallerJar, 0600); err != nil {
-		return "", fmt.Errorf("提取 ForgeInstaller 失败: %v", err)
+	// 安装器 jar 走原子私有写：避免进程在落盘途中崩溃留下半截 jar，并拒绝沿既有
+	// 符号链接把安装器写到缓存目录外。
+	if err := secureWritePrivateFile(installerPath, forgeInstallerJar); err != nil {
+		return "", fmt.Errorf("提取 ForgeInstaller 失败: %w", err)
 	}
 
 	return installerPath, nil
@@ -814,10 +816,11 @@ func (a *App) installOldForge(installerPath string, mcDir string, mcVersion stri
 			versionJSON["inheritsFrom"] = mcVersion
 		}
 
-		outputData, _ := json.MarshalIndent(versionJSON, "", "  ")
 		jsonFilePath := filepath.Join(versionFolder, targetVersion+".json")
-		if err := os.WriteFile(jsonFilePath, outputData, 0600); err != nil {
-			return fmt.Errorf("保存版本 JSON 失败: %v", err)
+		// 复用安装包 JSON 的 16MiB 读取上限作为落盘上限：输出来自该安装包，体积只会更小；
+		// 走有界原子私有写，Marshal/超量/落盘任一失败都返回，不再吞错或留下半截文件。
+		if err := writePrivateJSONBounded(jsonFilePath, versionJSON, maxInstallerJSONBytes); err != nil {
+			return fmt.Errorf("保存版本 JSON 失败: %w", err)
 		}
 
 		r.Close()
@@ -877,9 +880,12 @@ func (a *App) installOldForge(installerPath string, mcDir string, mcVersion stri
 			if vi["inheritsFrom"] == nil {
 				vi["inheritsFrom"] = mcVersion
 			}
-			outputData, _ := json.MarshalIndent(vi, "", "  ")
 			jsonFilePath := filepath.Join(versionFolder, targetVersion+".json")
-			os.WriteFile(jsonFilePath, outputData, 0600)
+			// 旧版 Forge 分支此前完全忽略序列化与落盘错误且为非原子写，统一收口到
+			// 有界原子私有写，任一失败都向上返回（安装后续会校验，避免带病继续）。
+			if err := writePrivateJSONBounded(jsonFilePath, vi, maxInstallerJSONBytes); err != nil {
+				return fmt.Errorf("保存版本 JSON 失败: %w", err)
+			}
 		}
 	}
 
@@ -1328,9 +1334,9 @@ func (a *App) ensureLauncherProfiles(mcDir string) {
 		profiles := map[string]interface{}{
 			"profiles": map[string]interface{}{},
 		}
-		data, _ := json.MarshalIndent(profiles, "", "  ")
-		// launcher_profiles.json 是启动器状态文件，原子私有写防半截写与符号链接写穿。
-		if err := secureWritePrivateFile(profilesPath, data); err != nil {
+		// launcher_profiles.json 是启动器状态文件，有界原子私有写防半截写与符号链接写穿；
+		// 序列化错误也不再被丢弃。
+		if err := writePrivateJSON(profilesPath, profiles); err != nil {
 			fmt.Printf("创建 launcher_profiles.json 失败: %v\n", err)
 		}
 	}
@@ -1544,16 +1550,11 @@ func (a *App) InstallFabric(mcVersion string, loaderVersion string) error {
 		return fmt.Errorf("创建版本目录失败: %v", err)
 	}
 
-	jsonData, err := json.MarshalIndent(profileJSON, "", "  ")
-	if err != nil {
-		a.cleanupFailedInstallation(mcDir, versionID)
-		return fmt.Errorf("序列化 JSON 失败: %v", err)
-	}
-
 	jsonPath := filepath.Join(versionDir, versionID+".json")
-	if err := os.WriteFile(jsonPath, jsonData, 0600); err != nil {
+	// 有界原子私有写：Marshal/超量/落盘任一失败都清理半成品并返回，不再原地截断写。
+	if err := writePrivateJSON(jsonPath, profileJSON); err != nil {
 		a.cleanupFailedInstallation(mcDir, versionID)
-		return fmt.Errorf("保存版本 JSON 失败: %v", err)
+		return fmt.Errorf("保存版本 JSON 失败: %w", err)
 	}
 
 	a.emitProgress("downloading", "下载 Fabric 库文件", 0, 0)
