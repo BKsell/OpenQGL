@@ -379,3 +379,25 @@ func TestCollectLatestCrashDumpSymlinkedReportsDir(t *testing.T) {
 		t.Fatal("不应跟随符号链接 crash-reports 去外部目录收集崩溃报告")
 	}
 }
+
+// 真实目录与“尚不存在”的 crash-reports 都应正常解析：前者用于枚举，后者在
+// 解析到已存在的 gameDir 祖先时也应放行（随后枚举为空），不能误伤正常启动。
+func TestResolveCrashReportsDirNormalAndMissing(t *testing.T) {
+	gameDir := t.TempDir()
+	// 尚不存在：按“已存在祖先”解析，应放行。
+	dir, ok := resolveCrashReportsDir(gameDir)
+	if !ok {
+		t.Fatal("尚不存在的 crash-reports 应可解析（枚举为空），不应被拒绝")
+	}
+	if filepath.Base(dir) != "crash-reports" {
+		t.Fatalf("返回目录名异常: %q", dir)
+	}
+	if err := os.MkdirAll(filepath.Join(gameDir, "crash-reports"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if dir, ok = resolveCrashReportsDir(gameDir); !ok {
+		t.Fatal("真实 crash-reports 目录应放行")
+	} else if _, statErr := os.Stat(dir); statErr != nil {
+		t.Fatalf("放行的目录应真实存在: %v", statErr)
+	}
+}
