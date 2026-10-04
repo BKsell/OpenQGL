@@ -335,8 +335,11 @@ func (a *App) downloadFileBounded(url string, destPath string, reportProgress bo
 		return fmt.Errorf("拒绝不安全的下载 URL（非 HTTPS）: %s", url)
 	}
 	dir := filepath.Dir(destPath)
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		return fmt.Errorf("创建目录失败 %s: %v", dir, err)
+	// 统一走 ensurePrivateDir：除创建外还会把已存在但权限过宽（如历史 0755）的目录
+	// 收敛到 0700。所有 downloadFile/downloadFileBounded/downloadVerifiedFile 都汇聚到这里，
+	// 各调用点不再各自 MkdirAll。
+	if err := ensurePrivateDir(dir); err != nil {
+		return fmt.Errorf("创建目录失败 %s: %w", dir, err)
 	}
 	if info, err := os.Stat(destPath); err == nil && info.Size() > 0 {
 		return nil
@@ -530,10 +533,10 @@ func (a *App) scanVersionFolder(versionFolder string, folderName string) Install
 	}
 	info := InstalledVersionInfo{FolderName: folderName, Version: gameVersion, Loader: loader, Type: versionType}
 	configDir := filepath.Join(versionFolder, "QGL")
-	if err := os.MkdirAll(configDir, 0700); err == nil {
+	if err := ensurePrivateDir(configDir); err == nil {
 		config := map[string]string{"type": versionType, "name": "", "version": gameVersion, "loader": loader}
-		configData, _ := json.MarshalIndent(config, "", "  ")
-		os.WriteFile(filepath.Join(configDir, "config.json"), configData, 0600)
+		// 版本标记 config.json 走有界原子私有写，并对已存在的宽权限目录统一收权到 0700。
+		_ = writePrivateJSON(filepath.Join(configDir, "config.json"), config)
 	}
 	return info
 }
@@ -1149,7 +1152,6 @@ func (a *App) getMirrorURLs(originalURL string) []string {
 func (a *App) downloadFromMirrors(urls []string, destPath string, maxBytes int64) bool {
 	for attempt, url := range urls {
 		os.Remove(destPath)
-		os.MkdirAll(filepath.Dir(destPath), 0700)
 		if err := a.downloadFileBounded(url, destPath, false, maxBytes); err != nil {
 			a.writeLog("下载失败 [%s]: %v", url, err)
 			// 切下一个镜像前做一次可中断的退避（mt_xor25 抖动 ±25%），
@@ -1202,7 +1204,7 @@ func (a *App) fixAssetsIndex(mcDir string, versionJSON *VersionJSON) {
 		return
 	}
 	a.writeLog("资源索引文件缺失，正在下载: %s", safeID)
-	os.MkdirAll(assetIndexDir, 0700)
+	// 目标目录由 downloadFromMirrors→downloadFileBounded 统一以 0700 创建/收权，无需预建。
 	urls := a.getMirrorURLs(versionJSON.AssetIndex.URL)
 	for i, u := range urls {
 		urls[i] = strings.Replace(u, "https://piston-meta.mojang.com/", "https://bmclapi2.bangbang93.com/", 1)
@@ -1254,7 +1256,7 @@ func (a *App) fixMissingAssets(mcDir string, assetIndexPath string) {
 		originalURL := fmt.Sprintf("https://resources.download.minecraft.net/%s/%s", sub, obj.Hash)
 		urls := a.getMirrorURLs(originalURL)
 		a.emitProgress("downloading", fmt.Sprintf("补全资源 %d/%d", i+1, total), int64(i+1), int64(total))
-		os.MkdirAll(filepath.Dir(objPath), 0700)
+		// objPath 的父目录由 downloadFromMirrors 内部统一按 0700 创建/收权。
 		if a.downloadFromMirrors(urls, objPath, maxAssetObjectBytes) {
 			downloadedCount++
 		}
@@ -1378,7 +1380,8 @@ func extractNativesWithLimits(jarPath string, destDir string, entryMax, totalMax
 }
 
 func (a *App) extractNativesFromJSON(mcDir string, nativesDir string, versionJSON *VersionJSON) {
-	os.MkdirAll(nativesDir, 0700)
+	// 解压根目录统一收权到 0700（历史上若存在 0755 的 natives 目录会被原样沿用）。
+	_ = ensurePrivateDir(nativesDir)
 	for _, lib := range versionJSON.Libraries {
 		if lib.Natives == nil {
 			continue
@@ -2456,7 +2459,7 @@ func (a *App) GetLaunchCommand(versionID string) (string, error) {
 	}
 	a.fixMissingLibraries(mcDir, versionJSON)
 	nativesDir := filepath.Join(versionDir, versionID+"-natives")
-	os.MkdirAll(nativesDir, 0700)
+	// natives 目录由 extractNativesFromJSON 内部统一以 0700 创建/收权。
 	a.extractNativesFromJSON(mcDir, nativesDir, versionJSON)
 	if empty, _ := isDirEmpty(nativesDir); empty {
 		a.ensureNativesForLoader(mcDir, versionID, versionDir, nativesDir, versionJSON)
