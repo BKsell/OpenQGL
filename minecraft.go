@@ -2009,7 +2009,6 @@ func (a *App) buildLaunchArgs(versionID string, versionJSON *VersionJSON, mcDir 
 	if isOldJSON {
 		jvmArgs = []string{
 			fmt.Sprintf("-Xmx%s", maxMem), fmt.Sprintf("-Xms%s", minMem),
-			"-Dlog4j2.formatMsgNoLookups=true",
 			fmt.Sprintf("-Djava.library.path=%s", nativesDir),
 			"-XX:+UnlockExperimentalVMOptions", "-XX:+UseG1GC",
 			"-XX:G1NewSizePercent=20", "-XX:G1ReservePercent=20",
@@ -2018,7 +2017,6 @@ func (a *App) buildLaunchArgs(versionID string, versionJSON *VersionJSON, mcDir 
 	} else {
 		jvmArgs = []string{
 			fmt.Sprintf("-Xmx%s", maxMem), fmt.Sprintf("-Xms%s", minMem),
-			"-Dlog4j2.formatMsgNoLookups=true",
 			fmt.Sprintf("-Djava.library.path=%s", nativesDir),
 			fmt.Sprintf("-Dorg.lwjgl.librarypath=%s", nativesDir),
 		}
@@ -2067,6 +2065,10 @@ func (a *App) buildLaunchArgs(versionID string, versionJSON *VersionJSON, mcDir 
 		jvmArgs = append(jvmArgs, "-Dfabric.classPathGroups=default:"+strings.Join(paths, ";"))
 	}
 	jvmArgs = deduplicateJvmArgs(jvmArgs)
+	// 安全缓解属性必须由启动器拍板：剔除来自启动器/版本 JSON/加载器的任何同名 -D
+	// （防止不可信 JSON 用后置 =false 覆盖 formatMsgNoLookups），并在 JVM 参数段
+	// 末尾统一下发 log4j 消息 lookup 关闭与 JNDI 远程 codebase 禁用。
+	jvmArgs = applyEnforcedJvmProperties(jvmArgs)
 
 	username := "Player"
 	currentUser, err := a.GetCurrentUser()
