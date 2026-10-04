@@ -359,3 +359,23 @@ func TestCollectLatestCrashDumpStaleIgnored(t *testing.T) {
 		t.Fatal("陈旧崩溃报告应被时间过滤忽略")
 	}
 }
+
+// crash-reports 子目录本身被做成指向游戏目录外的符号链接时，枚举会落到外部目录。
+// 该子目录必须先被拒绝（非符号链接、解析后仍在 gameDir 内），不能跟随去外部读文件。
+func TestCollectLatestCrashDumpSymlinkedReportsDir(t *testing.T) {
+	gameDir := t.TempDir()
+	outside := t.TempDir()
+	now := time.Now()
+	// 在外部目录放一个看似合法的崩溃报告。
+	writeDumpFile(t, outside, "crash-evil.txt", sampleMinecraftReport, now.Add(-time.Minute))
+	linkDir := filepath.Join(gameDir, "crash-reports")
+	if err := os.Symlink(outside, linkDir); err != nil {
+		t.Skipf("当前环境不允许创建符号链接，跳过: %v", err)
+	}
+	if dir, ok := resolveCrashReportsDir(gameDir); ok {
+		t.Fatalf("符号链接 crash-reports 必须被拒绝, got dir=%q", dir)
+	}
+	if _, ok := collectLatestCrashDump(gameDir, now.Add(-2*time.Hour)); ok {
+		t.Fatal("不应跟随符号链接 crash-reports 去外部目录收集崩溃报告")
+	}
+}
