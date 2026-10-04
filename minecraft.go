@@ -145,12 +145,15 @@ type LibArtifact struct {
 }
 
 type Rule struct {
-	Action string  `json:"action"`
-	OS     *RuleOS `json:"os"`
+	Action   string          `json:"action"`
+	OS       *RuleOS         `json:"os"`
+	Features map[string]bool `json:"features"`
 }
 
 type RuleOS struct {
-	Name string `json:"name"`
+	Name    string `json:"name"`
+	Arch    string `json:"arch"`
+	Version string `json:"version"`
 }
 
 type VersionDownloads struct {
@@ -998,11 +1001,14 @@ func (a *App) DownloadVersion(versionID string, versionURL string, customName st
 			}
 		}
 		if lib.Natives != nil {
-			nativeKey, ok := lib.Natives["windows"]
+			// 仍只选择 Windows 系列分类器，但按真实架构挑选 windows-x86 /
+			// windows-64 / windows-arm64，并正确替换 ${arch}（旧实现恒为 "64"，
+			// 在 32 位 / ARM64 上会取错本地库）。
+			winEnv := ruleEnv{osName: "windows", osArch: currentRuleEnv().osArch}
+			nativeKey, ok := resolveWindowsNativeKey(lib.Natives, winEnv)
 			if !ok {
 				continue
 			}
-			nativeKey = strings.ReplaceAll(nativeKey, "${arch}", "64")
 			if lib.Downloads.Classifiers == nil {
 				continue
 			}
@@ -1377,13 +1383,11 @@ func (a *App) extractNativesFromJSON(mcDir string, nativesDir string, versionJSO
 		if lib.Natives == nil {
 			continue
 		}
-		nativeKey := ""
-		if key, ok := lib.Natives["windows-64"]; ok {
-			nativeKey = strings.ReplaceAll(key, "${arch}", "64")
-		} else if key, ok := lib.Natives["windows"]; ok {
-			nativeKey = strings.ReplaceAll(key, "${arch}", "64")
-		}
-		if nativeKey == "" {
+		// 与下载阶段使用同一套“按真实架构选 Windows natives 键 + ${arch} 替换”
+		// 的规则，避免下载和解压挑到不同分类器（旧实现这里只看 windows-64/windows）。
+		winEnv := ruleEnv{osName: "windows", osArch: currentRuleEnv().osArch}
+		nativeKey, hasNative := resolveWindowsNativeKey(lib.Natives, winEnv)
+		if !hasNative {
 			continue
 		}
 		if lib.Downloads == nil || lib.Downloads.Classifiers == nil {
@@ -1608,44 +1612,11 @@ var logProgressKeywords = []struct {
 }
 
 func shouldIncludeArg(arg map[string]interface{}) bool {
-	rulesRaw, ok := arg["rules"]
-	if !ok {
-		return true
-	}
-	rules, ok := rulesRaw.([]interface{})
-	if !ok {
-		return true
-	}
-	for _, ruleRaw := range rules {
-		rule, ok := ruleRaw.(map[string]interface{})
-		if !ok {
-			continue
-		}
-		action, _ := rule["action"].(string)
-		if action == "" {
-			continue
-		}
-		if features, hasFeatures := rule["features"]; hasFeatures {
-			if featMap, ok := features.(map[string]interface{}); ok {
-				if _, isDemo := featMap["is_demo_user"]; isDemo {
-					return false
-				}
-			}
-		}
-		osRule, hasOS := rule["os"].(map[string]interface{})
-		matchesOS := true
-		if hasOS {
-			osName, _ := osRule["name"].(string)
-			matchesOS = osName == "windows"
-		}
-		if action == "allow" && !matchesOS {
-			return false
-		}
-		if action == "disallow" && matchesOS {
-			return false
-		}
-	}
-	return true
+	// 条件化参数统一走 ruleengine：裸 map 的 rules 被翻译成通用规则后按 Mojang
+	// 语义评估（os.name/arch/version + features），与库过滤共用同一内核，避免
+	// 两份实现漂移。旧实现只认 windows、且 features 只要出现 is_demo_user 键
+	// （无论真假值）就拒绝，会把 {"is_demo_user":false} 的正常参数误删。
+	return argumentObjectAllowed(arg, currentRuleEnv())
 }
 
 func deduplicateJvmArgs(args []string) []string {
@@ -1731,23 +1702,9 @@ func (a *App) GetDownloadProgress() DownloadProgress { return a.downloadProgress
 func (a *App) isVersionIsolated() bool              { return a.IsVersionIsolation() }
 
 func (a *App) shouldIncludeLib(lib Library) bool {
-	if len(lib.Rules) == 0 {
-		return true
-	}
-	allow := false
-	for _, rule := range lib.Rules {
-		osMatch := true
-		if rule.OS != nil {
-			osMatch = rule.OS.Name == "windows"
-		}
-		if rule.Action == "allow" && osMatch {
-			allow = true
-		}
-		if rule.Action == "disallow" && osMatch {
-			allow = false
-		}
-	}
-	return allow
+	// 库规则统一走 ruleengine：按 Mojang 语义评估 os.name/arch/version 与 features，
+	// 不再只判 os.name=="windows"（旧逻辑会误选 osx/linux 专属库、忽略架构与版本）。
+	return libraryRulesAllow(lib.Rules, currentRuleEnv())
 }
 
 func libGroupArtifact(name string) string {
