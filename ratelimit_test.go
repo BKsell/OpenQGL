@@ -10,7 +10,7 @@ func TestRateLimiterBurst(t *testing.T) {
 	l := newRateLimiter(3, 50*time.Millisecond)
 	for i := 0; i < 3; i++ {
 		if !l.Allow("k") {
-			t.Fatalf("前 %d 次应放行", i+1)
+			t.Fatalf("第 %d 次应放行", i+1)
 		}
 	}
 	if l.Allow("k") {
@@ -36,7 +36,7 @@ func TestRateLimiterWindowReset(t *testing.T) {
 	}
 }
 
-// TestRateLimiterPurgesExpiredKeys 验证旧实现的内存无界增长问题已修复：
+// TestRateLimiterPurgesExpiredKeys 验证旧实现的内存无限增长问题已修复：
 // 大量唯一 key 的窗口过期后，下一次 Allow 触发清扫，过期项必须被回收。
 func TestRateLimiterPurgesExpiredKeys(t *testing.T) {
 	l := newRateLimiter(1, 10*time.Millisecond)
@@ -68,5 +68,53 @@ func TestRateLimiterManualPurge(t *testing.T) {
 	}
 	if _, ok := l.windows["b"]; !ok {
 		t.Fatal("有效窗口 b 应保留")
+	}
+}
+
+func TestRateLimiterRemaining(t *testing.T) {
+	l := newRateLimiter(3, time.Hour)
+	// 从未见过的 key 剩余额度等于 maxBurst。
+	if r := l.Remaining("new"); r != 3 {
+		t.Fatalf("新 key 剩余应为 3，实际 %d", r)
+	}
+	l.Allow("k")
+	l.Allow("k")
+	if r := l.Remaining("k"); r != 1 {
+		t.Fatalf("放行 2 次后剩余应为 1，实际 %d", r)
+	}
+	l.Allow("k")
+	if r := l.Remaining("k"); r != 0 {
+		t.Fatalf("打满后剩余应为 0，实际 %d", r)
+	}
+	// Remaining 不产生计数副作用：连续调用结果一致。
+	if r := l.Remaining("k"); r != 0 {
+		t.Fatalf("Remaining 不应消耗额度，实际 %d", r)
+	}
+}
+
+func TestRateLimiterRetryAfter(t *testing.T) {
+	l := newRateLimiter(2, 40*time.Millisecond)
+	// 仍有额度时无需等待。
+	l.Allow("k")
+	if d := l.RetryAfter("k"); d != 0 {
+		t.Fatalf("有剩余额度时 RetryAfter 应为 0，实际 %v", d)
+	}
+	// 未知 key 也无需等待。
+	if d := l.RetryAfter("nope"); d != 0 {
+		t.Fatalf("未知 key RetryAfter 应为 0，实际 %v", d)
+	}
+	// 打满后应给出正数等待时长，且不超过窗口长度。
+	l.Allow("k")
+	d := l.RetryAfter("k")
+	if d <= 0 {
+		t.Fatal("被限流时 RetryAfter 应为正时长")
+	}
+	if d > 40*time.Millisecond {
+		t.Fatalf("等待时长不应超过窗口，实际 %v", d)
+	}
+	// 窗口过期后归零。
+	time.Sleep(50 * time.Millisecond)
+	if d := l.RetryAfter("k"); d != 0 {
+		t.Fatalf("窗口过期后应归零，实际 %v", d)
 	}
 }
