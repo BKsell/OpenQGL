@@ -182,7 +182,8 @@ func (a *App) writeLog(format string, args ...interface{}) {
 
 	if a.launchLogPath != "" {
 		dir := filepath.Dir(a.launchLogPath)
-		os.MkdirAll(dir, 0700)
+		// 日志目录同样收权到 0700（已存在的宽权限目录一并收敛），失败则放弃本次日志落盘。
+		_ = ensurePrivateDir(dir)
 		f2, err2 := os.OpenFile(a.launchLogPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 		if err2 == nil {
 			f2.WriteString(logLine)
@@ -841,7 +842,11 @@ func (a *App) installOldForge(installerPath string, mcDir string, mcVersion stri
 				return fmt.Errorf("安装器中路径不安全，跳过")
 			}
 			libPath := filepath.Join(mcDir, "libraries", filepath.FromSlash(safePathStr))
-			os.MkdirAll(filepath.Dir(libPath), 0700)
+			// 内嵌库用 os.OpenFile 直接落盘，必须先确保父目录存在且收权 0700；
+			// 原先忽略 MkdirAll 错误会让随后的 OpenFile 报一个更难定位的失败。
+			if err := ensurePrivateDir(filepath.Dir(libPath)); err != nil {
+				return fmt.Errorf("创建安装器内嵌库目录失败: %w", err)
+			}
 
 			for _, f := range r.File {
 				if f.Name == safeFilePath {
@@ -1167,7 +1172,11 @@ func (a *App) ensureForgeMappings(installerPath string, mcDir string) {
 	a.writeLog("下载 URL: %s", mappingsURL)
 	a.writeLog("保存到: %s", targetPath)
 
-	os.MkdirAll(filepath.Dir(targetPath), 0700)
+	// 这里是手写流式下载（os.OpenFile 直接落盘），由本处显式确保目录 0700 并收权。
+	if err := ensurePrivateDir(filepath.Dir(targetPath)); err != nil {
+		a.writeLog("创建目标目录失败: %v", err)
+		return
+	}
 
 	// 安全修复：使用 Go 原生 HTTP 下载，替代 PowerShell 命令，防止命令注入
 	client := safeHTTPClient()
@@ -1308,8 +1317,6 @@ func (a *App) downloadForgeMappings(mcDir string, mcVersion string, installerPat
 
 	mappingsURL = strings.Replace(mappingsURL, "https://piston-data.mojang.com/", "https://bmclapi2.bangbang93.com/", 1)
 	mappingsURL = strings.Replace(mappingsURL, "https://launcher.mojang.com/", "https://bmclapi2.bangbang93.com/", 1)
-
-	os.MkdirAll(filepath.Dir(targetPath), 0700)
 
 	tempPath := targetPath + ".tmp"
 	fmt.Printf("下载 Forge Mappings (%s): %s\n", mcpVersion, mappingsURL)
@@ -1622,7 +1629,6 @@ func (a *App) downloadFabricLibraries(profileJSON map[string]interface{}, mcDir 
 		}
 		destPath := filepath.Join(libsDir, filepath.FromSlash(safePath))
 
-		os.MkdirAll(filepath.Dir(destPath), 0700)
 		// 走带官方 sha1 锚点的下载（缺失时退化为侧车 UMFS/SHA512/SHA1 复核），
 		// 已存在文件也会复核，杜绝“预置坏 jar + os.Stat 跳过”。
 		if err := a.downloadVerifiedFile(url, destPath, strings.TrimSpace(sha1), false); err != nil {
