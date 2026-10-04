@@ -93,14 +93,9 @@ func resolveManagedModPath(mcDir, p string) (string, bool) {
 		// 全局 mods 目录顶层文件。
 		fileName = segs[1]
 	case len(segs) == 4 && strings.EqualFold(segs[0], versionsSegment) &&
-		strings.EqualFold(segs[2], modsDirSegment):
-		// 版本隔离 mods 目录；版本段必须是真实单段名（Clean 后 ".." 已被折叠，
-		// 这里再排除空段与 "."），防止 versions/../mods 之类的畸形拼接触底。
-		versionSeg := segs[1]
-		if versionSeg == "" || versionSeg == "." || versionSeg == ".." ||
-			strings.ContainsAny(versionSeg, `/\`) {
-			return "", false
-		}
+		strings.EqualFold(segs[2], modsDirSegment) && safeVersionSegment(segs[1]):
+		// 版本隔离 mods 目录；版本段必须是真实单段名（Clean 已折叠 ".."，
+		// safeVersionSegment 再排除空段 / "." / 分隔符），防止 versions/../mods 触底。
 		fileName = segs[3]
 	default:
 		return "", false
@@ -110,6 +105,49 @@ func resolveManagedModPath(mcDir, p string) (string, bool) {
 		return "", false
 	}
 	return abs, true
+}
+
+// safeVersionSegment 校验隔离布局中的版本目录段：Clean 已折叠 ".."，这里再排除
+// 空段、"."/".." 与任何分隔符，避免 versions/../mods 之类畸形拼接触底。
+func safeVersionSegment(seg string) bool {
+	if seg == "" || seg == "." || seg == ".." {
+		return false
+	}
+	return !strings.ContainsAny(seg, `/\`)
+}
+
+// resolveManagedModsDir 判定 p 是否为某个“受管 mods 目录”本身（用于下载落盘目录
+// 校验）。接受精确布局：
+//
+//	<mcDir>/mods                    -> segs = [mods]
+//	<mcDir>/versions/<v>/mods       -> segs = [versions, v, mods]
+//
+// mods 目录的上级、libraries、saves、mcDir 根等一律拒绝：下载队列的保存目录只能由
+// 程序按版本隔离策略决定，不能由渲染层指到 .minecraft 内任意位置投放 jar。
+func resolveManagedModsDir(mcDir, p string) (string, bool) {
+	root, err := canonicalAbs(mcDir)
+	if err != nil {
+		return "", false
+	}
+	abs, err := canonicalAbs(p)
+	if err != nil {
+		return "", false
+	}
+	if !PathWithinRoot(abs, root) || abs == root {
+		return "", false
+	}
+	rel := abs[len(root)+1:]
+	segs := strings.Split(rel, string(os.PathSeparator))
+
+	switch {
+	case len(segs) == 1 && strings.EqualFold(segs[0], modsDirSegment):
+		return abs, true
+	case len(segs) == 3 && strings.EqualFold(segs[0], versionsSegment) &&
+		strings.EqualFold(segs[2], modsDirSegment) && safeVersionSegment(segs[1]):
+		return abs, true
+	default:
+		return "", false
+	}
 }
 
 // sameManagedModDir 报告 rename 的源与目标是否归一化后位于同一个受管 mods 目录，
