@@ -31,6 +31,10 @@ const bcryptCost = 12
 // maxBackgroundImageBytes 限制背景图片最大 10MB，防止恶意 CDN 塞个多 G 文件。
 const maxBackgroundImageBytes = 10 << 20
 
+// maxBackgroundDataURLBytes 是背景图转 base64 读入内存时的硬上限（50MiB）。
+// 刻意取宽，只拦会把内存打爆的异常文件；超限绝不读入。
+const maxBackgroundDataURLBytes int64 = 50 << 20
+
 // UserInfo 用户信息
 type UserInfo struct {
 	Username    string   `json:"username"`
@@ -190,14 +194,10 @@ func (a *App) GetUserType(username string) UserType {
 	}
 	userDir := filepath.Join(a.GetUsersDir(), username)
 	typePath := filepath.Join(userDir, "type.json")
-	data, err := os.ReadFile(typePath)
-	if err != nil {
-		return UserTypeOffline
-	}
 	var typeData struct {
 		Type UserType `json:"type"`
 	}
-	if err := json.Unmarshal(data, &typeData); err != nil {
+	if err := readPrivateStoreJSON(typePath, &typeData, "用户类型文件"); err != nil {
 		return UserTypeOffline
 	}
 	return typeData.Type
@@ -388,7 +388,7 @@ func (a *App) GetExternalAuthData(username string) (*ExternalAuthData, error) {
 		return nil, err
 	}
 	userDir := filepath.Join(a.GetUsersDir(), username)
-	data, err := os.ReadFile(filepath.Join(userDir, "external_auth.json"))
+	data, err := readPrivateStoreBytes(filepath.Join(userDir, "external_auth.json"), "外置认证数据")
 	if err != nil {
 		return nil, fmt.Errorf("读取外置认证数据失败: %w", err)
 	}
@@ -494,13 +494,9 @@ func (a *App) LoginUser(username string, password string) error {
 		}
 		userDir := filepath.Join(a.GetUsersDir(), username)
 		pwdPath := filepath.Join(userDir, "password.json")
-		pwdBytes, err := os.ReadFile(pwdPath)
+		pwdData, err := readPasswordData(pwdPath)
 		if err != nil {
 			return fmt.Errorf("读取密码文件失败: %w", err)
-		}
-		var pwdData PasswordData
-		if err := json.Unmarshal(pwdBytes, &pwdData); err != nil {
-			return fmt.Errorf("解析密码文件失败: %w", err)
 		}
 		// 安全加固: 使用 bcrypt 验证密码
 		if !verifyPassword(password, pwdData.PasswordHash) {
@@ -528,13 +524,9 @@ func (a *App) UnlockGuest(securityPassword string) error {
 	}
 	userDir := filepath.Join(a.GetUsersDir(), currentUser.Username)
 	pwdPath := filepath.Join(userDir, "password.json")
-	pwdBytes, err := os.ReadFile(pwdPath)
+	pwdData, err := readPasswordData(pwdPath)
 	if err != nil {
 		return fmt.Errorf("读取安全密码文件失败: %w", err)
-	}
-	var pwdData PasswordData
-	if err := json.Unmarshal(pwdBytes, &pwdData); err != nil {
-		return fmt.Errorf("解析安全密码文件失败: %w", err)
 	}
 	// 安全加固: 使用 bcrypt 验证密码
 	if !verifyPassword(securityPassword, pwdData.PasswordHash) {
@@ -607,39 +599,29 @@ func (a *App) UserHasPassword(username string) (bool, error) {
 	}
 	userDir := filepath.Join(a.GetUsersDir(), username)
 	pwdPath := filepath.Join(userDir, "password.json")
-	info, err := os.Stat(pwdPath)
+	pwdData, err := readPasswordData(pwdPath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return false, nil
 		}
-		return false, fmt.Errorf("检查密码文件失败: %w", err)
-	}
-	if info.Size() == 0 {
-		return false, nil
-	}
-	pwdBytes, err := os.ReadFile(pwdPath)
-	if err != nil {
+		// 体积超限 / 符号链接 / 解析损坏一律 fail-closed 阻断登录，绝不能把一个
+		// 被异常改写的密码文件当成“未设密码”，否则本地预置畸形文件即可绕过口令。
 		return false, fmt.Errorf("读取密码文件失败: %w", err)
-	}
-	var pwdData PasswordData
-	if err := json.Unmarshal(pwdBytes, &pwdData); err != nil {
-		return false, nil
 	}
 	return pwdData.PasswordHash != "", nil
 }
 
 func (a *App) GetGlobalConfig() (*GlobalConfig, error) {
 	configPath := filepath.Join(a.GetQGLDir(), "config.json")
-	data, err := os.ReadFile(configPath)
-	if err != nil {
+	var config GlobalConfig
+	if err := readPrivateStoreJSON(configPath, &config, "全局配置"); err != nil {
 		if os.IsNotExist(err) {
 			return &GlobalConfig{}, nil
 		}
 		return nil, fmt.Errorf("读取全局配置失败: %w", err)
 	}
-	var config GlobalConfig
-	if err := json.Unmarshal(data, &config); err != nil {
-		return nil, fmt.Errorf("解析全局配置失败: %w", err)
+	if err := validateLoadedGlobalConfig(&config); err != nil {
+		return nil, fmt.Errorf("全局配置不安全: %w", err)
 	}
 	return &config, nil
 }
@@ -666,16 +648,15 @@ func (a *App) GetUserConfig(username string) (*UserConfig, error) {
 		return nil, err
 	}
 	configPath := filepath.Join(a.GetUsersDir(), username, "config.json")
-	data, err := os.ReadFile(configPath)
-	if err != nil {
+	var config UserConfig
+	if err := readPrivateStoreJSON(configPath, &config, "用户配置"); err != nil {
 		if os.IsNotExist(err) {
 			return &UserConfig{}, nil
 		}
 		return nil, fmt.Errorf("读取用户配置失败: %w", err)
 	}
-	var config UserConfig
-	if err := json.Unmarshal(data, &config); err != nil {
-		return nil, fmt.Errorf("解析用户配置失败: %w", err)
+	if err := validateLoadedUserConfig(&config); err != nil {
+		return nil, fmt.Errorf("用户配置不安全: %w", err)
 	}
 	return &config, nil
 }
@@ -1022,17 +1003,11 @@ func (a *App) GetCachedBingImage() string {
 }
 
 func (a *App) fileToDataURL(path string) (string, error) {
-	// 安全加固: 限制文件大小，防止内存溢出
-	info, err := os.Stat(path)
+	// 走统一的有界读取原语：stat 声明拦截 + LimitReader+1 兜底 + 拒绝符号链接/特殊文件，
+	// 防止背景图被换成设备/管道或塞成超大文件把进程内存打爆。
+	data, err := readBoundedFile(path, maxBackgroundDataURLBytes)
 	if err != nil {
 		return "", err
-	}
-	if info.Size() > 50*1024*1024 { // 50MB 限制
-		return "", fmt.Errorf("文件过大")
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return err
 	}
 	ext := strings.ToLower(filepath.Ext(path))
 	mimeMap := map[string]string{
