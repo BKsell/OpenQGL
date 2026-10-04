@@ -414,8 +414,8 @@ func (a *App) AddModToDownloadList(versionID string, savePath string) error {
 		savePath = filepath.Join(mcDir, "mods")
 	}
 
-	if err := os.MkdirAll(savePath, 0700); err != nil {
-		return fmt.Errorf("创建保存目录失败: %v", err)
+	if err := ensurePrivateDir(savePath); err != nil {
+		return fmt.Errorf("创建保存目录失败: %w", err)
 	}
 
 	// 文件名来自 Modrinth 服务器元数据，filepath.Base 只能剥目录，挡不住控制字符、
@@ -687,23 +687,14 @@ func (a *App) ImportMod(versionID string) error {
 		modsDir = filepath.Join(mcDir, "mods")
 	}
 
-	if err := os.MkdirAll(modsDir, 0700); err != nil {
-		return fmt.Errorf("创建 Mod 目录失败: %v", err)
+	// 纵深防御：无论是否版本隔离，导入落点都必须解析在 .minecraft 内，
+	// 防止 versionID / 配置异常把 jar 写到游戏目录之外。
+	if _, ok := PathWithin(mcDir, modsDir); !ok {
+		return fmt.Errorf("Mods 目录越界，拒绝导入: %s", modsDir)
 	}
-
-	src, err := os.Open(path)
-	if err != nil {
-		return fmt.Errorf("打开源文件失败: %v", err)
-	}
-	defer src.Close()
-
-	// 安全：用户手动导入的 jar 也别让它超过 2 GiB，避免被人塞个 4GB 的奇怪东西
-	srcStat, err := src.Stat()
-	if err != nil {
-		return fmt.Errorf("读取源文件信息失败: %v", err)
-	}
-	if srcStat.Size() <= 0 || srcStat.Size() > maxDownloadBytes {
-		return fmt.Errorf("Mod 文件大小异常（%d 字节），拒绝导入", srcStat.Size())
+	// 0700 建目录；目录已存在但权限偏宽时也一并收权（MkdirAll 不会收权）。
+	if err := ensurePrivateDir(modsDir); err != nil {
+		return fmt.Errorf("创建 Mod 目录失败: %w", err)
 	}
 
 	// 用户手动导入的 jar 完全没有下载链的哈希 / 主机白名单背书，更要在落进
@@ -722,15 +713,12 @@ func (a *App) ImportMod(versionID string) error {
 		return fmt.Errorf("Mod 文件已存在: %s", fileName)
 	}
 
-	dst, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
-	if err != nil {
-		return fmt.Errorf("创建目标文件失败: %v", err)
-	}
-	defer dst.Close()
-
-	if _, err := io.Copy(dst, src); err != nil {
-		os.Remove(destPath)
-		return fmt.Errorf("复制文件失败: %v", err)
+	// 统一走安全复制内核，替换旧的 os.Open + io.Copy + OpenFile(O_TRUNC)：
+	// 源拒绝符号链接 / 特殊文件；LimitReader+1 有界复制（上限沿用下载链
+	// maxDownloadBytes，stat 之后文件继续增长也会在多读 1 字节时被拦下，堵 TOCTOU）；
+	// 目标写 0600 临时文件 + fsync + 原子 rename，杜绝跟随预置符号链接写穿与半截文件。
+	if err := copyFileSecure(path, destPath, privateFilePerm, maxDownloadBytes); err != nil {
+		return fmt.Errorf("复制 Mod 文件失败: %w", err)
 	}
 
 	return nil
@@ -759,8 +747,8 @@ func (a *App) downloadModItem(item *DownloadItem) error {
 		return fmt.Errorf("Mod 保存路径越界，必须位于 .minecraft 目录内: %s", destDir)
 	}
 
-	if err := os.MkdirAll(destDir, 0700); err != nil {
-		return fmt.Errorf("创建 mods 目录失败: %v", err)
+	if err := ensurePrivateDir(destDir); err != nil {
+		return fmt.Errorf("创建 mods 目录失败: %w", err)
 	}
 
 	// 安全：filepath.Base 剥离 API 返回文件名里的目录组件，SanitizeFilename
