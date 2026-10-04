@@ -2252,78 +2252,60 @@ func filterUntrustedJvmArgs(args []string) (safe []string, blocked []string, tru
 	return safe, blocked, truncated
 }
 
-func resolveJVMArg(arg interface{}, nativesDir, mcDir, classpath, versionID string) []string {
+// expandConditionalArg 展开 arguments 数组里的一个元素，JVM 参数与游戏参数共用同一套逻辑：
+// 普通字符串逐占位替换后成 1 条；带 rules 的对象先用 shouldIncludeArg 按当前环境
+// 判定，再把其 value（字符串或字符串数组）逐项展开替换；不符合规则 / 取值畸形返回 nil。
+// 历史上 resolveJVMArg 与 resolveGameArg 各写一份且都内联手写替换循环，这里收口
+// 成一份，避免两份实现再漂移。
+func expandConditionalArg(arg interface{}, repl map[string]string) []string {
+	apply := func(s string) string {
+		for k, v := range repl {
+			s = strings.ReplaceAll(s, k, v)
+		}
+		return s
+	}
 	switch v := arg.(type) {
 	case string:
-		return []string{applyReplacements(v, nativesDir, mcDir, classpath, versionID)}
+		return []string{apply(v)}
 	case map[string]interface{}:
 		if !shouldIncludeArg(v) {
 			return nil
 		}
-		if values, ok := v["value"]; ok {
-			switch val := values.(type) {
-			case string:
-				return []string{applyReplacements(val, nativesDir, mcDir, classpath, versionID)}
-			case []interface{}:
-				var result []string
-				for _, item := range val {
-					if s, ok := item.(string); ok {
-						result = append(result, applyReplacements(s, nativesDir, mcDir, classpath, versionID))
-					}
+		values, ok := v["value"]
+		if !ok {
+			return nil
+		}
+		switch val := values.(type) {
+		case string:
+			return []string{apply(val)}
+		case []interface{}:
+			var result []string
+			for _, item := range val {
+				if s, isString := item.(string); isString {
+					result = append(result, apply(s))
 				}
-				return result
 			}
+			return result
 		}
 	}
 	return nil
 }
 
-func applyReplacements(s, nativesDir, mcDir, classpath, versionID string) string {
-	repl := map[string]string{
-		"${natives_directory}": nativesDir, "${library_directory}": filepath.Join(mcDir, "libraries"),
-		"${libraries_directory}": filepath.Join(mcDir, "libraries"), "${classpath_separator}": ";",
-		"${classpath}": classpath, "${launcher_name}": "QGL",
-		"${launcher_version}": "1.0.0", "${version_name}": versionID,
-	}
-	for k, v := range repl {
-		s = strings.ReplaceAll(s, k, v)
-	}
-	return s
+func resolveJVMArg(arg interface{}, nativesDir, mcDir, classpath, versionID string) []string {
+	return expandConditionalArg(arg, map[string]string{
+		"${natives_directory}":  nativesDir,
+		"${library_directory}":  filepath.Join(mcDir, "libraries"),
+		"${libraries_directory}": filepath.Join(mcDir, "libraries"),
+		"${classpath_separator}": ";",
+		"${classpath}":         classpath,
+		"${launcher_name}":     "QGL",
+		"${launcher_version}":  "1.0.0",
+		"${version_name}":      versionID,
+	})
 }
 
 func resolveGameArg(arg interface{}, repl map[string]string) []string {
-	switch v := arg.(type) {
-	case string:
-		for k, rep := range repl {
-			v = strings.ReplaceAll(v, k, rep)
-		}
-		return []string{v}
-	case map[string]interface{}:
-		if !shouldIncludeArg(v) {
-			return nil
-		}
-		if values, ok := v["value"]; ok {
-			switch val := values.(type) {
-			case string:
-				for k, rep := range repl {
-					val = strings.ReplaceAll(val, k, rep)
-				}
-				return []string{val}
-			case []interface{}:
-				var result []string
-				for _, item := range val {
-					if s, ok := item.(string); ok {
-						for k, rep := range repl {
-							s = strings.ReplaceAll(s, k, rep)
-						}
-						result = append(result, s)
-					}
-				}
-				return result
-			}
-		}
-	}
-	return nil
+	return expandConditionalArg(arg, repl)
 }
 
 // sanitizePathComponent 验证路径组件不含路径遍历字符
@@ -2490,6 +2472,23 @@ func (a *App) GetLaunchCommand(versionID string) (string, error) {
 	return strings.Join(cmdParts, " "), nil
 }
 
+// dumpCrashContext 在判定崩溃后读取“本局”（startTime 之后）新生成的
+// crash-reports / hs_err 崩溃产物摘要，追加到崩溃原因；找不到或读取失败都静默
+// 退化为原原因，绝不阻塞崩溃上报。gameDir 即游戏进程的工作目录（cmd.Dir）。
+func (a *App) dumpCrashContext(reason, gameDir string, startTime time.Time) string {
+	if gameDir == "" {
+		return reason
+	}
+	if s, ok := collectLatestCrashDump(gameDir, startTime); ok {
+		extra := renderCrashDumpSummary(s)
+		if reason == "" {
+			return extra
+		}
+		return reason + "\n" + extra
+	}
+	return reason
+}
+
 func (a *App) watchGameProcess(cmd *exec.Cmd, stdoutPipe io.Reader, stderrPipe io.Reader, pid int, processStartTime time.Time) {
 	runtime.EventsEmit(a.ctx, "launchStatus", "launching")
 	crashDetected, windowFound := false, false
@@ -2591,6 +2590,10 @@ func (a *App) watchGameProcess(cmd *exec.Cmd, stdoutPipe io.Reader, stderrPipe i
 					}
 					logContext = "\n\n最近日志:\n" + buildCrashContext(recentLines[start:])
 				}
+				// 控制台没说清真因时，补读本局 crash-reports / hs_err 崩溃产物。
+				if dump := a.dumpCrashContext("", cmd.Dir, processStartTime); dump != "" {
+					logContext += "\n\n崩溃诊断:\n" + dump
+				}
 				if elapsed < 3*time.Second {
 					runtime.EventsEmit(a.ctx, "launchStatus", "crashed")
 					runtime.EventsEmit(a.ctx, "crashInfo", sanitizeLogLine(fmt.Sprintf("游戏启动失败，进程立即退出 (退出码: %d)%s", exitCode, logContext)))
@@ -2607,6 +2610,7 @@ func (a *App) watchGameProcess(cmd *exec.Cmd, stdoutPipe io.Reader, stderrPipe i
 			case <-exitChan:
 			case <-time.After(5 * time.Second):
 			}
+			crashReason = a.dumpCrashContext(crashReason, cmd.Dir, processStartTime)
 			runtime.EventsEmit(a.ctx, "launchStatus", "crashed")
 			runtime.EventsEmit(a.ctx, "crashInfo", sanitizeLogLine(crashReason))
 			return
