@@ -533,6 +533,24 @@ func validateMrpackManifest(m *ModrinthModpackManifest) error {
 			return mrpackReject(why, fmt.Sprintf("files[%d](%s)", i, rel))
 		}
 		f.Downloads = downloads
+
+		// env 只允许 client/server 两个键，取值仅限 required/optional/unsupported；
+		// 未知键 / 未知取值就地清除（而非拒绝），避免第三方塞自定义键影响客户端选取。
+		if f.Env != nil {
+			cleaned := make(map[string]string, 2)
+			for _, key := range []string{mrpackEnvKeyClient, mrpackEnvKeyServer} {
+				if raw, present := f.Env[key]; present {
+					if norm := normalizeMrpackEnvSide(raw); norm != "" {
+						cleaned[key] = norm
+					}
+				}
+			}
+			if len(cleaned) == 0 {
+				f.Env = nil
+			} else {
+				f.Env = cleaned
+			}
+		}
 	}
 	return nil
 }
