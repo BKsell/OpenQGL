@@ -4,10 +4,14 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
+	"io"
 	"os"
 	"strings"
 )
+
+// maxAuthlibMetaBytes 是 authlib 侧车元数据（.sha256meta）读取上限：正常仅数百字节，
+// 取 1MiB 极宽值，只拦被改写成异常巨大文件导致的整体读入 OOM。
+const maxAuthlibMetaBytes int64 = 1 << 20
 
 // authlib-injector.jar 是通过 -javaagent 加载进游戏 JVM 的可执行字节码，
 // 一旦被篡改 / 替换就是代码执行（RCE）。它的信任锚是官方 latest.json 给出的
@@ -30,11 +34,9 @@ func authlibMetaPath(jarPath string) string {
 // loadAuthlibMeta 读取侧车；不存在或内容损坏时 ok=false（调用方应视为不可信）。
 func loadAuthlibMeta(jarPath string) (authlibMeta, bool) {
 	var m authlibMeta
-	b, err := os.ReadFile(authlibMetaPath(jarPath))
-	if err != nil {
-		return m, false
-	}
-	if err := json.Unmarshal(b, &m); err != nil {
+	// 侧车是本地小 JSON，走有界读取：缺失 / 损坏 / 被改成超大体积都判为不可信，
+	// 绝不无界整体读入；超量由 readLocalJSONBounded 写安全审计。
+	if err := readLocalJSONBounded(authlibMetaPath(jarPath), &m, maxAuthlibMetaBytes, "authlib侧车元数据"); err != nil {
 		return m, false
 	}
 	if m.SHA256 == "" || m.Size <= 0 {
@@ -46,33 +48,28 @@ func loadAuthlibMeta(jarPath string) (authlibMeta, bool) {
 // saveAuthlibMeta 在 jar 已通过官方 SHA-256 校验后原子写入侧车。
 func saveAuthlibMeta(jarPath, expectedSHA256 string, size int64) error {
 	m := authlibMeta{SHA256: expectedSHA256, Size: size}
-	b, err := json.MarshalIndent(m, "", "  ")
-	if err != nil {
-		return err
-	}
-	tmp := authlibMetaPath(jarPath) + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
-		return err
-	}
-	if err := os.Rename(tmp, authlibMetaPath(jarPath)); err != nil {
-		_ = os.Remove(tmp)
-		return err
-	}
-	return nil
+	// 统一走有界原子私有写内核（0600 + fsync + rename + 拒符号链接 + 父目录收权），
+	// 替换此前手写 tmp→rename（缺 fsync / 符号链接防护）。
+	return writePrivateJSON(authlibMetaPath(jarPath), m)
 }
 
 func removeAuthlibMeta(jarPath string) {
 	_ = os.Remove(authlibMetaPath(jarPath))
 }
 
-// sha256FileHex 计算文件的 SHA-256 小写十六进制摘要。
+// sha256FileHex 以流式方式计算文件的 SHA-256 小写十六进制摘要，
+// 不再把整个 jar 读进内存（jar 可能数 MB～数十 MB）。
 func sha256FileHex(path string) (string, error) {
-	data, err := os.ReadFile(path)
+	f, err := os.Open(path)
 	if err != nil {
 		return "", err
 	}
-	sum := sha256.Sum256(data)
-	return hex.EncodeToString(sum[:]), nil
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 // verifyAuthlibJar 校验已存在的 jar 是否可直接复用：
