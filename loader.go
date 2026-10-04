@@ -1329,7 +1329,10 @@ func (a *App) ensureLauncherProfiles(mcDir string) {
 			"profiles": map[string]interface{}{},
 		}
 		data, _ := json.MarshalIndent(profiles, "", "  ")
-		os.WriteFile(profilesPath, data, 0600)
+		// launcher_profiles.json 是启动器状态文件，原子私有写防半截写与符号链接写穿。
+		if err := secureWritePrivateFile(profilesPath, data); err != nil {
+			fmt.Printf("创建 launcher_profiles.json 失败: %v\n", err)
+		}
 	}
 }
 
