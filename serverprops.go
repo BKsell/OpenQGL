@@ -161,7 +161,9 @@ func updateServerProperty(path, key, value string, valueValidator func(string) e
 			return fmt.Errorf("配置值不合法: %w", err)
 		}
 	}
-	data, err := os.ReadFile(path)
+	// server.properties 是“读进内存再改写回盘”的纯文本配置，走 64MiB 有界读取，
+	// 防止被塞成超大文件时整体读入 OOM；写入仍保持 allowedFilePerm 共享权限不变。
+	data, err := readBoundedFile(path, localTextConfigMaxBytes)
 	if err != nil {
 		return fmt.Errorf("读取 server.properties 失败: %w", err)
 	}
