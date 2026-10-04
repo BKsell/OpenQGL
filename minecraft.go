@@ -2,7 +2,6 @@ package main
 
 import (
 	"archive/zip"
-	"bufio"
 	"context"
 	"crypto/sha1"
 	"encoding/base64"
@@ -17,6 +16,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 	"unicode"
@@ -248,23 +248,49 @@ func (c *cappedReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
+// errLocalFileTooLarge 表示本地文件实际体积超过读取上限。调用方用 errors.Is
+// 区分“文件被异常撑大（不应把截断内容当正常配置回写 / 落盘）”与普通读取错误。
+var errLocalFileTooLarge = errors.New("本地文件超过安全读取上限")
+
+// localTextConfigMaxBytes 是“读进内存再改写回盘”的纯文本配置（如 options.txt）
+// 的默认上限（64MiB）。这类文件正常只有几 KiB，阈值刻意取很宽，只拦被塞成
+// GB 级、真能把内存/磁盘撑爆的异常文件（炸磁盘才拦），不跟正常内容过不去。
+// 注意它是“读进内存”的上限，不能像下载聚合预算那样取到 TiB 量级。
+const localTextConfigMaxBytes int64 = 64 << 20
+
 // readBoundedFile 把本地文件读入内存，但先用 stat 体积、再用 LimitReader+1
-// 双保险封顶，防止把磁盘上被塞成 GB 级的"元数据 JSON"整体读进内存导致 OOM。
+// 双保险封顶，防止把磁盘上被塞成 GB 级的"元数据 JSON / 配置"整体读进内存导致 OOM。
+//
+// 另外两点加固：
+//   - 符号链接 / 特殊文件一律拒绝（isSymlinkOrSpecial），避免顺着链接把设备或
+//     目录外文件读进来；
+//   - 体积超限统一包装成 errLocalFileTooLarge，调用方可 errors.Is 精确识别，
+//     而不是靠匹配错误字符串。
 func readBoundedFile(path string, maxBytes int64) ([]byte, error) {
+	if maxBytes <= 0 {
+		return nil, errors.New("readBoundedFile 必须指定正的体积上限")
+	}
+	if bad, err := isSymlinkOrSpecial(path); err != nil {
+		return nil, err
+	} else if bad {
+		return nil, fmt.Errorf("拒绝读取符号链接或非普通文件: %s", path)
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
 	if info, err := f.Stat(); err == nil && info.Size() > maxBytes {
-		return nil, fmt.Errorf("文件 %s 体积 %d 超过元数据上限 %d", path, info.Size(), maxBytes)
+		return nil, fmt.Errorf("%w: 文件 %s 体积 %d 超过上限 %d",
+			errLocalFileTooLarge, path, info.Size(), maxBytes)
 	}
 	data, err := io.ReadAll(io.LimitReader(f, maxBytes+1))
 	if err != nil {
 		return nil, err
 	}
 	if int64(len(data)) > maxBytes {
-		return nil, fmt.Errorf("文件 %s 超过元数据上限 %d", path, maxBytes)
+		return nil, fmt.Errorf("%w: 文件 %s 实际超过上限 %d",
+			errLocalFileTooLarge, path, maxBytes)
 	}
 	return data, nil
 }
@@ -440,29 +466,33 @@ func (a *App) ScanVersions() ([]InstalledVersionInfo, error) {
 	return installed, nil
 }
 
-func (a *App) readVersionInfo(versionFolder string, folderName string) InstalledVersionInfo {
+// readQGLVersionConfig 有界读取某个版本目录下启动器自写的 QGL/config.json。
+// 历史上 readVersionInfo / scanVersionFolder 各自 os.ReadFile+Unmarshal 一份，
+// 既重复又没有体积上限；统一收口到 readLocalJSONBounded。
+func readQGLVersionConfig(versionFolder string) (map[string]string, bool) {
 	configPath := filepath.Join(versionFolder, "QGL", "config.json")
-	if data, err := os.ReadFile(configPath); err == nil {
-		var config map[string]string
-		if err := json.Unmarshal(data, &config); err == nil {
-			return InstalledVersionInfo{
-				FolderName: folderName, Name: config["name"],
-				Version: config["version"], Loader: config["loader"], Type: config["type"],
-			}
+	var config map[string]string
+	if err := readLocalJSONBounded(configPath, &config, 0, "版本 QGL 配置"); err != nil {
+		return nil, false
+	}
+	return config, true
+}
+
+func (a *App) readVersionInfo(versionFolder string, folderName string) InstalledVersionInfo {
+	if config, ok := readQGLVersionConfig(versionFolder); ok {
+		return InstalledVersionInfo{
+			FolderName: folderName, Name: config["name"],
+			Version: config["version"], Loader: config["loader"], Type: config["type"],
 		}
 	}
 	return InstalledVersionInfo{FolderName: folderName, Version: folderName, Type: "game"}
 }
 
 func (a *App) scanVersionFolder(versionFolder string, folderName string) InstalledVersionInfo {
-	configPath := filepath.Join(versionFolder, "QGL", "config.json")
-	if data, err := os.ReadFile(configPath); err == nil {
-		var config map[string]string
-		if err := json.Unmarshal(data, &config); err == nil {
-			return InstalledVersionInfo{
-				FolderName: folderName, Name: config["name"],
-				Version: config["version"], Loader: config["loader"], Type: config["type"],
-			}
+	if config, ok := readQGLVersionConfig(versionFolder); ok {
+		return InstalledVersionInfo{
+			FolderName: folderName, Name: config["name"],
+			Version: config["version"], Loader: config["loader"], Type: config["type"],
 		}
 	}
 	versionJSON, err := a.resolveVersionJSON(folderName)
@@ -1415,10 +1445,18 @@ func (a *App) setGameLanguage(gameDir string, versionID string) {
 			a.writeLog("检测到 Yosbr Mod，修改其 options.txt")
 		}
 	}
-	data, err := os.ReadFile(optionsPath)
+	data, err := readBoundedFile(optionsPath, localTextConfigMaxBytes)
 	if err != nil {
+		if errors.Is(err, errLocalFileTooLarge) {
+			// 异常巨大的 options.txt：绝不能走下面“创建默认文件”的分支把它截断覆盖，
+			// 直接跳过本次语言设置，保留用户原文件。
+			a.writeLog("options.txt 异常过大，跳过语言设置以免破坏文件: %v", err)
+			recordSecurityEvent("local-config", auditSeverityWarn, auditActionBlocked,
+				"minecraft", "options.txt 超过有界读取上限，已跳过语言改写")
+			return
+		}
 		content := fmt.Sprintf("lang:%s\n", requiredLang)
-		if err := os.WriteFile(optionsPath, []byte(content), 0600); err != nil {
+		if err := secureWritePrivateFile(optionsPath, []byte(content)); err != nil {
 			a.writeLog("创建 options.txt 失败: %v", err)
 		} else {
 			a.writeLog("已创建 options.txt，设置语言为 %s", requiredLang)
@@ -1451,7 +1489,7 @@ func (a *App) setGameLanguage(gameDir string, versionID string) {
 		lines = append(lines, fmt.Sprintf("lang:%s", requiredLang))
 	}
 	newData := strings.Join(lines, "\n")
-	if err := os.WriteFile(optionsPath, []byte(newData), 0600); err != nil {
+	if err := secureWritePrivateFile(optionsPath, []byte(newData)); err != nil {
 		a.writeLog("写入 options.txt 失败: %v", err)
 	} else {
 		a.writeLog("已将游戏语言设置为 %s", requiredLang)
@@ -1493,6 +1531,11 @@ func (a *App) ensureNativesForLoader(mcDir string, versionID string, versionDir 
 // 显式跳过符号链接 / 特殊文件，并对单文件与总量设上限：源目录是各版本 natives，
 // 正常只含体积有限的 .dll/.so；跳过链接可避免把链接目标（可能指向目录外敏感文件）
 // 以普通文件形式带进运行目录。
+//
+// 复制统一走 copyFileSecure 的“流式 + 原子写 + 源/目标符号链接拒绝 + 多读 1
+// 判超限”，不再用 os.ReadFile 把单个最多 256MiB 的文件整体读进内存（那会造成
+// 与文件等大的瞬时内存峰值）；这里只按声明大小记账，实际超限由 copyFileSecure
+// 在流式阶段兜底。
 const maxCopyDirEntryBytes int64 = 256 << 20
 
 func copyDirContents(srcDir string, dstDir string) error {
@@ -1513,20 +1556,21 @@ func copyDirContents(srcDir string, dstDir string) error {
 			continue
 		}
 		info, err := entry.Info()
-		if err != nil || info.Size() > maxCopyDirEntryBytes || total+info.Size() > maxNativeTotalBytes {
-			continue
-		}
-		data, err := os.ReadFile(filepath.Join(srcDir, entry.Name()))
 		if err != nil {
 			continue
 		}
-		if int64(len(data)) > maxCopyDirEntryBytes || total+int64(len(data)) > maxNativeTotalBytes {
+		size := info.Size()
+		if size > maxCopyDirEntryBytes || total+size > maxNativeTotalBytes {
 			continue
 		}
-		if err := os.WriteFile(filepath.Join(dstDir, entry.Name()), data, 0600); err != nil {
+		srcPath := filepath.Join(srcDir, entry.Name())
+		dstPath := filepath.Join(dstDir, entry.Name())
+		// copyFileSecure 内部会再做一次源链接检查、目标链接拒绝，并以 LimitReader
+		// 多读 1 字节发现“声明大小正常但读取中持续增长”的文件。
+		if err := copyFileSecure(srcPath, dstPath, 0600, maxCopyDirEntryBytes); err != nil {
 			continue
 		}
-		total += int64(len(data))
+		total += size
 	}
 	return nil
 }
@@ -2509,17 +2553,27 @@ func (a *App) watchGameProcess(cmd *exec.Cmd, stdoutPipe io.Reader, stderrPipe i
 		exitChan <- exitCode
 	}()
 	logChan := make(chan string, 200)
-	go func() {
-		scanner := bufio.NewScanner(stdoutPipe)
-		for scanner.Scan() {
-			logChan <- scanner.Text()
+	// 有界流式按行读取：替换默认 bufio.Scanner（单行 64KiB 上限会被超长日志行
+	// 静默打断，导致崩溃/进度检测失效；盲目放大缓冲又会被无换行巨行 OOM）。
+	// 两个管道都 EOF 后关闭 logChan，让消费 goroutine 能随游戏退出而结束。
+	var logWG sync.WaitGroup
+	logWG.Add(2)
+	pipeGameLog := func(r io.Reader) {
+		defer logWG.Done()
+		_, truncated, _ := streamBoundedLines(r, maxGameLogLineBytes, func(line string) {
+			logChan <- line
+		})
+		if truncated > 0 {
+			recordSecurityEvent("game-log", auditSeverityWarn, auditActionStripped,
+				"minecraft", fmt.Sprintf("游戏输出有 %d 行超过 %d 字节单行上限，已截断(防内存膨胀)",
+					truncated, maxGameLogLineBytes))
 		}
-	}()
+	}
+	go pipeGameLog(stdoutPipe)
+	go pipeGameLog(stderrPipe)
 	go func() {
-		scanner := bufio.NewScanner(stderrPipe)
-		for scanner.Scan() {
-			logChan <- scanner.Text()
-		}
+		logWG.Wait()
+		close(logChan)
 	}()
 	go func() {
 		for line := range logChan {
@@ -2534,7 +2588,7 @@ func (a *App) watchGameProcess(cmd *exec.Cmd, stdoutPipe io.Reader, stderrPipe i
 					if start < 0 {
 						start = 0
 					}
-					crashReason = strings.Join(recentLines[start:], "\n")
+					crashReason = buildCrashContext(recentLines[start:])
 					break
 				}
 			}
@@ -2578,7 +2632,7 @@ func (a *App) watchGameProcess(cmd *exec.Cmd, stdoutPipe io.Reader, stderrPipe i
 					if start < 0 {
 						start = 0
 					}
-					logContext = "\n\n最近日志:\n" + strings.Join(recentLines[start:], "\n")
+					logContext = "\n\n最近日志:\n" + buildCrashContext(recentLines[start:])
 				}
 				if elapsed < 3*time.Second {
 					runtime.EventsEmit(a.ctx, "launchStatus", "crashed")
