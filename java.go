@@ -526,13 +526,9 @@ func (a *App) GetJavaRequirement(versionID string) JavaVersionReq {
 	// 读取版本 JSON 获取发布时间
 	mcDir := a.GetMinecraftDir()
 	jsonPath := filepath.Join(mcDir, "versions", versionID, versionID+".json")
-	jsonData, err := os.ReadFile(jsonPath)
-	if err != nil {
-		// 无法读取，使用默认需求
-		return req
-	}
 	var versionJSON VersionJSON
-	if err := json.Unmarshal(jsonData, &versionJSON); err != nil {
+	if err := readLocalJSONBounded(jsonPath, &versionJSON, 0, "版本 JSON"); err != nil {
+		// 无法读取/解析，使用默认需求
 		return req
 	}
 	// 解析发布时间
