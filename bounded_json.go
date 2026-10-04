@@ -21,6 +21,12 @@ package main
 // fetchJSONBounded 把这些收口：HTTPS 强制、多读 1 字节判定超限（超限是
 // fatal，绝不 Unmarshal 截断体）、媒体类型白名单、瞬时错误指数退避、
 // 全程 context；关键拒绝写安全审计。
+//
+// 另有一类 JSON 来自本地磁盘（versions/<id>/<id>.json、options、资产索引缓存）。
+// 它们不走网络，但威胁类似：这些文件可被第三方启动器/模组/被入侵的镜像提前写坏，
+// 历史调用方直接 os.ReadFile 整体读入再 Unmarshal，一个被塞成 GB 级的“json”同样
+// 会让启动器 OOM。readLocalJSONBounded 用同一套“多读 1 字节判定超限、超限不
+// Unmarshal”语义收口本地读取。
 
 import (
 	"context"
@@ -45,6 +51,11 @@ const (
 	jsonFetchBufSize         = 64 * 1024
 	jsonFetchBackoffBase     = 500 * time.Millisecond
 	jsonFetchMaxContentType  = 256
+
+	// jsonLocalDefaultMaxBytes 是“本地版本/资产 JSON”读取的默认体积上限（64MiB）。
+	// 正常版本 JSON（含 Forge 这类带大量库条目的）也就几 MiB，给 64MiB 是刻意取宽，
+	// 只拦被恶意塞成 GB 级、会把进程内存打爆的“json”文件（炸磁盘/内存才拦）。
+	jsonLocalDefaultMaxBytes int64 = 64 << 20
 )
 
 // jsonFetchOptions 控制一次有界 JSON 拉取。
@@ -235,4 +246,38 @@ func fetchJSONFromMirrors(ctx context.Context, urls []string, out any, opts json
 		lastErr = errJSONFetchNoSuccessful
 	}
 	return fmt.Errorf("%w: %v", errJSONFetchNoSuccessful, lastErr)
+}
+
+// readLocalJSONBounded 从本地路径读取一份 JSON 并反序列化到 out。
+//
+// 与网络版共用 readBoundedBody 的“多读 1 字节”判定：实际体积严格超过 maxBytes
+// 时返回 errJSONFetchTooLarge，且绝不对截断体做 Unmarshal（避免静默采用半个对象）。
+// maxBytes<=0 时取 jsonLocalDefaultMaxBytes。label 仅用于安全审计标识来源。
+//
+// 调用方约定：文件不存在 / 内容损坏属于“跳过该缓存、回退默认逻辑”的常规分支，
+// 由调用方按原语义处理；只有“体积超限”这一项在这里写安全审计，因为那通常意味着
+// 本地文件被异常改写。
+func readLocalJSONBounded(path string, out any, maxBytes int64, label string) error {
+	if maxBytes <= 0 {
+		maxBytes = jsonLocalDefaultMaxBytes
+	}
+	if label == "" {
+		label = "本地 JSON"
+	}
+
+	// 复用全仓唯一的本地有界读取原语：stat 声明拦截 + LimitReader+1 兜底 +
+	// 符号链接/特殊文件拒绝，超限返回 errLocalFileTooLarge。
+	body, err := readBoundedFile(path, maxBytes)
+	if err != nil {
+		if errors.Is(err, errLocalFileTooLarge) {
+			recordSecurityEvent("local-json", auditSeverityCritical, auditActionBlocked,
+				"bounded-json", fmt.Sprintf("%s实际体积超过上限 %d: %s", label, maxBytes, path))
+		}
+		return err
+	}
+
+	if err := json.Unmarshal(body, out); err != nil {
+		return fmt.Errorf("解析%s失败: %w", label, err)
+	}
+	return nil
 }
