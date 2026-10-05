@@ -1936,6 +1936,12 @@ func (a *App) AddLoaderToDownloadList(loaderName string, mcVersion string, loade
 	} else {
 		customName = safeName
 	}
+	// 下载地址来自前端，最终会"下载即运行"第三方安装器：入队时就先把非 HTTPS
+	// 链接挡掉，避免恶意 / 被劫持的明文地址进入队列后才在下载阶段暴露。
+	// 空地址交给下载阶段统一报错（个别加载器走内置安装器路径时可能不带 URL）。
+	if strings.TrimSpace(downloadURL) != "" && !isHTTPSURL(downloadURL) {
+		return fmt.Errorf("不支持的加载器下载地址（仅允许 HTTPS）")
+	}
 
 	a.downloadMutex.Lock()
 	defer a.downloadMutex.Unlock()
@@ -1973,19 +1979,16 @@ func (a *App) downloadLoaderItem(item *DownloadItem) error {
 		tempDir = filepath.Join(os.Getenv("USERPROFILE"), "AppData", "Local", "Temp")
 	}
 
-	// 安全：使用 filepath.Base 防止路径遍历（../ 等目录组件被剥离）
-	fileName := filepath.Base(item.CustomName)
-	if strings.HasSuffix(strings.ToLower(item.URL), ".jar") {
-		if !strings.HasSuffix(strings.ToLower(fileName), ".jar") {
-			fileName += ".jar"
-		}
-	} else if strings.HasSuffix(strings.ToLower(item.URL), ".exe") {
-		if !strings.HasSuffix(strings.ToLower(fileName), ".exe") {
-			fileName += ".exe"
-		}
+	// 落盘目标名不再直接取展示名：走 loaderdest 内核，按 URL 路径判定扩展名
+	// （忽略 query）、slug 白名单化、追加 UMFS 指纹去碰撞，并断言结果仍严格位于
+	// TEMP 内。旧实现 filepath.Base(CustomName) 保留空格 / 括号、文件名可预测，
+	// 且 URL 带 ?query 时会漏判 .jar。
+	artifactExt := loaderArtifactExt(item.URL)
+	destPath, ok := resolveLoaderTempDest(tempDir, item.CustomName, item.URL)
+	if !ok {
+		return fmt.Errorf("无法在临时目录内构造安全的安装器落盘路径")
 	}
-
-	destPath := filepath.Join(tempDir, fileName)
+	fileName := filepath.Base(destPath)
 
 	a.emitProgress("downloading", fileName, 0, 0)
 
@@ -1993,7 +1996,7 @@ func (a *App) downloadLoaderItem(item *DownloadItem) error {
 		return fmt.Errorf("下载加载器失败: %v", err)
 	}
 
-	if strings.HasSuffix(strings.ToLower(destPath), ".jar") {
+	if artifactExt == ".jar" {
 		javaEntry := a.SearchJava()
 		if len(javaEntry) == 0 {
 			return fmt.Errorf("下载完成但未找到 Java 来运行安装器，请手动运行: %s", destPath)
