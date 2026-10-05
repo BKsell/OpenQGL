@@ -122,7 +122,10 @@ func capTranslateInput(s string) string {
 
 func (a *App) TranslateModName(english string) string {
 	english = capTranslateInput(english)
-	if strings.TrimSpace(english) == "" {
+	// 匹配用查询走有界内核：去控制字符、限长、去首尾空白；规范化后为空则不查表，
+	// 直接原样返回（保持对空输入的历史行为）。
+	clean, ok := normalizeTranslateQuery(english)
+	if !ok {
 		return english
 	}
 	loadTranslations()
@@ -130,7 +133,7 @@ func (a *App) TranslateModName(english string) string {
 	translationMutex.RLock()
 	defer translationMutex.RUnlock()
 
-	lowerEnglish := strings.ToLower(strings.TrimSpace(english))
+	lowerEnglish := strings.ToLower(clean)
 
 	// 精确匹配（O(1)）
 	if chinese, ok := exactTranslations[lowerEnglish]; ok {
@@ -158,7 +161,9 @@ func (a *App) TranslateModName(english string) string {
 
 func (a *App) SearchModsByChineseName(chineseQuery string) []string {
 	chineseQuery = capTranslateInput(chineseQuery)
-	if strings.TrimSpace(chineseQuery) == "" {
+	// 查询走有界内核：剔除控制字符 / 限长 / 去空白；为空直接返回 nil，不扫全表。
+	query, ok := normalizeTranslateQuery(chineseQuery)
+	if !ok {
 		return nil
 	}
 	loadTranslations()
@@ -166,18 +171,19 @@ func (a *App) SearchModsByChineseName(chineseQuery string) []string {
 	translationMutex.RLock()
 	defer translationMutex.RUnlock()
 
-	query := strings.ToLower(strings.TrimSpace(chineseQuery))
+	query = strings.ToLower(query)
 	seen := make(map[string]struct{})
 	var results []string
 
 	for _, entry := range translationEntries {
 		chineseLower := strings.ToLower(entry.Chinese)
 		if strings.Contains(chineseLower, query) {
-			if _, ok := seen[entry.English]; ok {
-				continue
+			// 去重 + 硬上限，达到上限立即停止全表扫描（极短词命中全表时止损）。
+			var full bool
+			results, full = appendDistinctOrdered(results, seen, entry.English, maxChineseSearchResults)
+			if full {
+				break
 			}
-			seen[entry.English] = struct{}{}
-			results = append(results, entry.English)
 		}
 	}
 
