@@ -419,7 +419,13 @@ func (a *App) resolveServerJarDownload(version string) (string, string, error) {
 		return "", "", fmt.Errorf("下载版本 JSON 失败 (HTTP %d)", resp.StatusCode)
 	}
 
-	body, _ := io.ReadAll(resp.Body)
+	// safeGet 已用 MaxBytesReader 限制体积，但读体中途断连仍会留下截断字节，
+	// 必须显式判错：否则会把半个 JSON 交给 Unmarshal，报成"解析失败"而掩盖真实
+	// 的网络中断，也让调用方无法据此区分镜像故障与数据损坏。
+	body, readErr := io.ReadAll(resp.Body)
+	if readErr != nil {
+		return "", "", fmt.Errorf("读取版本 JSON 响应体失败: %v", readErr)
+	}
 	var versionJSON map[string]interface{}
 	if err := json.Unmarshal(body, &versionJSON); err != nil {
 		return "", "", fmt.Errorf("解析版本 JSON 失败: %v", err)
