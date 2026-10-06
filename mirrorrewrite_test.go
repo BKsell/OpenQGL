@@ -158,3 +158,36 @@ func TestRewriteURLPrefixesEmptyAndIdempotent(t *testing.T) {
 		t.Fatalf("rewrite not idempotent: %q -> %q", first, second)
 	}
 }
+
+// TestRewriteModMirrorURL 锁定原 mod.go mirrorModURL 的四个 strings.Replace 逐字结果：
+// Modrinth CDN/API → /modrinth，CurseForge 两套 CDN → /curseforge，且只替换一次。
+func TestRewriteModMirrorURL(t *testing.T) {
+	const base = "https://mod.mcimirror.top"
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"modrinth cdn",
+			"https://cdn.modrinth.com/data/abc/versions/v/a.jar",
+			base + "/modrinth/data/abc/versions/v/a.jar"},
+		{"modrinth api",
+			"https://api.modrinth.com/v2/project/abc",
+			base + "/modrinth/v2/project/abc"},
+		{"curseforge edge cdn",
+			"https://edge.forgecdn.net/files/1/2/a.jar",
+			base + "/curseforge/files/1/2/a.jar"},
+		{"curseforge mediafilez cdn",
+			"https://mediafilez.forgecdn.net/files/1/2/a.jar",
+			base + "/curseforge/files/1/2/a.jar"},
+		{"无关主机原样返回", "https://example.com/a.jar", "https://example.com/a.jar"},
+		{"http 不换源", "http://cdn.modrinth.com/a.jar", "http://cdn.modrinth.com/a.jar"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := rewriteModMirrorURL(c.in); got != c.want {
+				t.Fatalf("rewriteModMirrorURL(%q)=%q want %q", c.in, got, c.want)
+			}
+		})
+	}
+}
