@@ -2362,10 +2362,12 @@ func (a *App) LaunchGame(versionID string) error {
 				if isHTTPSURL(serverURL) {
 					resp, err := safeHTTPClient().Get(serverURL)
 					if err == nil {
-						// 皮肤站首页本应几 KB；限制 1 MiB，防止恶意服务器返回几十 MB 把 JVM 命令行撑爆
-						body, _ := io.ReadAll(io.LimitReader(resp.Body, maxAuthlibPrefetchBytes))
+						// 皮肤站首页本应几 KB；上限 1MiB，防止恶意服务器返回超大响应把
+						// JVM 命令行撑爆。走统一有界读内核（多读 1 字节精确判定超限），
+						// 读体中断或超量都不预取，而不是像旧实现那样吞掉读错、拿半截内容。
+						body, readErr := readBoundedBody(resp.Body, maxAuthlibPrefetchBytes)
 						resp.Body.Close()
-						if len(body) < int(maxAuthlibPrefetchBytes) {
+						if readErr == nil {
 							prefetched = base64.StdEncoding.EncodeToString(body)
 						}
 					}
