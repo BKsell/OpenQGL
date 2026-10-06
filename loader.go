@@ -1010,9 +1010,7 @@ func (a *App) downloadForgeLibraries(installerPath string, mcDir string, mcVersi
 			continue
 		}
 
-		url = strings.Replace(url, "https://maven.minecraftforge.net/", "https://bmclapi2.bangbang93.com/maven/", 1)
-		url = strings.Replace(url, "https://maven.neoforged.net/releases/", "https://bmclapi2.bangbang93.com/maven/", 1)
-		url = strings.Replace(url, "https://maven.fabricmc.net/", "https://bmclapi2.bangbang93.com/maven/", 1)
+		url = rewriteMavenLibURLToBMCL(url)
 
 		// Zip Slip 防护：库路径走严格 Maven 相对路径白名单
 		safePath := SafeMavenRelPath(path)
@@ -1165,8 +1163,7 @@ func (a *App) ensureForgeMappings(installerPath string, mcDir string) {
 		return
 	}
 
-	mappingsURL = strings.Replace(mappingsURL, "https://piston-data.mojang.com/", "https://bmclapi2.bangbang93.com/", 1)
-	mappingsURL = strings.Replace(mappingsURL, "https://launcher.mojang.com/", "https://bmclapi2.bangbang93.com/", 1)
+	mappingsURL = rewriteMappedDataURLToBMCL(mappingsURL)
 
 	a.writeLog("使用 Go 原生 HTTP 下载 Mappings 文件...")
 	a.writeLog("下载 URL: %s", mappingsURL)
@@ -1315,8 +1312,7 @@ func (a *App) downloadForgeMappings(mcDir string, mcVersion string, installerPat
 		return
 	}
 
-	mappingsURL = strings.Replace(mappingsURL, "https://piston-data.mojang.com/", "https://bmclapi2.bangbang93.com/", 1)
-	mappingsURL = strings.Replace(mappingsURL, "https://launcher.mojang.com/", "https://bmclapi2.bangbang93.com/", 1)
+	mappingsURL = rewriteMappedDataURLToBMCL(mappingsURL)
 
 	tempPath := targetPath + ".tmp"
 	fmt.Printf("下载 Forge Mappings (%s): %s\n", mcpVersion, mappingsURL)
@@ -1617,9 +1613,7 @@ func (a *App) downloadFabricLibraries(profileJSON map[string]interface{}, mcDir 
 
 		sha1, _ := artifact["sha1"].(string)
 
-		url = strings.Replace(url, "https://maven.fabricmc.net/", "https://bmclapi2.bangbang93.com/maven/", 1)
-		url = strings.Replace(url, "https://repo1.maven.org/maven2/", "https://bmclapi2.bangbang93.com/maven/", 1)
-		url = strings.Replace(url, "https://libraries.minecraft.net/", "https://bmclapi2.bangbang93.com/libraries/", 1)
+		url = rewriteFabricLibURLToBMCL(url)
 
 		// Zip Slip 防护：库路径走严格 Maven 相对路径白名单
 		safePath := SafeMavenRelPath(path)
