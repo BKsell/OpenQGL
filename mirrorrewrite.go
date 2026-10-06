@@ -70,7 +70,7 @@ func rewriteMetaIndexURLToBMCL(raw string) string {
 // 主机整体落到镜像根（保留 /v1/objects/... 路径，不做 /version 收敛）。
 var bmclMappedDataPrefixRules = []urlPrefixRule{
 	{"https://piston-data.mojang.com", bmclMirrorBase},
-	{{"https://launcher.mojang.com", bmclMirrorBase},
+	{"https://launcher.mojang.com", bmclMirrorBase},
 }
 
 // rewriteMappedDataURLToBMCL 把对象存储主机换到镜像根。
