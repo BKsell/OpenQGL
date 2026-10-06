@@ -407,8 +407,7 @@ func (a *App) resolveServerJarDownload(version string) (string, string, error) {
 	if !strings.HasPrefix(versionURL, "https://") {
 		return "", "", fmt.Errorf("版本清单 URL 必须使用 HTTPS")
 	}
-	versionURL = strings.Replace(versionURL, "https://piston-meta.mojang.com", "https://bmclapi2.bangbang93.com", 1)
-	versionURL = strings.Replace(versionURL, "https://launcher.mojang.com", "https://bmclapi2.bangbang93.com", 1)
+	versionURL = rewriteMetaIndexURLToBMCL(versionURL)
 
 	// 版本 JSON 很小，限制 8MB 足够
 	resp, err := safeGet(httpClient, versionURL, 8<<20)
@@ -443,8 +442,7 @@ func (a *App) resolveServerJarDownload(version string) (string, string, error) {
 	}
 	expectedHash, _ := server["sha1"].(string)
 
-	jarURL = strings.Replace(jarURL, "https://piston-data.mojang.com", "https://bmclapi2.bangbang93.com", 1)
-	jarURL = strings.Replace(jarURL, "https://launcher.mojang.com", "https://bmclapi2.bangbang93.com", 1)
+	jarURL = rewriteMappedDataURLToBMCL(jarURL)
 	// 仅校验 https 前缀不足以防止恶意 / 被篡改的版本清单把 downloads.server.url
 	// 指向任意主机：最终必须落在可信的 Mojang / BMCLAPI 主机白名单上（与依赖库同一
 	// 套 isAllowedMavenLibURL 判定，强制 https、无 userinfo、443、主机精确命中）。
