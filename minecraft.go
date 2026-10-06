@@ -189,13 +189,6 @@ type InstalledVersionInfo struct {
 
 func (a *App) getMinecraftDir() string { return a.GetMinecraftDir() }
 
-func replaceWithBMCLAPI(url string) string {
-	url = strings.Replace(url, "https://piston-meta.mojang.com", "https://bmclapi2.bangbang93.com", 1)
-	url = strings.Replace(url, "https://launcher.mojang.com", "https://bmclapi2.bangbang93.com", 1)
-	url = strings.Replace(url, "https://libraries.minecraft.net", "https://bmclapi2.bangbang93.com/maven", 1)
-	return url
-}
-
 func (a *App) emitProgress(status string, currentFile string, downloaded, total int64) {
 	var pct float64
 	if total > 0 {
@@ -915,7 +908,7 @@ func (a *App) DownloadVersion(versionID string, versionURL string, customName st
 		return fmt.Errorf("创建版本目录失败: %v", err)
 	}
 	a.emitProgress("downloading", customName+".json", 0, 0)
-	jsonURL := replaceWithBMCLAPI(versionURL)
+	jsonURL := rewriteLauncherURLToBMCL(versionURL)
 	jsonPath := filepath.Join(versionDir, customName+".json")
 	if err := a.downloadFileBounded(jsonURL, jsonPath, false, maxMetadataJSONBytes); err != nil {
 		return fmt.Errorf("下载版本 JSON 失败: %v", err)
@@ -933,10 +926,10 @@ func (a *App) DownloadVersion(versionID string, versionURL string, customName st
 	// 也避免攻击者靠“审计看 A、实际请求 B”的差异绕过。
 	if versionJSON.Downloads != nil {
 		if versionJSON.Downloads.Client != nil {
-			versionJSON.Downloads.Client.URL = replaceWithBMCLAPI(versionJSON.Downloads.Client.URL)
+			versionJSON.Downloads.Client.URL = rewriteLauncherURLToBMCL(versionJSON.Downloads.Client.URL)
 		}
 		if versionJSON.Downloads.Server != nil {
-			versionJSON.Downloads.Server.URL = replaceWithBMCLAPI(versionJSON.Downloads.Server.URL)
+			versionJSON.Downloads.Server.URL = rewriteLauncherURLToBMCL(versionJSON.Downloads.Server.URL)
 		}
 	}
 	for i := range versionJSON.Libraries {
@@ -945,16 +938,16 @@ func (a *App) DownloadVersion(versionID string, versionURL string, customName st
 			continue
 		}
 		if dl.Artifact != nil {
-			dl.Artifact.URL = replaceWithBMCLAPI(dl.Artifact.URL)
+			dl.Artifact.URL = rewriteLauncherURLToBMCL(dl.Artifact.URL)
 		}
 		for _, art := range dl.Classifiers {
 			if art != nil {
-				art.URL = replaceWithBMCLAPI(art.URL)
+				art.URL = rewriteLauncherURLToBMCL(art.URL)
 			}
 		}
 	}
 	if versionJSON.AssetIndex != nil {
-		versionJSON.AssetIndex.URL = replaceWithBMCLAPI(versionJSON.AssetIndex.URL)
+		versionJSON.AssetIndex.URL = rewriteLauncherURLToBMCL(versionJSON.AssetIndex.URL)
 	}
 	// 版本 JSON 来自可由前端指定的第三方 versionURL，client / library / native 的
 	// url/path/sha1 全部不受信任：下载主机必须落在官方 / 镜像白名单，可执行产物必须
@@ -976,7 +969,7 @@ func (a *App) DownloadVersion(versionID string, versionURL string, customName st
 	}
 	if versionJSON.Downloads != nil && versionJSON.Downloads.Client != nil {
 		client := versionJSON.Downloads.Client
-		clientURL := replaceWithBMCLAPI(client.URL)
+		clientURL := rewriteLauncherURLToBMCL(client.URL)
 		jarPath := filepath.Join(versionDir, customName+".jar")
 		a.emitProgress("downloading", customName+".jar", 0, client.Size)
 		if err := a.downloadVerifiedFile(clientURL, jarPath, client.SHA1, true); err != nil {
@@ -997,7 +990,7 @@ func (a *App) DownloadVersion(versionID string, versionURL string, customName st
 				continue
 			}
 			libPath := filepath.Join(mcDir, "libraries", filepath.FromSlash(safePath))
-			libURL := replaceWithBMCLAPI(artifact.URL)
+			libURL := rewriteLauncherURLToBMCL(artifact.URL)
 			a.emitProgress("downloading", filepath.Base(artifact.Path), 0, artifact.Size)
 			if err := a.downloadVerifiedFile(libURL, libPath, artifact.SHA1, false); err != nil {
 				fmt.Printf("下载库文件失败(跳过): %s, %v\n", artifact.Path, err)
@@ -1026,7 +1019,7 @@ func (a *App) DownloadVersion(versionID string, versionURL string, customName st
 				continue
 			}
 			nativePath := filepath.Join(mcDir, "libraries", filepath.FromSlash(safeClassPath))
-			nativeURL := replaceWithBMCLAPI(classifier.URL)
+			nativeURL := rewriteLauncherURLToBMCL(classifier.URL)
 			a.emitProgress("downloading", filepath.Base(classifier.Path), 0, classifier.Size)
 			if err := a.downloadVerifiedFile(nativeURL, nativePath, classifier.SHA1, false); err != nil {
 				fmt.Printf("下载 native 失败: %s, %v\n", classifier.Path, err)
@@ -1043,7 +1036,7 @@ func (a *App) DownloadVersion(versionID string, versionURL string, customName st
 		}
 		assetIndexDir := filepath.Join(mcDir, "assets", "indexes")
 		assetIndexPath := filepath.Join(assetIndexDir, safeIndexID+".json")
-		assetIndexURL := replaceWithBMCLAPI(assetIndexRef.URL)
+		assetIndexURL := rewriteLauncherURLToBMCL(assetIndexRef.URL)
 		a.emitProgress("downloading", "资源索引", 0, 0)
 		if err := a.downloadFileBounded(assetIndexURL, assetIndexPath, false, maxMetadataJSONBytes); err != nil {
 			fmt.Printf("下载资源索引失败: %v\n", err)
@@ -1071,7 +1064,7 @@ func (a *App) DownloadVersion(versionID string, versionURL string, customName st
 						}
 						hash := obj.Hash
 						subHash := hash[:2]
-						assetURL := replaceWithBMCLAPI(fmt.Sprintf("https://launcher.mojang.com/v1/objects/%s/%s", hash, safeName))
+						assetURL := rewriteLauncherURLToBMCL(fmt.Sprintf("https://launcher.mojang.com/v1/objects/%s/%s", hash, safeName))
 						assetPath := filepath.Join(mcDir, "assets", "objects", subHash, hash)
 						a.emitProgress("downloading", fmt.Sprintf("资源 %d/%d", count, totalAssets), int64(count), int64(totalAssets))
 						if _, err := os.Stat(assetPath); os.IsNotExist(err) {
@@ -1127,22 +1120,20 @@ func (a *App) getMirrorURLs(originalURL string) []string {
 	}
 	switch {
 	case strings.Contains(originalURL, "maven.minecraftforge.net"):
-		addMirror(strings.Replace(originalURL, "https://maven.minecraftforge.net/", "https://bmclapi2.bangbang93.com/maven/", 1), originalURL)
+		addMirror(rewriteMavenLibURLToBMCL(originalURL), originalURL)
 	case strings.Contains(originalURL, "maven.neoforged.net"):
-		addMirror(strings.Replace(originalURL, "https://maven.neoforged.net/releases/", "https://bmclapi2.bangbang93.com/maven/", 1), originalURL)
+		addMirror(rewriteMavenLibURLToBMCL(originalURL), originalURL)
 	case strings.Contains(originalURL, "maven.fabricmc.net"):
-		addMirror(strings.Replace(originalURL, "https://maven.fabricmc.net/", "https://bmclapi2.bangbang93.com/maven/", 1), originalURL)
+		addMirror(rewriteMavenLibURLToBMCL(originalURL), originalURL)
 	case strings.Contains(originalURL, "libraries.minecraft.net"):
-		addMirror(strings.Replace(originalURL, "https://libraries.minecraft.net/", "https://bmclapi2.bangbang93.com/libraries/", 1), originalURL)
+		addMirror(rewriteLibraryArtifactURLToBMCL(originalURL), originalURL)
 	case strings.Contains(originalURL, "repo1.maven.org"):
-		addMirror(strings.Replace(originalURL, "https://repo1.maven.org/maven2/", "https://bmclapi2.bangbang93.com/maven/", 1), originalURL)
+		addMirror(rewriteMavenCentralURLToBMCL(originalURL), originalURL)
 	case strings.Contains(originalURL, "launcher.mojang.com"), strings.Contains(originalURL, "piston-data.mojang.com"), strings.Contains(originalURL, "piston-meta.mojang.com"):
-		m := strings.Replace(originalURL, "https://launcher.mojang.com/v1/objects/", "https://bmclapi2.bangbang93.com/version/", 1)
-		m = strings.Replace(m, "https://piston-data.mojang.com/v1/objects/", "https://bmclapi2.bangbang93.com/version/", 1)
-		m = strings.Replace(m, "https://piston-meta.mojang.com/v1/objects/", "https://bmclapi2.bangbang93.com/version/", 1)
+		m := rewriteObjectVersionURLToBMCL(originalURL)
 		addMirror(m, originalURL)
 	case strings.Contains(originalURL, "resources.download.minecraft.net"):
-		addMirror(strings.Replace(originalURL, "https://resources.download.minecraft.net/", "https://bmclapi2.bangbang93.com/assets/", 1), originalURL)
+		addMirror(rewriteAssetURLToBMCL(originalURL), originalURL)
 	default:
 		urls = append(urls, originalURL)
 	}
@@ -1207,8 +1198,7 @@ func (a *App) fixAssetsIndex(mcDir string, versionJSON *VersionJSON) {
 	// 目标目录由 downloadFromMirrors→downloadFileBounded 统一以 0700 创建/收权，无需预建。
 	urls := a.getMirrorURLs(versionJSON.AssetIndex.URL)
 	for i, u := range urls {
-		urls[i] = strings.Replace(u, "https://piston-meta.mojang.com/", "https://bmclapi2.bangbang93.com/", 1)
-		urls[i] = strings.Replace(urls[i], "https://launcher.mojang.com/", "https://bmclapi2.bangbang93.com/", 1)
+		urls[i] = rewriteMetaIndexURLToBMCL(u)
 	}
 	if a.downloadFromMirrors(urls, assetIndexPath, maxMetadataJSONBytes) {
 		a.writeLog("资源索引文件下载完成: %s", safeID)
