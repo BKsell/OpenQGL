@@ -234,8 +234,7 @@ func (a *App) SearchModpacks(query string, gameVersion string, page int, pageSiz
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return nil, fmt.Errorf("搜索整合包失败: HTTP %d, %s", resp.StatusCode, string(body))
+		return nil, httpStatusError(resp, "搜索整合包失败")
 	}
 
 	var result ModpackSearchResponse
@@ -390,7 +389,7 @@ func (a *App) installModpack(item *DownloadItem) error {
 		return fmt.Errorf("不安全的下载 URL（非 HTTPS）")
 	}
 
-	resp, err := safeHTTPClient().Get(mirrorModURL(item.URL))
+	resp, err := safeHTTPClient().Get(rewriteModMirrorURL(item.URL))
 	if err != nil || resp.StatusCode != http.StatusOK {
 		if resp != nil {
 			resp.Body.Close()
@@ -683,7 +682,7 @@ func (a *App) installModpack(item *DownloadItem) error {
 			if !isHTTPSURL(dlURL) {
 				continue
 			}
-			if tryOne(mirrorModURL(dlURL)) {
+			if tryOne(rewriteModMirrorURL(dlURL)) {
 				downloaded = true
 				break
 			}
