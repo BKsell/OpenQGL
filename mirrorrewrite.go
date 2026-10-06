@@ -70,7 +70,7 @@ func rewriteMetaIndexURLToBMCL(raw string) string {
 // 主机整体落到镜像根（保留 /v1/objects/... 路径，不做 /version 收敛）。
 var bmclMappedDataPrefixRules = []urlPrefixRule{
 	{"https://piston-data.mojang.com", bmclMirrorBase},
-	{"https://launcher.mojang.com", bmclMirrorBase},
+	{{"https://launcher.mojang.com", bmclMirrorBase},
 }
 
 // rewriteMappedDataURLToBMCL 把对象存储主机换到镜像根。
@@ -146,4 +146,30 @@ var bmclAssetPrefixRules = []urlPrefixRule{
 // rewriteAssetURLToBMCL 把资源对象主机换到镜像 /assets/。
 func rewriteAssetURLToBMCL(raw string) string {
 	return rewriteURLPrefixes(raw, bmclAssetPrefixRules)
+}
+
+// ===== Modrinth / CurseForge 中国镜像（mcimirror）换源 =====
+//
+// Mod 下载原来在 mod.go 里有一份独立的 mirrorModURL，用四个 strings.Replace 把
+// Modrinth 的 CDN/API 与 CurseForge 的两套 CDN 主机改写为 mcimirror 镜像。它与
+// BMCLAPI 换源是完全同一类"按有序源前缀做一次性字面替换"，为避免换源规则在多文件
+// 各写一份（此前 BMCLAPI 已因此散落二十余处），这里统一收口到本内核，mod.go /
+// modpack.go 只调用 rewriteModMirrorURL。
+
+// modMirrorBase 是 Mod/整合包镜像 mcimirror 的固定根地址（仅 https）。
+const modMirrorBase = "https://mod.mcimirror.top"
+
+// modMirrorPrefixRules 保持与历史 mirrorModURL 完全一致的替换语义与顺序。
+// Modrinth 的 CDN 与 API 都落到 /modrinth；CurseForge 两套 CDN 都落到 /curseforge。
+var modMirrorPrefixRules = []urlPrefixRule{
+	{"https://cdn.modrinth.com", modMirrorBase + "/modrinth"},
+	{"https://api.modrinth.com", modMirrorBase + "/modrinth"},
+	{"https://edge.forgecdn.net", modMirrorBase + "/curseforge"},
+	{"https://mediafilez.forgecdn.net", modMirrorBase + "/curseforge"},
+}
+
+// rewriteModMirrorURL 等价原 mod.go 的 mirrorModURL：把 Modrinth/CurseForge
+// 官方主机一次性改写为 mcimirror 镜像；不匹配的地址原样返回。
+func rewriteModMirrorURL(raw string) string {
+	return rewriteURLPrefixes(raw, modMirrorPrefixRules)
 }
