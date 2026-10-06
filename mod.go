@@ -120,16 +120,6 @@ const modrinthBaseURL = "https://api.modrinth.com/v2"
 // 下载期望值（哈希/大小）的并发安全存储、完整性校验、下载主机白名单与
 // 符号链接安全落盘都已收口到 modverify.go（var modExpect 等）。
 
-// mirrorModURL 将 Mod 下载 URL 替换为中国镜像源
-func mirrorModURL(original string) string {
-	u := original
-	u = strings.Replace(u, "https://cdn.modrinth.com", "https://mod.mcimirror.top/modrinth", 1)
-	u = strings.Replace(u, "https://api.modrinth.com", "https://mod.mcimirror.top/modrinth", 1)
-	u = strings.Replace(u, "https://edge.forgecdn.net", "https://mod.mcimirror.top/curseforge", 1)
-	u = strings.Replace(u, "https://mediafilez.forgecdn.net", "https://mod.mcimirror.top/curseforge", 1)
-	return u
-}
-
 // SearchMods 搜索 Mod
 func (a *App) SearchMods(query string, gameVersion string, loader string, category string, page int, pageSize int) (*ModSearchResponse, error) {
 	// 分页/查询入参全部来自前端，必须收敛，防止被传入超大 limit 打出超长 Modrinth
@@ -188,8 +178,7 @@ func (a *App) SearchMods(query string, gameVersion string, loader string, catego
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return nil, fmt.Errorf("搜索 Mod 失败: HTTP %d, %s", resp.StatusCode, string(body))
+		return nil, httpStatusError(resp, "搜索 Mod 失败")
 	}
 
 	var result ModSearchResponse
@@ -810,7 +799,7 @@ func (a *App) downloadModItem(item *DownloadItem) error {
 	// 先尝试镜像源，失败再回退到官方源。
 	// 用专用下载客户端：无 30s 总超时（大 Mod 慢网不该被整体掐断），
 	// 且重定向每一跳都强制主机白名单，防镜像把流量甩到任意外部主机。
-	mirrorURL := mirrorModURL(item.URL)
+	mirrorURL := rewriteModMirrorURL(item.URL)
 	if err := validateModDownloadURL(mirrorURL); err != nil {
 		return fmt.Errorf("镜像下载地址不安全: %w", err)
 	}
