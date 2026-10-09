@@ -38,17 +38,27 @@ const (
 	nameRejectReserved   = "reserved-device-name" // Windows 保留设备名
 	nameRejectOuterSpace = "outer-space"          // 前导/尾随空格
 	nameRejectOuterDot   = "outer-dot"            // 前导/尾点
+	nameRejectInnerSpace = "inner-space"          // 内部含空格（仅用于 loader 标识这类 token 段）
 	nameRejectLength     = "too-long"             // 超过单段长度上限
 	nameRejectExtension  = "bad-extension"        // mod 文件扩展名不在白名单
+	nameRejectInvisible  = "invisible-rune"       // 含零宽 / 软连字符 / BOM 等不可见格式字符
+	nameRejectBidi       = "bidi-control"          // 含双向覆写控制字符（U+202A-202E / 2066-2069 等）
+	nameRejectNonchar    = "non-character"         // 含 Unicode 非字符（U+FFFE/F、FDD0-FDEF）
 )
 
+// 账户目录名单独的字节长度上限，沿用历史 validateUsername 的 64，避免把已有合法
+// 外置登录名（皮肤站允许较长昵称）挡在门外；其余规则与其它落盘段一致。
+const maxAccountNameLen = 64
+
 // 单段长度上限。versions/<name>/<name>.json 同一段名出现两次，必须给完整路径
-// 留足余量，因此取 120 而非文件系统极限 255；带 loader 后缀的展示名单独放到
-// maxVersionDisplayLen。mod 文件名含版本号通常较长，给 160。
+// 留足余量，因此取 120 而非文件系统极限 255。拼上 loader 后缀的“展示名”最终也会
+// 成为版本目录段（versions/<展示名>/<展示名>.json），同一段同样出现两次，因此它
+// 必须与普通版本段共用 120 预算，而不是另放一个更宽的上限——否则一个顶到 120 的
+// 自定义名再加 loader 后缀就会越过单段预算。mod 文件名含版本号通常较长，给 160。
 const (
 	maxVersionComponentLen = 120
 	maxLoaderComponentLen  = 64
-	maxVersionDisplayLen   = 200
+	maxVersionDisplayLen   = 120
 	maxModFileComponentLen = 160
 )
 
@@ -72,6 +82,53 @@ func containsControlByte(s string) bool {
 		}
 	}
 	return false
+}
+
+// unsafeRuneCode 按 Unicode 码点扫描名字里“肉眼不可见、可用于仿冒 / 终端与日志
+// 注入”的格式字符，返回拒绝原因码；安全字符返回 nameRejectNone。
+//
+// 只列对文件系统名字段确有滥用价值、且在正常昵称 / 版本号里没有合法用途的字符，
+// 避免误伤普通中文、emoji 与空格：
+//   - nameRejectBidi：双向覆写 / 隔离控制符 U+202A-202E、U+2066-2069。它们能把
+//     后续字符的显示顺序反转，典型攻击是把 "evil.exe‮202E" 显示成 "exe.live" 之类，
+//     在账户列表 / 下载列表 / 日志里骗过用户眼睛；
+//   - nameRejectInvisible：零宽空格 / 连接符（U+200B-200F）、软连字符 U+00AD、
+//     蒙古文元音分隔符 U+180E、行 / 段分隔符 U+2028-2029、字连接符与不可见数学
+//     运算符 U+2060-2064、废弃格式符 U+206A-206F、BOM / 零宽不换行空格 U+FEFF。
+//     这些字符在文件管理器、终端、界面里不可见，却能造出两个看起来相同、实际不同
+//     的目录名（同形异义），并可借此让两个账户目录在 UI 上无法区分；
+//   - nameRejectNonchar：Unicode 永久非字符 U+FDD0-FDEF 与各平面末尾的
+//     U+?FFFE / U+?FFFF。它们不代表任何文字，只用于内部哨兵，绝不该出现在名字里。
+func unsafeRuneCode(r rune) string {
+	switch {
+	case r == 0x202A || r == 0x202B || r == 0x202C || r == 0x202D || r == 0x202E ||
+		r == 0x2066 || r == 0x2067 || r == 0x2068 || r == 0x2069:
+		return nameRejectBidi
+	case r == 0x00AD || r == 0x180E ||
+		(r >= 0x200B && r <= 0x200F) ||
+		r == 0x2028 || r == 0x2029 ||
+		(r >= 0x2060 && r <= 0x2064) ||
+		(r >= 0x206A && r <= 0x206F) ||
+		r == 0xFEFF:
+		return nameRejectInvisible
+	case (r >= 0xFDD0 && r <= 0xFDEF):
+		return nameRejectNonchar
+	}
+	// 各平面的 U+?FFFE / U+?FFFF（含基本平面的 U+FFFE/U+FFFF）。
+	if low := r & 0xFFFF; low == 0xFFFE || low == 0xFFFF {
+		return nameRejectNonchar
+	}
+	return nameRejectNone
+}
+
+// scanUnsafeRunes 返回字符串里第一个不安全码点的原因码；全部安全时返回 nameRejectNone。
+func scanUnsafeRunes(s string) string {
+	for _, r := range s {
+		if code := unsafeRuneCode(r); code != nameRejectNone {
+			return code
+		}
+	}
+	return nameRejectNone
 }
 
 func containsAnyByte(s string, set string) bool {
@@ -124,6 +181,11 @@ func auditComponent(name string, maxLen int) string {
 	if containsControlByte(name) {
 		return nameRejectControl
 	}
+	// 双向覆写 / 零宽 / 非字符等不可见 Unicode：在 ASCII 控制字符之后、结构性
+	// 字符判定之前拦截，避免它们借 UTF-8 合法编码绕过字节级检查。
+	if code := scanUnsafeRunes(name); code != nameRejectNone {
+		return code
+	}
 	if containsAnyByte(name, `/\`) {
 		return nameRejectSeparator
 	}
@@ -162,7 +224,21 @@ func SafeVersionComponent(name string) (string, string) {
 	return clean, nameRejectNone
 }
 
-// SafeVersionDisplayName 校验拼上 loader 后缀后的完整展示名
+// SafeAccountName 校验“会成为 Users/<name>/ 目录段”的账户名（微软 / 离线 /
+// Yggdrasil 外置登录昵称）。历史上 validateUsername 只挡 ".."、"/"、"\" 与 ASCII
+// 控制字符，漏掉了 Windows 保留设备名（CON/NUL/COM1…）、NTFS 备用数据流冒号、
+// 其它文件名字符以及不可见 / 双向覆写 Unicode。账户名与凭据文件路径直接拼接，
+// 必须与其它落盘段走同一套规则，只是长度上限沿用历史的 64。
+// 仅做“去首尾空白”这一确定无害的归一化，其余问题一律拒绝。
+func SafeAccountName(name string) (string, string) {
+	clean := strings.TrimSpace(name)
+	if why := auditComponent(clean, maxAccountNameLen); why != nameRejectNone {
+		return "", why
+	}
+	return clean, nameRejectNone
+}
+
+
 // （"<customName> (<loaderName> <loaderVersion>)"），它同样会成为版本目录名。
 func SafeVersionDisplayName(name string) (string, string) {
 	clean := strings.TrimSpace(name)
@@ -181,6 +257,11 @@ func SafeLoaderComponent(value string) (string, string) {
 	}
 	if why := auditComponent(clean, maxLoaderComponentLen); why != nameRejectNone {
 		return "", why
+	}
+	// fabric / forge / 版本号这类加载器标识来自加载器元数据，是无空格的 token；
+	// 内部空格只可能来自异常或伪造数据，拼进展示名 / 路径会引入歧义，单独拒绝。
+	if strings.ContainsRune(clean, ' ') {
+		return "", nameRejectInnerSpace
 	}
 	return clean, nameRejectNone
 }
@@ -240,10 +321,18 @@ func describeNameReject(why string) string {
 		return "名称不允许以空格开头或结尾"
 	case nameRejectOuterDot:
 		return "名称不允许以点开头或结尾"
+	case nameRejectInnerSpace:
+		return "加载器标识不允许包含内部空格"
 	case nameRejectLength:
 		return "名称超过单段长度上限"
 	case nameRejectExtension:
 		return "模组文件扩展名不在允许列表（.jar/.zip/.jar.disabled）"
+	case nameRejectInvisible:
+		return "名称包含零宽空格 / 软连字符 / BOM 等不可见字符"
+	case nameRejectBidi:
+		return "名称包含双向覆写控制字符（可反转显示顺序，用于仿冒）"
+	case nameRejectNonchar:
+		return "名称包含 Unicode 永久非字符"
 	default:
 		return "名称未通过安全校验"
 	}
