@@ -40,10 +40,10 @@ func TestHasAlternateDataStream(t *testing.T) {
 	}
 }
 
-func writeDummyInstaller(t *testing.T, dir, name string, size int) string {
+func writeDummyInstaller(t *testing.T, dir, name string, size int64) string {
 	t.Helper()
 	p := filepath.Join(dir, name)
-	data := make([]byte, size)
+	data := make([]byte, int(size))
 	for i := range data {
 		data[i] = byte('A' + (i % 26))
 	}
