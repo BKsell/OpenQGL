@@ -177,3 +177,60 @@ func TestCurrentGameEnvironmentReturnsUsableEnv(t *testing.T) {
 		t.Fatal("stripped 不应为 nil，便于调用方直接 range 记日志")
 	}
 }
+
+func TestBuildGameEnvironmentAuditedRejects(t *testing.T) {
+	parent := []string{
+		"PATH=/bin",
+		"EVIL=x\x00JAVA_TOOL_OPTIONS=-javaagent:a", // 值含 NUL，禁止靠它把注入变量塞回环境块
+		"=C:=C:\\drive-cwd",                         // 空键 drive-cwd 条目，对 JVM 子进程丢弃
+	}
+	extra := map[string]string{
+		"GOOD":  "g",
+		" BAD":  "padding", // 键首尾空白：拒绝
+		"EV":    "a\tb",    // 值含 TAB 控制字符：拒绝
+		"A=B":   "eq",      // 键含 '='：拒绝
+	}
+	var stripped []string
+	var rejected []envRejection
+	env := buildGameEnvironmentAudited(parent, extra, &stripped, &rejected)
+	m := envMap(env)
+
+	if len(stripped) != 0 {
+		t.Fatalf("本组输入不应命中 JVM 黑名单剥离，stripped=%v", stripped)
+	}
+	if m["PATH"] != "/bin" {
+		t.Fatalf("合法继承变量应保留，env=%v", env)
+	}
+	if m["GOOD"] != "g" {
+		t.Fatalf("合法 extra 变量应保留，env=%v", env)
+	}
+	if _, exists := m["EVIL"]; exists {
+		t.Fatal("含 NUL 的继承条目必须丢弃")
+	}
+	if _, exists := m[" BAD"]; exists {
+		t.Fatal("首尾空白的 extra 键必须丢弃")
+	}
+	if _, exists := m["EV"]; exists {
+		t.Fatal("值含控制字符的 extra 条目必须丢弃")
+	}
+
+	byName := make(map[string]envProblem, len(rejected))
+	for _, r := range rejected {
+		byName[r.Name] = r.Reason
+	}
+	wantRejects := map[string]envProblem{
+		"EVIL": envProblemValueNUL,
+		"":     envProblemEmptyName,
+		" BAD": envProblemNamePadding,
+		"EV":   envProblemValueControl,
+		"A=B":  envProblemNameEquals,
+	}
+	if len(byName) != len(wantRejects) {
+		t.Fatalf("rejected 条数=%d，want %d，明细=%+v", len(byName), len(wantRejects), rejected)
+	}
+	for name, reason := range wantRejects {
+		if got := byName[name]; got != reason {
+			t.Fatalf("rejected[%q]=%q，want %q（全部明细=%+v）", name, got, reason, rejected)
+		}
+	}
+}
