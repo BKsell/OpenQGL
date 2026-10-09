@@ -171,7 +171,7 @@ func resolveWorldDir(savesDir, worldName string) (string, error) {
 	if reason != nameRejectNone {
 		recordSecurityEvent(auditCategoryPrivateWrite, auditSeverityWarn, auditActionRejected,
 			"worldbackup", "世界名校验未通过: "+reason)
-		return "", worldError("世界目录名不合法: "+reason)
+		return "", worldError("世界目录名不合法: " + reason)
 	}
 	worldDir := filepath.Join(savesDir, cleanName)
 	// 直接 Lstat（不跟随）：世界根必须是一个真实目录；符号链接根一律拒绝，防止
@@ -355,7 +355,7 @@ func umfsFileHex(path string) (string, error) {
 func worldBackupDirFor(root, worldName string) (string, error) {
 	cleanName, reason := validateWorldName(worldName)
 	if reason != nameRejectNone {
-		return "", worldError("世界目录名不合法: "+reason)
+		return "", worldError("世界目录名不合法: " + reason)
 	}
 	dir := filepath.Join(root, cleanName)
 	if !PathWithinRoot(dir, root) {
@@ -581,7 +581,7 @@ func listWorldBackups(backupRoot, worldName string) ([]WorldBackupMeta, error) {
 func restoreWorldBackup(savesDir, backupRoot, worldName, stamp string, lim WorldBackupLimits) (string, error) {
 	lim = normalizeWorldBackupLimits(lim)
 	if _, reason := validateWorldName(worldName); reason != nameRejectNone {
-		return "", worldError("世界目录名不合法: "+reason)
+		return "", worldError("世界目录名不合法: " + reason)
 	}
 	dir, err := worldBackupDirFor(backupRoot, worldName)
 	if err != nil {
@@ -652,7 +652,7 @@ func isWorldDirEmpty(dir string) (bool, error) {
 func allocateRestoreDir(savesDir, worldName, stamp string) (string, error) {
 	cleanName, reason := validateWorldName(worldName)
 	if reason != nameRejectNone {
-		return "", worldError("世界目录名不合法: "+reason)
+		return "", worldError("世界目录名不合法: " + reason)
 	}
 	if !validateWorldStamp(stamp) {
 		return "", worldError("时间戳不合法")
