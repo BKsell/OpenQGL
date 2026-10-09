@@ -46,8 +46,13 @@ func TestBoundedSplitterCRLFStripped(t *testing.T) {
 	want := []string{"a", "b", "c"}
 	for _, ch := range expectChunkSizes {
 		got := feedByChunks(t, 1024, in, ch)
-		if len(got) != 3 || got[0] != "a" || got[1] != "b" || got[2] != "c" {
-			t.Fatalf("chunk=%d CRLF 切分错误: %q", ch, got)
+		if len(got) != len(want) {
+			t.Fatalf("chunk=%d CRLF 切分行数错误: %q", ch, got)
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Fatalf("chunk=%d line %d = %q want %q", ch, i, got[i], want[i])
+			}
 		}
 	}
 }
