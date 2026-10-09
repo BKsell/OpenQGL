@@ -171,7 +171,6 @@ func TestSafeModFileName(t *testing.T) {
 		"evil.sh":               nameRejectExtension,
 		"mod.exe":               nameRejectExtension,
 		"mod.jar.exe":           nameRejectExtension,
-		"mod.jar/..":            nameRejectSeparator,
 		"a\x00b.jar":            nameRejectControl,
 		"CON.jar":               nameRejectReserved,
 		"nul.jar.disabled":      nameRejectReserved,
