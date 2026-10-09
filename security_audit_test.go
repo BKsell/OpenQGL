@@ -308,3 +308,45 @@ func TestDefaultAuditPackageAPI(t *testing.T) {
 		t.Fatalf("清理默认审计实例失败: %v", err)
 	}
 }
+
+// TestAuditInitRejectsDirectoryAtLogPath：审计文件路径被预置成目录时，
+// init 必须拒绝，不能把目录当普通文件打开后在其上做追加写入。
+func TestAuditInitRejectsDirectoryAtLogPath(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, auditLogFileName), 0o700); err != nil {
+		t.Fatalf("预置同名目录失败: %v", err)
+	}
+	a := newTestAudit(nil)
+	if err := a.initSecurityAudit(dir); err == nil {
+		t.Fatal("审计路径是目录时 init 应当失败")
+	}
+	if a.initialized {
+		t.Fatal("初始化失败后审计器不应被标记为已启用")
+	}
+}
+
+// TestAuditInitRejectsSymlinkAtLogPath：审计文件被预置成指向外部文件的符号链接时，
+// init 必须拒绝，且链接目标不得被写穿。无法建符号链接的受限环境跳过。
+func TestAuditInitRejectsSymlinkAtLogPath(t *testing.T) {
+	auditDir := t.TempDir()
+	targetDir := t.TempDir()
+	target := filepath.Join(targetDir, "outside.txt")
+	if err := os.WriteFile(target, []byte("keep-me"), 0o600); err != nil {
+		t.Fatalf("准备外部目标失败: %v", err)
+	}
+	link := filepath.Join(auditDir, auditLogFileName)
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("当前环境无法创建符号链接，跳过: %v", err)
+	}
+	a := newTestAudit(nil)
+	if err := a.initSecurityAudit(auditDir); err == nil {
+		t.Fatal("审计路径是符号链接时 init 应当失败")
+	}
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("读取目标失败: %v", err)
+	}
+	if string(got) != "keep-me" {
+		t.Fatalf("符号链接目标被写穿: %q", string(got))
+	}
+}
