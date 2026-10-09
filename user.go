@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 	"golang.org/x/crypto/bcrypt"
@@ -363,8 +362,14 @@ func (a *App) SaveExternalAuthData(username string, authData *ExternalAuthData) 
 	if err != nil {
 		return fmt.Errorf("序列化外置认证数据失败: %w", err)
 	}
-	// 加密
-	key := getEncryptionKey(username)
+	// 加密：外置认证数据与正版账号共用同一用户目录下的每用户随机盐 ms_auth.salt，
+	// 保证同一用户不同凭据文件的密钥派生口径一致；盐缺失时生成，读不到则中止写入。
+	saltPath := filepath.Join(userDir, "ms_auth.salt")
+	salt, _, err := loadOrCreateAuthSalt(saltPath, true)
+	if err != nil {
+		return fmt.Errorf("准备认证盐失败: %w", err)
+	}
+	key := getEncryptionKey(username, salt)
 	encrypted, err := aesGCMEncrypt(payloadBytes, key)
 	if err != nil {
 		return fmt.Errorf("加密外置认证数据失败: %w", err)
@@ -395,8 +400,11 @@ func (a *App) GetExternalAuthData(username string) (*ExternalAuthData, error) {
 	// 先尝试按加密格式解析
 	var encData ExternalAuthDataEncrypted
 	if err := json.Unmarshal(data, &encData); err == nil && encData.Data != "" {
-		// 加密格式：解密 Data 字段
-		key := getEncryptionKey(username)
+		// 加密格式：解密 Data 字段。盐与写入侧一致；老数据没有盐文件时
+		// loadOrCreateAuthSalt(create=false) 返回 nil，getEncryptionKey 回退旧硬编码盐。
+		saltPath := filepath.Join(userDir, "ms_auth.salt")
+		salt, _, _ := loadOrCreateAuthSalt(saltPath, false)
+		key := getEncryptionKey(username, salt)
 		decrypted, err := aesGCMDecrypt(encData.Data, key)
 		if err != nil {
 			return nil, fmt.Errorf("解密外置认证数据失败: %w", err)
@@ -985,7 +993,7 @@ func (a *App) GetBingDailyImage() (string, error) {
 	}
 	// 缓存到本地（原子写，防止预置符号链接把图片数据写穿到其它文件）
 	if err := secureWritePrivateFile(cachePath, data); err != nil {
-		return fmt.Errorf("缓存图片失败: %w", err)
+		return "", fmt.Errorf("缓存图片失败: %w", err)
 	}
 	// 设置为当前背景
 	a.SetBackgroundImage(cachePath)
