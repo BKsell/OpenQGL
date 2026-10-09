@@ -174,20 +174,14 @@ func (a *App) writeLog(format string, args ...interface{}) {
 
 	mcDir := a.GetMinecraftDir()
 	logPath := filepath.Join(mcDir, "qgl_install.log")
-	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
-	if err == nil {
-		f.WriteString(logLine)
-		f.Close()
-	}
+	// 有界日志：4MiB 软上限 + 单份 .1 轮转 + 拒符号链接，防止崩溃循环刷屏占满磁盘。
+	_ = getBoundedLogger(logPath).appendBounded(logLine)
 
 	if a.launchLogPath != "" {
 		dir := filepath.Dir(a.launchLogPath)
 		// 日志目录同样收权到 0700（已存在的宽权限目录一并收敛），失败则放弃本次日志落盘。
-		_ = ensurePrivateDir(dir)
-		f2, err2 := os.OpenFile(a.launchLogPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
-		if err2 == nil {
-			f2.WriteString(logLine)
-			f2.Close()
+		if ensurePrivateDir(dir) == nil {
+			_ = getBoundedLogger(a.launchLogPath).appendBounded(logLine)
 		}
 	}
 }
