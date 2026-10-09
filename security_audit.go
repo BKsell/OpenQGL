@@ -121,6 +121,11 @@ func (s *securityAudit) initSecurityAudit(dir string) error {
 	}
 	s.dir = dir
 	s.filePath = filepath.Join(dir, auditLogFileName)
+	// 审计文件路径若已存在，必须是普通文件：预置的符号链接 / 目录 / 设备都意味着
+	// 有人想借审计追加把事件内容写穿到别的文件，初始化阶段直接拒绝并保持未启用。
+	if err := rejectNonRegular(s.filePath); err != nil {
+		return err
+	}
 	s.fileSize = 0
 	if info, err := os.Stat(s.filePath); err == nil && !info.IsDir() {
 		s.fileSize = info.Size()
@@ -215,6 +220,11 @@ func (s *securityAudit) appendLineLocked(e SecurityEvent) error {
 		return err
 	}
 	line = append(line, '\n')
+	// 每次追加前再做一次非普通文件检查：init 之后若有人把审计路径换成符号链接，
+	// 这里在 O_APPEND（会跟随链接）之前拦下，防止写穿到链接目标。
+	if err := rejectNonRegular(s.filePath); err != nil {
+		return err
+	}
 	f, err := os.OpenFile(s.filePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, privateFilePerm)
 	if err != nil {
 		return err
