@@ -1,5 +1,7 @@
 package main
 
+import "strings"
+
 // mrpackenv.go —— .mrpack 清单 files[].env 的客户端选取纯逻辑内核。
 //
 // Modrinth 整合包规范里，每个文件可带 env：{"client":"required|optional|unsupported",
