@@ -61,11 +61,13 @@ var allowedModFileExts = map[string]bool{
 	".jar.disabled": true,
 }
 
-// containsControlByte 报告字符串是否带 ASCII 控制字符（0x00-0x1F、0x7F）。
-// 这些字符不能出现在任何“会落盘 / 会写日志 / 会渲染到界面”的名字里。
+// containsControlByte 报告字符串是否带 ASCII 控制字节（0x00-0x1F、0x7F）。
+// 这些字节不能出现在任何“会落盘 / 会写日志 / 会渲染到界面”的名字里。按原始字节
+// 扫描而非 rune：非法 UTF-8 序列里夹带的控制字节也必须被识别（路径安全口径）。
 func containsControlByte(s string) bool {
-	for _, r := range s {
-		if r < 0x20 || r == 0x7F {
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c < 0x20 || c == 0x7F {
 			return true
 		}
 	}
