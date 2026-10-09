@@ -46,6 +46,7 @@ const (
 	auditCategoryPermission   = "permission"       // 前端 / 设备权限拒绝
 	auditCategoryConsole      = "server-console"   // 服务端控制台 stdin 命令净化 / 灌入限流
 	auditCategoryConfig       = "config-input"     // 写进用户配置的外部输入（主题色 / 版本 ID）白名单收口
+auditCategoryReclaim      = "reclaim"          // 下载残留临时文件 / 孤儿侧车的安全回收
 
 	auditSeverityInfo     = "info"
 	auditSeverityWarn     = "warn"
@@ -166,7 +167,8 @@ func validAuditCategory(c string) bool {
 	case auditCategoryZip, auditCategoryExternalURL, auditCategoryJVMEnv,
 		auditCategoryInstaller, auditCategoryPrivateWrite, auditCategoryHashVerify,
 		auditCategoryRateLimit, auditCategoryPermission, auditCategoryJarScan,
-		auditCategoryLog4Shell, auditCategoryConsole, auditCategoryConfig:
+		auditCategoryLog4Shell, auditCategoryConsole, auditCategoryConfig,
+		auditCategoryReclaim:
 		return true
 	}
 	return false
