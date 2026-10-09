@@ -169,7 +169,8 @@ func TestPlanRejectsSymlinkAndSpecialEntries(t *testing.T) {
 		{"maven/link", []byte("../../../outside"), os.ModeSymlink | 0644},
 	})
 	lim := zipExtractLimits{EntryMax: 1 << 20, TotalMax: 1 << 20, MaxEntries: 100}
-	if _, _, err := planZipEntries(openZipFiles(t, zipPath), []string{"maven/"}, lim); err == nil {
+	_, _, err := planZipEntries(openZipFiles(t, zipPath), []string{"maven/"}, lim)
+	if err == nil {
 		t.Fatalf("含符号链接条目的 zip 必须被拒绝")
 	}
 	if !strings.Contains(err.Error(), "特殊类型") {
