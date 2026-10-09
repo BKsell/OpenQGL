@@ -34,4 +34,7 @@ func (a *App) startup(ctx context.Context) {
 	// 审计器在未初始化状态下仍会把事件保存在内存环形缓冲里。
 	auditDir := filepath.Join(a.GetQGLDir(), "security")
 	_ = defaultSecurityAudit.initSecurityAudit(auditDir)
+	// 启动后异步回收历史崩溃 / 断电遗留的下载临时文件与孤儿侧车。全程在白名单根内、
+	// 带 6h 年龄阈值，不碰在途文件；失败不影响启动。
+	go a.runStartupReclaim()
 }
