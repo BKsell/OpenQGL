@@ -192,7 +192,7 @@ func TestBackupAndRestoreRoundTrip(t *testing.T) {
 		t.Fatalf("恢复目录越出 saves: %s", restored)
 	}
 	if filepath.Base(restored) != "Survival-restored-"+meta.Stamp {
-		t.Errorf("恢复目录命名不符: %s", filepath.Base(restored)
+		t.Errorf("恢复目录命名不符: %s", filepath.Base(restored))
 	}
 	got := readTree(t, restored)
 	if len(got) != len(files) {
