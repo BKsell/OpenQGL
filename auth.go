@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"hash"
 	"io"
 	"net"
 	"net/http"
@@ -102,7 +103,11 @@ func getEncryptionKey(username string, salt []byte) []byte {
 		combined = append(combined, username...)
 		salt = combined
 	}
-	return pbkdf2.Key([]byte(username), salt, pbkdf2Iterations, pbkdf2KeyLength, NewUMFSHash)
+	// pbkdf2.Key 要求 func() hash.Hash；NewUMFSHash 返回具体类型 *UMFSHash，
+	// Go 的函数类型不支持返回值协变，这里用闭包适配（UMFSHash 已实现 hash.Hash）。
+	return pbkdf2.Key([]byte(username), salt, pbkdf2Iterations, pbkdf2KeyLength, func() hash.Hash {
+		return NewUMFSHash()
+	})
 }
 
 // maxAuthSaltBytes 是本地认证盐文件读取上限：盐本身仅 16 字节，取 1KiB 极宽值。
