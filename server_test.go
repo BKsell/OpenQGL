@@ -50,7 +50,7 @@ func TestSanitizeServerName(t *testing.T) {
 	}
 	for _, c := range cases {
 		got := sanitizeServerName(c.in)
-		if containsStr(got, c.bad) {
+		if containsSubstr(got, c.bad) {
 			t.Errorf("%s: 清洗结果 %q 仍含 %q", c.desc, got, c.bad)
 		}
 	}
@@ -59,7 +59,7 @@ func TestSanitizeServerName(t *testing.T) {
 	}
 }
 
-func containsStr(s, sub string) bool {
+func containsSubstr(s, sub string) bool {
 	return len(sub) > 0 && indexStr(s, sub) >= 0
 }
 
