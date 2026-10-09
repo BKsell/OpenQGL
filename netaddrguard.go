@@ -218,7 +218,7 @@ func ParseHostPort(addr string) (*HostPort, string) {
 	}
 
 	port, err := strconv.Atoi(portStr)
-	if err || portStr == "" {
+	if err != nil || portStr == "" {
 		return nil, addrRejectBadPort
 	}
 	if port < 1 || port > 65535 {
