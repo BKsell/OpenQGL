@@ -85,6 +85,17 @@ func isValidMemory(mem int) bool {
 	return mem >= minMemoryMB && mem <= maxMemoryMB
 }
 
+// IsServerPortAvailable 供前端在创建 / 修改服务器时实时探测端口是否空闲，
+// 返回综合可用性与面向用户的中文原因。
+func (a *App) IsServerPortAvailable(port int) map[string]interface{} {
+	res := IsTCPPortAvailable(port)
+	return map[string]interface{}{
+		"free":   res.Free,
+		"reason": res.Reason,
+		"detail": describePortProbeReason(res.Reason),
+	}
+}
+
 // safeGet 带超时和大小限制的 GET 封装。
 //   - ctx 用 context.WithTimeout 包一层，防止对端挂死连接；
 //   - maxBytes > 0 时用 http.MaxBytesReader 包 response body，
@@ -242,6 +253,13 @@ func (a *App) CreateServer(name, version string, port, maxMem, minMem int, onlin
 	}
 	if minMem > maxMem {
 		return fmt.Errorf("最小内存不能大于最大内存")
+	}
+
+	// 端口占用预检：在创建目录 / 下载 JAR 之前就发现端口冲突，避免用户一路配置完、
+	// 启动时才在服务端日志里看到绑定失败。探测为咨询性（存在 TOCTOU 窗口），最终
+	// 仍以 JVM 实际绑定为准；不受支持的协议族不算冲突。
+	if probe := IsTCPPortAvailable(port); !probe.Free {
+		return fmt.Errorf("端口 %d 无法使用：%s", port, describePortProbeReason(probe.Reason))
 	}
 
 	serverDir := a.GetServerDir()
