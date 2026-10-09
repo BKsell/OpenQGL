@@ -713,15 +713,24 @@ func (a *App) ImportMod(versionID string) error {
 		return fmt.Errorf("Mod 安全扫描失败: %w", err)
 	}
 
-	fileName := SanitizeFilename(filepath.Base(path))
-	if fileName == "" || !strings.HasSuffix(strings.ToLower(fileName), ".jar") {
-		return fmt.Errorf("Mod 文件名无效")
+	// 手动导入的文件名同样走 nameguard（挡控制字符 / 保留设备名 / 尾点等），
+	// 且只接受 .jar（.zip / .jar.disabled 不允许经“导入 Mod”入口进入 mods 目录）。
+	fileName, whyName := SafeModFileName(filepath.Base(path))
+	if whyName != nameRejectNone || !strings.HasSuffix(strings.ToLower(fileName), ".jar") {
+		return fmt.Errorf("Mod 文件名无效: %s", describeNameReject(whyName))
 	}
+	// 与下载链一致：目录里已有大小写 / 尾点等价同名文件时改名避让，避免覆盖或
+	// 与既有 Mod 在大小写不敏感卷上撞成同一文件。
+	plannedName, collided, planErr := planModDestName(modsDir, fileName)
+	if planErr != nil {
+		return planErr
+	}
+	if collided {
+		recordSecurityEvent("download", auditSeverityWarn, auditActionDetected,
+			"mod-name-collision", "导入时发现同名 Mod，已改名避让: "+fileName+" -> "+plannedName)
+	}
+	fileName = plannedName
 	destPath := filepath.Join(modsDir, fileName)
-
-	if _, err := os.Stat(destPath); err == nil {
-		return fmt.Errorf("Mod 文件已存在: %s", fileName)
-	}
 
 	// 统一走安全复制内核，替换旧的 os.Open + io.Copy + OpenFile(O_TRUNC)：
 	// 源拒绝符号链接 / 特殊文件；LimitReader+1 有界复制（上限沿用下载链
@@ -766,25 +775,29 @@ func (a *App) downloadModItem(item *DownloadItem) error {
 		return fmt.Errorf("创建 mods 目录失败: %w", err)
 	}
 
-	// 安全：filepath.Base 剥离 API 返回文件名里的目录组件，SanitizeFilename
-	// 再替换 Windows 保留字符（: * ? " < > | 及控制符），避免异常 Modrinth
-	// 元数据（如 "a:b.jar"）导致建文件失败或产生怪异文件名。
-	fileName := SanitizeFilename(filepath.Base(item.CustomName))
-	if fileName == "" || fileName == "." || fileName == string(filepath.Separator) {
-		fileName = SanitizeFilename(filepath.Base(item.URL))
+	// 落盘名必须与入队时一致地走 nameguard：item.CustomName 在 AddModToDownloadList
+	// 已由 PickSafeModFileName 净化，这里再强制一次（防队列项被其它内部路径污染），
+	// 失败再退回 URL 末段，仍不行用固定安全名。
+	fileName, whyName := SafeModFileName(filepath.Base(item.CustomName))
+	if whyName != nameRejectNone {
+		fileName = PickSafeModFileName(filepath.Base(item.URL))
 	}
-	if fileName == "" {
-		fileName = "mod.jar"
+
+	// 同目录大小写 / 尾点空格碰撞唯一化：NTFS 大小写不敏感，目录里已有的
+	// "Sodium.jar" 与本次 "sodium.jar" 指向同一文件。绝不能再像旧实现那样
+	// “目标已存在就静默 return”——那会让用户以为装上了哈希校验过的新 Mod，
+	// 实际加载的是目录里未经验证的旧 / 恶意 jar。改为自动避让改名并记安全事件。
+	plannedName, collided, planErr := planModDestName(destDir, fileName)
+	if planErr != nil {
+		return planErr
 	}
-	if !strings.HasSuffix(strings.ToLower(fileName), ".jar") {
-		fileName += ".jar"
+	if collided {
+		recordSecurityEvent("download", auditSeverityWarn, auditActionDetected,
+			"mod-name-collision", "目录内已存在大小写/尾点等价的同名 Mod，已改名避让: "+fileName+" -> "+plannedName)
 	}
+	fileName = plannedName
 
 	destPath := filepath.Join(destDir, fileName)
-
-	if _, err := os.Stat(destPath); err == nil {
-		return nil
-	}
 
 	a.emitProgress("downloading", fileName, 0, 0)
 
