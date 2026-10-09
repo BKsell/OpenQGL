@@ -233,7 +233,7 @@ func TestRenderCrashDumpSummary(t *testing.T) {
 		t.Fatal("空摘要应给出兜底说明")
 	}
 	tr := CrashDumpSummary{Kind: "minecraft", FileName: "c.txt", Truncated: true}
-	if !strings.Contains(renderCrashDump(tr), "截断") {
+	if !strings.Contains(renderCrashDumpSummary(tr), "截断") {
 		t.Fatal("截断摘要应标注")
 	}
 }
