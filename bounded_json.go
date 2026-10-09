@@ -44,12 +44,14 @@ var (
 	errJSONFetchBadType      = errors.New("JSON 响应 Content-Type 不被允许")
 	errJSONFetchNoLimit      = errors.New("拉取 JSON 必须指定正的体积上限")
 	errJSONFetchNoSuccessful = errors.New("全部 JSON 源地址都获取失败")
+
+	// jsonFetchBackoffBase 是 5xx 重试的基础退避；设为变量而非常量，便于测试缩短等待。
+	jsonFetchBackoffBase = 500 * time.Millisecond
 )
 
 const (
 	jsonFetchDefaultAttempts = 3
 	jsonFetchBufSize         = 64 * 1024
-	jsonFetchBackoffBase     = 500 * time.Millisecond
 	jsonFetchMaxContentType  = 256
 
 	// jsonLocalDefaultMaxBytes 是“本地版本/资产 JSON”读取的默认体积上限（64MiB）。
