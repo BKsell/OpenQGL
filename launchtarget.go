@@ -114,17 +114,6 @@ func (a *LaunchAudit) FirstCriticalCode() string {
 	return ""
 }
 
-// containsControlByte 报告字符串是否含 NUL 及其它 ASCII 控制字符。
-func containsControlByte(s string) bool {
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if c < 0x20 || c == 0x7f {
-			return true
-		}
-	}
-	return false
-}
-
 // hasTraversalSegment 报告路径按分隔符切分后是否出现独立的 ".." 段。
 func hasTraversalSegment(p string) bool {
 	for _, seg := range strings.FieldsFunc(p, func(r rune) bool { return r == '/' || r == '\\' }) {
