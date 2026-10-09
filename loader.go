@@ -132,6 +132,11 @@ func isSafeFileName(name string) bool {
 			return false
 		}
 	}
+	// ASCII 白名单已经挡掉分隔符与冒号，但 CON / NUL / COM1 这类纯字母数字的
+	// Windows 保留设备名仍能通过，统一复用 nameguard 的保留名判定再挡一道。
+	if isReservedDeviceName(stemOfName(name)) {
+		return false
+	}
 	return true
 }
 
