@@ -9,8 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1808,7 +1806,7 @@ func (a *App) resolveVersionJSONSafe(versionID string, depth int, seen map[strin
 		if perr != nil {
 			fmt.Printf("解析父版本 JSON 失败: %v（继续使用当前版本信息）\n", perr)
 		} else {
-			versionJSON = *a.mergeVersionJSON(parentJSON, &versionJSON)
+			versionJSON = a.mergeVersionJSON(parentJSON, &versionJSON)
 		}
 	}
 	return &versionJSON, nil
@@ -1984,14 +1982,14 @@ func (a *App) buildLaunchArgs(versionID string, versionJSON *VersionJSON, mcDir 
 	if len(cpAudit.SafeEntries) != len(classpathEntries) {
 		classpathEntries = cpAudit.SafeEntries
 	}
-	classpath = strings.Join(classpathEntries, ";")
+	classpath := strings.Join(classpathEntries, ";")
 	if lpAudit := AuditGameLocalPaths(nativesDir, filepath.Join(mcDir, "libraries"),
 		filepath.Join(mcDir, "assets"), []string{mcDir}); lpAudit.HasCritical() {
 		recordSecurityEvent(auditCategoryLaunch, auditSeverityCritical, auditActionBlocked,
 			"minecraft", "游戏本地路径(natives/libraries/assets)审计未通过: "+lpAudit.FirstCriticalCode())
 	}
 	gameDir := versionDir
-	if !a.isVersionIsolation() {
+	if !a.IsVersionIsolation() {
 		gameDir = mcDir
 	}
 
@@ -2312,6 +2310,60 @@ func sanitizePathComponent(name string) error {
 		return fmt.Errorf("无效的路径组件: %s", name)
 	}
 	return nil
+}
+
+// localArtifactMissing 报告目标文件是否不存在或为 0 字节（下载中断/被清理的典型形态）。
+func localArtifactMissing(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil {
+		return true
+	}
+	return info.IsDir() || info.Size() == 0
+}
+
+// fixMissingLibraries 在启动前补齐版本清单要求、但本地缺失（或为空）的库与 Windows
+// 本地库。它只复用版本安装阶段那条已审计的安全下载链：主机白名单在
+// downloadVerifiedFile 内强制、相对路径走 SafeMavenRelPath 防 Zip Slip、SHA1 用清单
+// 官方锚校验；本函数绝不新增任何旁路。已存在且非空的文件不重下（侧车复核仍在
+// downloadVerifiedFile / verifyCachedFile 一侧，这里只为“缺失”场景补下载）。
+func (a *App) fixMissingLibraries(mcDir string, versionJSON *VersionJSON) {
+	if versionJSON == nil {
+		return
+	}
+	winEnv := ruleEnv{osName: "windows", osArch: currentRuleEnv().osArch}
+	libsDir := filepath.Join(mcDir, "libraries")
+
+	fetchArtifact := func(art *LibArtifact, label string) {
+		if art == nil {
+			return
+		}
+		safeRel := SafeMavenRelPath(art.Path)
+		if safeRel == "" {
+			a.writeLog("补全库时跳过不安全路径: %s", art.Path)
+			return
+		}
+		dest := filepath.Join(libsDir, filepath.FromSlash(safeRel))
+		if !localArtifactMissing(dest) {
+			return
+		}
+		a.emitProgress("downloading", filepath.Base(safeRel), 0, art.Size)
+		if err := a.downloadVerifiedFile(rewriteLauncherURLToBMCL(art.URL), dest, art.SHA1, false); err != nil {
+			a.writeLog("补全库文件失败(跳过): %s, %v", label, err)
+		}
+	}
+
+	for i := range versionJSON.Libraries {
+		lib := &versionJSON.Libraries[i]
+		if !a.shouldIncludeLib(*lib) || lib.Downloads == nil {
+			continue
+		}
+		fetchArtifact(lib.Downloads.Artifact, lib.Name)
+		if lib.Natives != nil && lib.Downloads.Classifiers != nil {
+			if nativeKey, ok := resolveWindowsNativeKey(lib.Natives, winEnv); ok {
+				fetchArtifact(lib.Downloads.Classifiers[nativeKey], lib.Name+":"+nativeKey)
+			}
+		}
+	}
 }
 
 func (a *App) LaunchGame(versionID string) error {
