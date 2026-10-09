@@ -96,6 +96,11 @@ func validateUsername(username string) error {
 			return fmt.Errorf("用户名包含控制字符")
 		}
 	}
+	// 账户名最终会拼成 Users/<name>/ 目录段，再走一次统一的落盘名单段内核，
+	// 补齐上面旧检查漏掉的 Windows 保留设备名、ADS 冒号与不可见 / 双向覆写 Unicode。
+	if _, why := SafeAccountName(username); why != nameRejectNone {
+		return fmt.Errorf("用户名未通过安全校验: %s", describeNameReject(why))
+	}
 	return nil
 }
 
