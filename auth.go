@@ -993,18 +993,19 @@ func isLoopbackOrPrivateHost(host string) bool {
 // 永远是不带冒号斜杠的 "http"，导致该判断恒为 false——私网 http 调试也被错误拒绝。
 // 现在按 u.Scheme == "http" 判断。
 func normalizeYggdrasilURL(serverURL string) (string, error) {
-	serverURL = strings.TrimSpace(serverURL)
-
-	if !strings.HasPrefix(serverURL, "http://") && !strings.HasPrefix(serverURL, "https://") {
-		return "", fmt.Errorf("无效的服务器地址协议，只支持 http/https")
-	}
-
-	// 任何 ASCII 控制字符（含 CR/LF/Tab/NUL）都拒绝：该地址随后会被拼进密码
-	// POST 请求行，混入换行可能被截断、按后半段重解释，绝不能进入 HTTP 客户端。
+	// 任何 ASCII 控制字符（含 CR/LF/Tab/NUL）都拒绝，且必须在 TrimSpace 之前检查：
+	// 该地址随后会被拼进密码 POST 请求行，混入换行可能被截断、按后半段重解释。
+	// 先剥空白再查会让用户输入里“尾随的换行 / 制表符”被静默吞掉——对认证地址这类
+	// 高风险输入，选择显式拒绝而非悄悄归一化，便于前端提示用户修正。
 	for i := 0; i < len(serverURL); i++ {
 		if serverURL[i] < 0x20 || serverURL[i] == 0x7f {
 			return "", fmt.Errorf("服务器地址含不可见控制字符，已拒绝")
 		}
+	}
+	serverURL = strings.TrimSpace(serverURL)
+
+	if !strings.HasPrefix(serverURL, "http://") && !strings.HasPrefix(serverURL, "https://") {
+		return "", fmt.Errorf("无效的服务器地址协议，只支持 http/https")
 	}
 
 	u, err := url.Parse(serverURL)
