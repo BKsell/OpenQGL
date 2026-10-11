@@ -38,7 +38,7 @@ const (
 	// 下面三个常量约束“送进 Wails 崩溃事件的最近日志”，与内部按行读取上限解耦：
 	// 内部检测需要保留较长行（模组 dump），但前端弹窗只需要可读的上下文，没必要
 	// 把 20 条 1MiB 的行（最坏 20MiB）塞进一次事件。
-	maxCrashContextLines = 20
+	maxCrashContextLines  = 20
 	maxGameLogUILineBytes = 2 << 10
 	maxCrashContextBytes  = 16 << 10
 )
@@ -214,27 +214,21 @@ func streamBoundedLines(r io.Reader, maxLine int, yield func(string)) (lines, tr
 }
 
 // stripLogControlChars 去掉日志行里可能干扰终端/前端渲染的控制字符，保留制表符。
-// 用显式 rune 判定，不引入正则；换行符在按行阶段已被切走，这里只会遇到残余 CR。
+// 实现统一委托 motdguard 的 stripDisplayControlChars（同一套显式 rune 判定），
+// 避免两处控制字符策略漂移；换行符在按行阶段已被切走，这里只会遇到残余 CR。
 func stripLogControlChars(line string) string {
-	var b strings.Builder
-	b.Grow(len(line))
-	for _, r := range line {
-		if r == '\t' {
-			b.WriteRune(r)
-			continue
-		}
-		if r < 0x20 || r == 0x7f {
-			continue
-		}
-		b.WriteRune(r)
-	}
-	return b.String()
+	return stripDisplayControlChars(line)
 }
 
-// boundCrashContextLine 把一条日志行收敛成可放进崩溃上下文的形态：先剥控制字符，
-// 再按字节裁剪到 maxGameLogUILineBytes 并追加截断标记。
+// boundCrashContextLine 把一条日志行收敛成可放进崩溃上下文的形态：先走完整
+// 展示净化（整段剥终端序列 + § 格式码 + 双向/隐形字符 + 残余控制字符，见
+// motdguard），再按字节裁剪到 maxGameLogUILineBytes 并追加截断标记。
+// 单剥 ESC 会残留 “[31m” 这类可见垃圾，整段剥除同时防注入与防乱码。
 func boundCrashContextLine(line string) string {
-	clean := stripLogControlChars(line)
+	clean := stripTerminalSequences(line)
+	clean = stripMCFormatCodes(clean)
+	clean = stripBidiAndInvisibles(clean)
+	clean = stripDisplayControlChars(clean)
 	if len(clean) <= maxGameLogUILineBytes {
 		return clean
 	}
