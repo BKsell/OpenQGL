@@ -2469,6 +2469,33 @@ func (a *App) LaunchGame(versionID string) error {
 		return fmt.Errorf("启动预检未通过，拒绝启动")
 	}
 
+	// 启动参数快照：把“用什么启动”落一份脱敏快照（Java 路径 / 版本 / 内存 /
+	// auth 类型 / mods 数量 / 预检结果），与 session journal 互补——日后审计只
+	// 看结果不看配置的问题由本模块补上。快照不含任何 token，只记类型。
+	authTypeLabel := "offline"
+	switch currentUser.Type {
+	case UserTypePremium:
+		authTypeLabel = "microsoft"
+	case UserTypeExternal:
+		authTypeLabel = "external"
+	}
+	// 堆内存与启动参数同源（heapsizeguard 归一后的 safeMax），快照记录 MB 口径。
+	maxMemMB := 2048
+	if config, cfgErr := a.GetGlobalConfig(); cfgErr == nil && config != nil {
+		_, safeMaxGB, _ := ResolveHeapSizesGB(config.MinMemory, config.MaxMemory)
+		maxMemMB = safeMaxGB * 1024
+	}
+	modsCount := 0
+	if modsDir, errDir := filepath.Abs(filepath.Join(mcDir, "mods")); errDir == nil {
+		if entries, errLs := os.ReadDir(modsDir); errLs == nil {
+			modsCount = len(entries)
+		}
+	}
+	a.recordLaunchSnapshot(buildLaunchSnapshot(
+		versionID, javaPath, javaEntry.Version, authTypeLabel,
+		maxMemMB, modsCount, currentUser.Type == UserTypePremium, preflightBlocked, len(preflightIssues),
+	))
+
 	cmdParts := []string{syscall.EscapeArg(javaPath)}
 	for _, arg := range allArgs {
 		cmdParts = append(cmdParts, syscall.EscapeArg(arg))
