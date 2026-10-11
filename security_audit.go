@@ -375,7 +375,10 @@ func (s *securityAudit) clear() error {
 // ===== 包级便捷函数：拦截点只调这些，不必关心实例 =====
 
 // recordSecurityEvent 记录一条安全事件。
+// detail 在落盘前统一过 reportmin 的值级去敏（剥本机绝对路径 / 令牌 / 长十六
+// 进制 / 换行折叠），防止安全事件文件把本机结构或凭据泄给排查者与未来遥测通道。
 func recordSecurityEvent(category, severity, action, source, detail string) {
+	detail = ScrubTelemetryValue(detail)
 	defaultSecurityAudit.record(category, severity, action, source, detail)
 }
 
