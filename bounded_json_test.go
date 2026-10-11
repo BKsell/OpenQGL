@@ -79,8 +79,10 @@ func TestFetchJSONBoundedOK(t *testing.T) {
 		fmt.Fprint(w, `{"version":7,"name":"ok"}`)
 	})
 	defer srv.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
 	var p jsonTestPayload
-	if err := fetchJSONBounded(context.Background(), srv.URL, &p, opts); err != nil {
+	if err := fetchJSONBounded(ctx, srv.URL, &p, opts); err != nil {
 		t.Fatalf("正常拉取失败: %v", err)
 	}
 	if p.Version != 7 || p.Name != "ok" {

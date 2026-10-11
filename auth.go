@@ -326,6 +326,7 @@ func isAllowedVerificationURL(raw string) bool {
 		return false
 	}
 	return host == "microsoft.com" || strings.HasSuffix(host, ".microsoft.com") ||
+		host == "microsoftonline.com" || strings.HasSuffix(host, ".microsoftonline.com") ||
 		host == "live.com" || strings.HasSuffix(host, ".live.com")
 }
 

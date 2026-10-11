@@ -83,6 +83,12 @@ func validateAssetObjectName(name string) (string, string) {
 	if strings.HasPrefix(name, "/") {
 		return "", aoRejectAbs
 	}
+	// 拒绝任何 ".." 段（正斜杠 / 反斜杠 / 混合都算）。
+	// 注意：不能只依赖 filepath.Clean——Windows 上 Clean 会把 "a/../b" 折叠成 "b"，
+	// 使穿越探测被静默吞掉；这里必须在规范化前看原始输入。
+	if containsDotDotSegment(name) {
+		return "", aoRejectTrail
+	}
 	if hasWindowsDrivePrefix(name) {
 		return "", aoRejectDrive
 	}
@@ -112,6 +118,28 @@ func hasWindowsDrivePrefix(p string) bool {
 	c := p[0]
 	driveLetter := (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
 	return driveLetter && p[1] == ':'
+}
+
+// containsDotDotSegment 在原始输入上（不 Clean）检测是否存在 ".." 路径段。
+// 正斜杠、反斜杠、混合分隔都要命中；空段（"a//b"）不作为独立段。
+func containsDotDotSegment(p string) bool {
+	if p == ".." {
+		return true
+	}
+	runes := []rune(p)
+	segStart := 0
+	for i := 0; i <= len(runes); i++ {
+		if i == len(runes) || runes[i] == '/' || runes[i] == '\\' {
+			if i > segStart {
+				seg := string(runes[segStart:i])
+				if seg == ".." {
+					return true
+				}
+			}
+			segStart = i + 1
+		}
+	}
+	return false
 }
 
 // validateAssetObjectHash 资源对象哈希必须是 40 位小写十六进制（SHA-1）。
