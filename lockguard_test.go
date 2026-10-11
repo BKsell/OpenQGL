@@ -152,6 +152,32 @@ func containsBytes(hay, needle []byte) bool {
 	return false
 }
 
+func TestLockPINCorruptState(t *testing.T) {
+	lim := defaultLockLimits()
+	st := &memLockStore{payload: []byte(`{"hmac":"zz","salt":"00"}`)}
+	ok, reason, _ := VerifyLaunchPIN(st, "1234", lim)
+	if ok || reason != "pin-corrupt" {
+		t.Fatalf("corrupt state: ok=%v reason=%q", ok, reason)
+	}
+	st.payload = []byte(`not-json`)
+	ok, reason, _ = VerifyLaunchPIN(st, "1234", lim)
+	if ok || reason != "pin-unset" {
+		t.Fatalf("bad payload: ok=%v reason=%q", ok, reason)
+	}
+}
+
+func TestLockPINShortPin(t *testing.T) {
+	lim := defaultLockLimits()
+	st := &memLockStore{}
+	if err := SetLaunchPIN(st, "12", "", lim); err == nil {
+		t.Fatalf("short pin accepted")
+	}
+	ok, reason, _ := VerifyLaunchPIN(st, "12", lim)
+	if ok || reason != "pin-length-out-of-range" {
+		t.Fatalf("short verify: ok=%v reason=%q", ok, reason)
+	}
+}
+
 func TestSummarizeLockStatus(t *testing.T) {
 	if s := SummarizeLockStatus(false, 5, false); s != "launch-lock unset" {
 		t.Fatalf("unset summary wrong: %q", s)
