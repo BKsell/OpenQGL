@@ -124,6 +124,28 @@ func TestAggregatePreflightBlocksOnCritical(t *testing.T) {
 	}
 }
 
+func TestCheckSymlinkTrapsCleanAndTrap(t *testing.T) {
+	dir := t.TempDir()
+	_ = os.MkdirAll(filepath.Join(dir, "mods"), 0755)
+	_ = os.WriteFile(filepath.Join(dir, "mods", "a.jar"), []byte("x"), 0600)
+	if issues := checkSymlinkTraps(dir); len(issues) != 0 {
+		t.Fatalf("干净目录不应有 issues: %+v", issues)
+	}
+	// 挂一个真实符号链接 → critical。
+	outside := filepath.Join(t.TempDir(), "evil.jar")
+	_ = os.WriteFile(outside, []byte("x"), 0600)
+	if err := os.Symlink(outside, filepath.Join(dir, "mods", "evil.jar")); err != nil {
+		t.Skipf("当前环境不允许创建符号链接: %v", err)
+	}
+	issues := checkSymlinkTraps(dir)
+	if len(issues) != 1 || issues[0].Kind != preflightCritical || issues[0].Code != "symlink-trap" {
+		t.Fatalf("应命中 critical 陷阱: %+v", issues)
+	}
+	if issues[0].Text == "" {
+		t.Fatal("陷阱说明不应为空")
+	}
+}
+
 func TestTruncatePreflightText(t *testing.T) {
 	short := truncatePreflightText("abc")
 	if short != "abc" {
