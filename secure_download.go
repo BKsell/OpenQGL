@@ -44,14 +44,14 @@ const (
 
 // secureDownloadOptions 控制一次安全下载。
 type secureDownloadOptions struct {
-	MaxBytes       int64                        // 必填：声明与实际体积的共同硬上限
-	ExpectedSHA256 string                       // 可空：非空时必须与流式摘要一致（小写十六进制）
-	Attempts       int                          // 可空：<=0 时取 secureDownloadDefaultAttempts
-	UserAgent      string                       // 可空：为空则不覆盖
-	Client         *http.Client                 // 可空：为空用 safeHTTPClient()
-	Progress       func(received, total int64)  // 可空：每读到一批数据回调一次
-	MarkWebOrigin  bool                         // 可空：Windows 上落盘后写入 MOTW（ZoneId=3 Internet）
-	ReferrerURL    string                       // 可空：MOTW 的 ReferrerUrl
+	MaxBytes       int64                       // 必填：声明与实际体积的共同硬上限
+	ExpectedSHA256 string                      // 可空：非空时必须与流式摘要一致（小写十六进制）
+	Attempts       int                         // 可空：<=0 时取 secureDownloadDefaultAttempts
+	UserAgent      string                      // 可空：为空则不覆盖
+	Client         *http.Client                // 可空：为空用 safeHTTPClient()
+	Progress       func(received, total int64) // 可空：每读到一批数据回调一次
+	MarkWebOrigin  bool                        // 可空：Windows 上落盘后写入 MOTW（ZoneId=3 Internet）
+	ReferrerURL    string                      // 可空：MOTW 的 ReferrerUrl
 }
 
 // secureDownloadResult 是一次成功下载的回执。
@@ -69,6 +69,16 @@ func streamVerifiedDownload(ctx context.Context, url, destPath string, opts secu
 	if !isHTTPSURL(url) {
 		return nil, fmt.Errorf("拒绝不安全的下载 URL（非 HTTPS）: %s", url)
 	}
+	// 短链 / 重定向预检：任何下载出发前先过 shortlinkguard。非短链 URL 只做
+	// 协议与 userinfo 校验；短链 URL 追加目标主机私网判定（解析器走真实 DNS，
+	// 域名命中私网 / 回环 / 链路本地即拒绝）。失败视为不可重试的硬错误。
+	preflighted, err := preflightDownloadURL(url, nil)
+	if err != nil {
+		recordSecurityEvent(auditCategoryPrivateWrite, auditSeverityCritical, auditActionBlocked,
+			"secure-download", "下载 URL 预检拒绝: "+err.Error())
+		return nil, err
+	}
+	url = preflighted
 	if opts.MaxBytes <= 0 {
 		return nil, errSecureDownloadNoLimit
 	}
