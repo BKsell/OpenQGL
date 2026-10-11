@@ -653,6 +653,8 @@ func (a *App) SaveGlobalConfig(config *GlobalConfig) error {
 	if err := secureWritePrivateFile(configPath, data); err != nil {
 		return fmt.Errorf("写入全局配置失败: %w", err)
 	}
+	// 本进程可信写入后刷新防篡改基线（用户 UI 主动改配置不应被误判为外部篡改）。
+	a.UpdateConfigGuardBaseline(a.configSnapshotOf(config, nil))
 	return nil
 }
 
@@ -690,6 +692,10 @@ func (a *App) SaveUserConfig(username string, config *UserConfig) error {
 	// 安全加固: 用户配置原子写、0600、拒绝符号链接写穿
 	if err := secureWritePrivateFile(configPath, data); err != nil {
 		return fmt.Errorf("写入用户配置文件失败: %w", err)
+	}
+	// 版本选择属启动执行目标类字段，本进程可信写入后同步刷新防篡改基线。
+	if g, err := a.GetGlobalConfig(); err == nil {
+		a.UpdateConfigGuardBaseline(a.configSnapshotOf(g, config))
 	}
 	return nil
 }
