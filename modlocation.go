@@ -69,6 +69,18 @@ func isModJarName(name string) bool {
 //
 // mods 子目录（mods/sub/x.jar）、libraries、saves 等一律不算受管文件。
 func resolveManagedModPath(mcDir, p string) (string, bool) {
+	// 预检原始文件名段（尚未经过 Windows 路径归一化）：尾部点 / 空格 / 控制字符等
+	// 会被 OS 层 Abs/Clean 静默剥离或折叠，导致 "a.jar " 归一化后冒充合法受管文件。
+	// 这里在归一化之前就用 modNameLooksSafe 拦截，保持与 modNameLooksSafe 的
+	// “Win32 会吞掉的点 / 空格结尾一律不受管”口径一致。
+	rawBase := p
+	if trimmed := strings.TrimRight(p, `\/`); trimmed != "" {
+		rawBase = filepath.Base(trimmed)
+	}
+	if !modNameLooksSafe(rawBase) {
+		return "", false
+	}
+
 	root, err := canonicalAbs(mcDir)
 	if err != nil {
 		return "", false
