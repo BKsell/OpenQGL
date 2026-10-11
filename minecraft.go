@@ -2388,6 +2388,13 @@ func (a *App) LaunchGame(versionID string) error {
 		return err
 	}
 
+	// 实例并发启动锁：同一版本实例同时只能有一个 JVM 在跑（防止两个进程并发
+	// 读写世界存档 / 配置 / 日志互相踩踏）。上锁失败直接拦截；锁在游戏进程
+	// 退出后由 watchGameProcess 释放，进程被强杀时靠过期时长兜底接管。
+	if _, err := a.acquireInstanceLock(versionID); err != nil {
+		return err
+	}
+
 	versionJSON, err := a.resolveVersionJSON(versionID)
 	if err != nil {
 		return fmt.Errorf("解析版本 JSON 失败: %v", err)
@@ -2495,7 +2502,7 @@ func (a *App) LaunchGame(versionID string) error {
 	processStartTime := time.Now()
 	a.writeLog("游戏进程 PID: %d", pid)
 
-	go a.watchGameProcess(cmd, stdoutPipe, stderrPipe, pid, processStartTime)
+	go a.watchGameProcess(cmd, stdoutPipe, stderrPipe, pid, processStartTime, versionID)
 	return nil
 }
 
@@ -2544,7 +2551,9 @@ func (a *App) dumpCrashContext(reason, gameDir string, startTime time.Time) stri
 	return reason
 }
 
-func (a *App) watchGameProcess(cmd *exec.Cmd, stdoutPipe io.Reader, stderrPipe io.Reader, pid int, processStartTime time.Time) {
+func (a *App) watchGameProcess(cmd *exec.Cmd, stdoutPipe io.Reader, stderrPipe io.Reader, pid int, processStartTime time.Time, versionID string) {
+	// 实例锁在本函数退出（游戏进程结束 / 启动失败 / 超时）时统一释放。
+	defer a.releaseInstanceLock(versionID, "")
 	runtime.EventsEmit(a.ctx, "launchStatus", "launching")
 	crashDetected, windowFound := false, false
 	crashReason := ""
