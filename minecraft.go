@@ -39,9 +39,9 @@ var (
 
 // 下载体积上限，防止恶意服务器用无限流把磁盘/内存写爆。
 const (
-	maxJavaInstallerBytes    = 500 << 20 // 500 MiB，JRE 安装包实际 ~40-70 MiB
-	maxAuthlibPrefetchBytes  = 1 << 20  // 1 MiB，authlibinjector 抓取的皮肤站首页
-	maxVersionManifestBytes   = 8 << 20  // 8 MiB，版本清单/资产索引 JSON
+	maxJavaInstallerBytes   = 500 << 20 // 500 MiB，JRE 安装包实际 ~40-70 MiB
+	maxAuthlibPrefetchBytes = 1 << 20   // 1 MiB，authlibinjector 抓取的皮肤站首页
+	maxVersionManifestBytes = 8 << 20   // 8 MiB，版本清单/资产索引 JSON
 )
 
 // MCVersion 表示一个 Minecraft 版本
@@ -80,20 +80,20 @@ type DownloadProgress struct {
 
 // DownloadItem 下载列表项
 type DownloadItem struct {
-	ID             string  `json:"id"`
-	URL            string  `json:"url"`
-	CustomName     string  `json:"customName"`
-	Type           string  `json:"type"`
-	ItemType       string  `json:"itemType"`
-	JavaMajor      int     `json:"javaMajor"`
-	SavePath       string  `json:"savePath"`
-	LoaderName     string  `json:"loaderName"`
-	LoaderVersion  string  `json:"loaderVersion"`
-	OptiFineType   string  `json:"optifineType"`
-	OptiFinePatch  string  `json:"optifinePatch"`
-	Status         string  `json:"status"`
-	Progress       float64 `json:"progress"`
-	ErrorMsg       string  `json:"errorMsg"`
+	ID            string  `json:"id"`
+	URL           string  `json:"url"`
+	CustomName    string  `json:"customName"`
+	Type          string  `json:"type"`
+	ItemType      string  `json:"itemType"`
+	JavaMajor     int     `json:"javaMajor"`
+	SavePath      string  `json:"savePath"`
+	LoaderName    string  `json:"loaderName"`
+	LoaderVersion string  `json:"loaderVersion"`
+	OptiFineType  string  `json:"optifineType"`
+	OptiFinePatch string  `json:"optifinePatch"`
+	Status        string  `json:"status"`
+	Progress      float64 `json:"progress"`
+	ErrorMsg      string  `json:"errorMsg"`
 	// SizeBytes 是该任务“声明”的下载字节数（来自可信镜像/Modrinth files[].size）。
 	// 0 表示未知（服务端未给大小），不参与聚合字节预算求和；负数永远不应出现，
 	// 预算内核会拒绝。该字段仅用于下载队列的聚合磁盘预算，不改变分发逻辑。
@@ -1690,7 +1690,7 @@ func bytesToString(b []byte) string {
 }
 
 func (a *App) GetDownloadProgress() DownloadProgress { return a.downloadProgress }
-func (a *App) isVersionIsolated() bool              { return a.IsVersionIsolation() }
+func (a *App) isVersionIsolated() bool               { return a.IsVersionIsolation() }
 
 func (a *App) shouldIncludeLib(lib Library) bool {
 	// 库规则统一走 ruleengine：按 Mojang 语义评估 os.name/arch/version 与 features，
@@ -2108,7 +2108,7 @@ func (a *App) buildLaunchArgs(versionID string, versionJSON *VersionJSON, mcDir 
 		"${auth_session}": accessToken, "${user_type}": userType,
 		"${version_type}": "QGL", "${user_properties}": "{}",
 		"${game_assets}": filepath.Join(mcDir, "assets", "virtual", "legacy"),
-		"${classpath}": classpath, "${classpath_separator}": ";",
+		"${classpath}":   classpath, "${classpath_separator}": ";",
 		"${natives_directory}": nativesDir, "${library_directory}": filepath.Join(mcDir, "libraries"),
 		"${launcher_name}": "QGL", "${launcher_version}": "1.0.0",
 		"${resolution_width}": "854", "${resolution_height}": "480",
@@ -2286,14 +2286,14 @@ func expandConditionalArg(arg interface{}, repl map[string]string) []string {
 
 func resolveJVMArg(arg interface{}, nativesDir, mcDir, classpath, versionID string) []string {
 	return expandConditionalArg(arg, map[string]string{
-		"${natives_directory}":  nativesDir,
-		"${library_directory}":  filepath.Join(mcDir, "libraries"),
+		"${natives_directory}":   nativesDir,
+		"${library_directory}":   filepath.Join(mcDir, "libraries"),
 		"${libraries_directory}": filepath.Join(mcDir, "libraries"),
 		"${classpath_separator}": ";",
-		"${classpath}":         classpath,
-		"${launcher_name}":     "QGL",
-		"${launcher_version}":  "1.0.0",
-		"${version_name}":      versionID,
+		"${classpath}":           classpath,
+		"${launcher_name}":       "QGL",
+		"${launcher_version}":    "1.0.0",
+		"${version_name}":        versionID,
 	})
 }
 
@@ -2379,6 +2379,12 @@ func (a *App) LaunchGame(versionID string) error {
 	// 拉起 JVM 前对 mods 目录做存量安全扫描（通用恶意形态 + Log4Shell/JNDI），
 	// 覆盖手动拖入 / 其它启动器写入、从未经本程序校验的 jar；命中高危直接拒绝启动。
 	if err := a.enforceInstalledModsBeforeLaunch(versionID); err != nil {
+		return err
+	}
+
+	// mods 完整性审计闸门：基线存在时对账目录，发现被篡改的 mod 默认拦截启动，
+	// 除非用户显式开启强制放行（SetModsAuditForceLaunch）。新增 / 缺失仅提示。
+	if err := a.enforceModsAuditBeforeLaunch(versionID); err != nil {
 		return err
 	}
 
