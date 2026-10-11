@@ -2501,6 +2501,7 @@ func (a *App) LaunchGame(versionID string) error {
 	pid := cmd.Process.Pid
 	processStartTime := time.Now()
 	a.writeLog("游戏进程 PID: %d", pid)
+	a.recordSessionStart(versionID, pid)
 
 	go a.watchGameProcess(cmd, stdoutPipe, stderrPipe, pid, processStartTime, versionID)
 	return nil
@@ -2554,6 +2555,14 @@ func (a *App) dumpCrashContext(reason, gameDir string, startTime time.Time) stri
 func (a *App) watchGameProcess(cmd *exec.Cmd, stdoutPipe io.Reader, stderrPipe io.Reader, pid int, processStartTime time.Time, versionID string) {
 	// 实例锁在本函数退出（游戏进程结束 / 启动失败 / 超时）时统一释放。
 	defer a.releaseInstanceLock(versionID, "")
+	// 会话台账结算：无论从哪条路径退出（正常/崩溃/超时/立即退出），都记一条
+	// 结局。各 return 前先更新本组变量，defer 在函数尾统一写盘。
+	sessionOutcome := SessionOutcomeOk
+	sessionExitCode := -1
+	sessionDetail := ""
+	defer func() {
+		a.recordSessionEnd(versionID, pid, sessionExitCode, sessionOutcome, sessionDetail)
+	}()
 	runtime.EventsEmit(a.ctx, "launchStatus", "launching")
 	crashDetected, windowFound := false, false
 	crashReason := ""
@@ -2635,8 +2644,13 @@ func (a *App) watchGameProcess(cmd *exec.Cmd, stdoutPipe io.Reader, stderrPipe i
 				select {
 				case exitCode := <-exitChan:
 					if exitCode != 0 {
+						sessionOutcome = SessionOutcomeCrash
+						sessionExitCode = exitCode
 						runtime.EventsEmit(a.ctx, "launchStatus", "crashed")
 						runtime.EventsEmit(a.ctx, "crashInfo", fmt.Sprintf("游戏已退出 (退出码: %d)", exitCode))
+					} else {
+						sessionOutcome = SessionOutcomeOk
+						sessionExitCode = 0
 					}
 				}
 				return
@@ -2659,12 +2673,23 @@ func (a *App) watchGameProcess(cmd *exec.Cmd, stdoutPipe io.Reader, stderrPipe i
 					logContext += "\n\n崩溃诊断:\n" + dump
 				}
 				if elapsed < 3*time.Second {
+					sessionOutcome = SessionOutcomeLaunchFail
 					runtime.EventsEmit(a.ctx, "launchStatus", "crashed")
 					runtime.EventsEmit(a.ctx, "crashInfo", sanitizeLogLine(fmt.Sprintf("游戏启动失败，进程立即退出 (退出码: %d)%s", exitCode, logContext)))
 				} else {
+					sessionOutcome = SessionOutcomeCrash
 					runtime.EventsEmit(a.ctx, "launchStatus", "crashed")
 					runtime.EventsEmit(a.ctx, "crashInfo", sanitizeLogLine(fmt.Sprintf("游戏进程意外退出 (退出码: %d)%s", exitCode, logContext)))
 				}
+				sessionExitCode = exitCode
+				sessionDetail = logContext
+			} else {
+				if exitCode != 0 {
+					sessionOutcome = SessionOutcomeCrash
+				} else {
+					sessionOutcome = SessionOutcomeOk
+				}
+				sessionExitCode = exitCode
 			}
 			return
 		default:
@@ -2675,6 +2700,8 @@ func (a *App) watchGameProcess(cmd *exec.Cmd, stdoutPipe io.Reader, stderrPipe i
 			case <-time.After(5 * time.Second):
 			}
 			crashReason = a.dumpCrashContext(crashReason, cmd.Dir, processStartTime)
+			sessionOutcome = SessionOutcomeCrash
+			sessionDetail = crashReason
 			runtime.EventsEmit(a.ctx, "launchStatus", "crashed")
 			runtime.EventsEmit(a.ctx, "crashInfo", sanitizeLogLine(crashReason))
 			return
@@ -2683,6 +2710,7 @@ func (a *App) watchGameProcess(cmd *exec.Cmd, stdoutPipe io.Reader, stderrPipe i
 			if logProgress >= 2 && elapsed < 60*time.Second {
 				// 继续等待
 			} else {
+				sessionOutcome = SessionOutcomeTimeout
 				runtime.EventsEmit(a.ctx, "launchStatus", "timeout")
 				return
 			}
