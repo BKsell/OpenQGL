@@ -824,12 +824,15 @@ func (a *App) downloadModItem(item *DownloadItem) error {
 		}
 		resp, err = newModDownloadClient().Get(item.URL)
 		if err != nil {
+			// 下载台账：传输失败也要留痕（来源 / 文件名 / 失败结局）。
+			a.RecordDownloadEntry(item.URL, ledgerHostOf(item.URL), fileName, "", "", LedgerStatusFailed, -1)
 			return fmt.Errorf("下载 Mod 失败: %v", err)
 		}
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
+		a.RecordDownloadEntry(item.URL, ledgerHostOf(item.URL), fileName, "", "", LedgerStatusFailed, -1)
 		return fmt.Errorf("下载 Mod 失败: HTTP %d", resp.StatusCode)
 	}
 
@@ -896,6 +899,8 @@ func (a *App) downloadModItem(item *DownloadItem) error {
 	// 两者都拒绝顺着预置符号链接写穿到 mods 目录之外。
 	if err := verifyModDownloaded(partPath, item.URL); err != nil {
 		os.Remove(partPath)
+		// 下载台账：哈希校验不通过 = 潜在供应链异常，critical 留痕。
+		a.RecordDownloadEntry(item.URL, ledgerHostOf(item.URL), fileName, "", "", LedgerStatusMismatch, wantSize)
 		return fmt.Errorf("Mod 完整性校验失败: %w", err)
 	}
 
@@ -906,7 +911,20 @@ func (a *App) downloadModItem(item *DownloadItem) error {
 		os.Remove(partPath)
 		return fmt.Errorf("Mod 安全扫描失败: %w", err)
 	}
-	return finalizeDownloadFile(partPath, destPath)
+	if err := finalizeDownloadFile(partPath, destPath); err != nil {
+		return err
+	}
+	// 下载台账：成功落盘后记 ok（哈希算法取期望表首选，sha512 优先）。
+	ledgerAlgo, ledgerHash := "", ""
+	if hashes, _, ok := modExpect.lookup(item.URL); ok {
+		if v, ok := hashes["sha512"]; ok {
+			ledgerAlgo, ledgerHash = "sha512", v
+		} else if v, ok := hashes["sha1"]; ok {
+			ledgerAlgo, ledgerHash = "sha1", v
+		}
+	}
+	a.RecordDownloadEntry(item.URL, ledgerHostOf(item.URL), fileName, ledgerAlgo, ledgerHash, LedgerStatusOK, wantSize)
+	return nil
 }
 
 // GetModrinthCategories 获取 Modrinth 分类标签
