@@ -8,14 +8,15 @@ import (
 
 // App struct
 type App struct {
-	ctx              context.Context
-	downloadProgress DownloadProgress
-	downloadList     []DownloadItem
-	downloadMutex    sync.Mutex
-	isDownloading    bool
-	downloadCancel   chan struct{}
-	guestUnlocked    bool
-	launchLogPath    string // 当前启动日志路径（版本目录下的 QGL\Logs）
+	ctx                  context.Context
+	downloadProgress     DownloadProgress
+	downloadList         []DownloadItem
+	downloadMutex        sync.Mutex
+	isDownloading        bool
+	downloadCancel       chan struct{}
+	guestUnlocked        bool
+	launchLogPath        string // 当前启动日志路径（版本目录下的 QGL\Logs）
+	modsAuditForceLaunch bool   // 启动闸门强制放行开关（本会话内有效）
 }
 
 // NewApp creates a new App application struct
