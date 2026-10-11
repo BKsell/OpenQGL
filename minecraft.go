@@ -2451,6 +2451,24 @@ func (a *App) LaunchGame(versionID string) error {
 	javaEntry, _ := a.SelectJavaForVersion(versionID)
 	javaPath := javaEntry.Path
 
+	// 启动预检：Java 二进制必须是常规文件（Windows 拒绝重解析点/符号链接，防
+	// 配置项被换成指向任意程序的链接入口）；游戏目录 / natives 目录必须就绪；
+	// 磁盘剩余空间低于安全水位时提示。critical 问题直接拒绝启动。
+	preflightIssues, preflightBlocked := aggregatePreflight(
+		checkJavaBinary(javaPath),
+		checkGameDirs(gameDir, nativesDir),
+		checkDiskHeadroom(gameDir, preflightMinFreeBytes),
+	)
+	for _, it := range preflightIssues {
+		recordSecurityEvent("launch-preflight", auditSeverityWarn, auditActionDetected,
+			"minecraft", "预检["+it.Code+"] "+it.Text)
+	}
+	if preflightBlocked {
+		recordSecurityEvent("launch-preflight", auditSeverityCritical, auditActionBlocked,
+			"minecraft", "启动预检未通过，拒绝启动")
+		return fmt.Errorf("启动预检未通过，拒绝启动")
+	}
+
 	cmdParts := []string{syscall.EscapeArg(javaPath)}
 	for _, arg := range allArgs {
 		cmdParts = append(cmdParts, syscall.EscapeArg(arg))
