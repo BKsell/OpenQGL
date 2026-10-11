@@ -349,6 +349,8 @@ func (a *App) downloadFileBounded(url string, destPath string, reportProgress bo
 		}
 	}
 	if _, err := streamVerifiedDownload(ctx, url, destPath, opts); err != nil {
+		// 下载台账：传输失败留痕（无论是否有哈希期望，失败都要可审计）。
+		a.RecordDownloadEntry(url, ledgerHostOf(url), filepath.Base(destPath), "", "", LedgerStatusFailed, -1)
 		if errors.Is(err, errSecureDownloadTooLarge) {
 			return fmt.Errorf("下载失败 %s: %w", url, errDownloadTooLarge)
 		}
@@ -377,12 +379,16 @@ func (a *App) downloadVerifiedFile(url string, destPath string, expectedSHA1 str
 	if !a.checkFileHash(destPath, expected) {
 		os.Remove(destPath)
 		removeCachedFileMeta(destPath)
+		// 下载台账：官方 SHA1 校验不通过 = 潜在供应链异常，critical 留痕。
+		a.RecordDownloadEntry(url, ledgerHostOf(url), filepath.Base(destPath), "sha1", expected, LedgerStatusMismatch, -1)
 		return fmt.Errorf("SHA1 校验失败: %s", destPath)
 	}
 	// 官方 SHA1 已通过：本地缓存摘要用 bool-hybrid-array 生态的 UMFS 优先记录。
 	if err := a.saveCachedFileMeta(destPath, expected); err != nil {
 		a.writeLog("缓存元数据写入失败（不影响完整性）: %s: %v", destPath, err)
 	}
+	// 下载台账：Mojang SHA1 校验通过后记 ok（哈希保持原算法 sha1）。
+	a.RecordDownloadEntry(url, ledgerHostOf(url), filepath.Base(destPath), "sha1", expected, LedgerStatusOK, -1)
 	return nil
 }
 
@@ -2458,6 +2464,7 @@ func (a *App) LaunchGame(versionID string) error {
 		checkJavaBinary(javaPath),
 		checkGameDirs(gameDir, nativesDir),
 		checkDiskHeadroom(gameDir, preflightMinFreeBytes),
+		checkSymlinkTraps(gameDir),
 	)
 	for _, it := range preflightIssues {
 		recordSecurityEvent("launch-preflight", auditSeverityWarn, auditActionDetected,
@@ -2467,6 +2474,19 @@ func (a *App) LaunchGame(versionID string) error {
 		recordSecurityEvent("launch-preflight", auditSeverityCritical, auditActionBlocked,
 			"minecraft", "启动预检未通过，拒绝启动")
 		return fmt.Errorf("启动预检未通过，拒绝启动")
+	}
+
+	// 关键配置防篡改基线：Java 路径 / 游戏目录 / 版本选择等启动执行目标字段若在
+	// 两次本进程会话之间被外部改动（木马把 javaPath 换成自己投放的 exe），
+	// 静态预检看不出来——这里按基线 diff 拒绝启动，防配置投毒。
+	if cfg, cfgErr := a.GetGlobalConfig(); cfgErr == nil {
+		ucfg, ucfgErr := a.GetUserConfig(currentUser.Username)
+		if ucfgErr != nil {
+			ucfg = &UserConfig{}
+		}
+		if baselineErr := a.CheckConfigGuardBaseline(a.configSnapshotOf(cfg, ucfg)); baselineErr != nil {
+			return baselineErr
+		}
 	}
 
 	// 启动参数快照：把“用什么启动”落一份脱敏快照（Java 路径 / 版本 / 内存 /
@@ -2526,6 +2546,16 @@ func (a *App) LaunchGame(versionID string) error {
 	for _, name := range strippedEnv {
 		a.writeLog("安全: 已从游戏进程环境中剥离隐式 JVM 参数变量: %s", name)
 	}
+	// DLL 搜索顺序劫持防护：PATH 只保留系统目录 + Java 目录，剔除用户可写
+	// 目录（Downloads / Temp / 网盘同步目录等），防止同名恶意 DLL 被加载进
+	// 游戏进程。被剔除条目落审计日志（最多列 10 条，完整计数保留）。
+	gameEnv, droppedPath, droppedPathList := sanitizeGameEnv(gameEnv, filepath.Dir(javaPath))
+	if droppedPath > 0 {
+		recordSecurityEvent(auditCategoryJVMEnv, auditSeverityWarn, auditActionDetected,
+			"minecraft", fmt.Sprintf("已从游戏进程 PATH 剔除 %d 个非系统目录（防 DLL 劫持），例: %s",
+				droppedPath, strings.Join(droppedPathList, "; ")))
+	}
+	cmd.Env = gameEnv
 	if len(strippedEnv) > 0 {
 		// 只记录变量名（值可能含敏感路径/令牌），作为"环境被人动过"的留痕。
 		recordSecurityEvent(auditCategoryJVMEnv, auditSeverityWarn, auditActionStripped,
@@ -2584,17 +2614,20 @@ func (a *App) GetLaunchCommand(versionID string) (string, error) {
 // crash-reports / hs_err 崩溃产物摘要，追加到崩溃原因；找不到或读取失败都静默
 // 退化为原原因，绝不阻塞崩溃上报。gameDir 即游戏进程的工作目录（cmd.Dir）。
 func (a *App) dumpCrashContext(reason, gameDir string, startTime time.Time) string {
+	// 崩溃上下文统一脱敏（用户目录 / QGL 根 / 游戏目录 / JWT / 长十六进制），
+	// 防止 hs_err 里的绝对路径与令牌被贴到论坛或经错误通道外发。
 	if gameDir == "" {
-		return reason
+		return redactCrashText(reason, a.GetQGLDir(), "", a.currentUsername())
 	}
 	if s, ok := collectLatestCrashDump(gameDir, startTime); ok {
 		extra := renderCrashDumpSummary(s)
-		if reason == "" {
-			return extra
+		combined := extra
+		if reason != "" {
+			combined = reason + "\n" + extra
 		}
-		return reason + "\n" + extra
+		return redactCrashText(combined, a.GetQGLDir(), gameDir, a.currentUsername())
 	}
-	return reason
+	return redactCrashText(reason, a.GetQGLDir(), gameDir, a.currentUsername())
 }
 
 func (a *App) watchGameProcess(cmd *exec.Cmd, stdoutPipe io.Reader, stderrPipe io.Reader, pid int, processStartTime time.Time, versionID string) {
@@ -2607,7 +2640,13 @@ func (a *App) watchGameProcess(cmd *exec.Cmd, stdoutPipe io.Reader, stderrPipe i
 	sessionDetail := ""
 	defer func() {
 		a.recordSessionEnd(versionID, pid, sessionExitCode, sessionOutcome, sessionDetail)
+		// 会话日志：函数退出时统一落盘 + 轮转（与台账结算同一时机，避免漏记尾部）。
+		a.EndGameSessionLog()
 	}()
+	// 会话日志：本局日志脱敏持久化从这里开始。
+	if err := a.BeginGameSessionLog(versionID); err != nil {
+		a.writeLog("会话日志初始化失败: %v", err)
+	}
 	runtime.EventsEmit(a.ctx, "launchStatus", "launching")
 	crashDetected, windowFound := false, false
 	crashReason := ""
@@ -2655,6 +2694,8 @@ func (a *App) watchGameProcess(cmd *exec.Cmd, stdoutPipe io.Reader, stderrPipe i
 			if len(recentLines) > 50 {
 				recentLines = recentLines[len(recentLines)-50:]
 			}
+			// 会话日志：脱敏后进环形缓冲，会话结束统一落盘。
+			a.AppendGameSessionLine(line)
 			for _, kw := range crashKeywords {
 				if strings.Contains(line, kw) {
 					crashDetected = true
