@@ -135,12 +135,22 @@ func scrubURLTokens(s string) string {
 	lower := strings.ToLower(s)
 	pos := 0
 	for {
-		idx := strings.Index(lower[pos:], "http")
+		// 通用 scheme 检测：找 "://"，再向左回溯协议名起点（http/https/wss 等）。
+		idx := strings.Index(lower[pos:], "://")
 		if idx < 0 {
 			b.WriteString(s[pos:])
 			break
 		}
-		start := pos + idx
+		colon := pos + idx
+		start := colon
+		for start > 0 && isSchemeChar(lower[start-1]) {
+			start--
+		}
+		if start == colon || !isAlpha(lower[start]) {
+			b.WriteString(s[pos : colon+3])
+			pos = colon + 3
+			continue
+		}
 		b.WriteString(s[pos:start])
 		// 找到协议段起点：剥 userinfo（:// 前的 user:pass@）。
 		rest := s[start:]
@@ -308,36 +318,50 @@ func isDriveLetter(c byte) bool {
 	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
 }
 
-// markURLSpans 标记字符串里 http(s):// 段的索引区间为保护区（返回与输入等长的
+// isSchemeChar 判断字节是否属于协议名字符集（字母数字 . + -）。
+func isSchemeChar(c byte) bool {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+		(c >= '0' && c <= '9') || c == '.' || c == '+' || c == '-'
+}
+
+// isAlpha 判断字节是否是英文字母。
+func isAlpha(c byte) bool {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+}
+
+// markURLSpans 标记字符串里任意 scheme:// 段的索引区间为保护区（返回与输入等长的
 // bool 数组；非 URL 段为 false）。协议名 + "://" 之后的字符直到空白 / 引号 /
-// 制表符都属于 URL 段——路径剥除必须跳过它们。
+// 制表符 / 查询串 / fragment 都属于 URL 段——路径剥除必须跳过它们；查询串与
+// fragment 不保护，交给路径剥除处理（防本地路径随参数值进遥测）。
 func markURLSpans(s string) []bool {
 	protected := make([]bool, len(s))
-	lower := strings.ToLower(s)
 	i := 0
 	for i < len(s) {
-		rest := lower[i:]
-		idx := strings.Index(rest, "http")
+		rest := s[i:]
+		idx := strings.Index(rest, "://")
 		if idx < 0 {
 			break
 		}
-		start := i + idx
-		// 确认是 http/https 协议开头（前面是边界或空白）。
-		if start > 0 && s[start-1] != ' ' && s[start-1] != '\t' && s[start-1] != '"' && s[start-1] != '(' {
-			i = start + 4
+		colon := i + idx
+		// 从 "://" 向左回溯协议名起点（字母数字 . + - 都是协议名一部分）。
+		start := colon
+		for start > 0 && isSchemeChar(s[start-1]) {
+			start--
+		}
+		// 协议名必须非空且以字母开头（"123://" 不视为 URL）。
+		if start == colon || !isAlpha(s[start]) {
+			i = colon + 3
 			continue
 		}
-		colon := strings.Index(rest[idx:], "://")
-		if colon < 0 || colon > 10 {
-			i = start + 4
-			continue
-		}
-		body := start + colon + 3
+		body := colon + 3
 		end := body
-		for end < len(s) && s[end] != ' ' && s[end] != '"' && s[end] != '\t' {
+		// 保护区只覆盖 scheme://host/path（到查询串 / fragment 为止）。
+		for end < len(s) && s[end] != ' ' && s[end] != '"' && s[end] != '\t' &&
+			s[end] != '?' && s[end] != '#' {
 			end++
 		}
-		// 从协议名起点（含 “://”）到段尾整段标记，防止 “//” 被路径剥除误伤。
+		// 从协议名起点（含 “://”）到查询串 / fragment 之前整段标记，
+		// 防止 “//” 被路径剥除误伤；查询串本身不保护（见上）。
 		for j := start; j < end; j++ {
 			protected[j] = true
 		}
