@@ -97,13 +97,10 @@ func (c *redirectChain) Decide(location string, resolveIP HostResolver) (allow b
 	if scheme != "http" && scheme != "https" {
 		return false, "non-http-scheme"
 	}
-	if scheme == "http" {
-		if !c.limits.AllowDropToHTTP {
-			return false, "downgrade-to-http"
-		}
-		if c.schemes["https"] {
-			return false, "downgrade-to-http"
-		}
+	// 只有在链路里已经出现过 https 之后又落回 http，才算危险降级；入口本身就是
+	// http（且 AllowDropToHTTP 关闭）时，http→http 同协议延续不应被误判为降级。
+	if scheme == "http" && !c.limits.AllowDropToHTTP && c.schemes["https"] {
+		return false, "downgrade-to-http"
 	}
 	if next.User != nil {
 		return false, "userinfo-not-allowed"
@@ -119,11 +116,12 @@ func (c *redirectChain) Decide(location string, resolveIP HostResolver) (allow b
 		return false, "redirect-loop"
 	}
 
-	// 字面量 IP：私网 / 回环 / 混淆写法一律拒绝。
-	if looksLikeIPLiteral(host) {
-		if ip, ok := parseDestIP(host); ok && isPrivateOrLocalIP(ip) {
-			return false, "host-not-public"
-		}
+	// 字面量 IP：用与出向拨号同一套宽解析器 parseDestIP 识别，连十进制整数 /
+	// 十六进制 / 八进制 / IPv4-mapped 等混淆写法一并拦截，避免 2130706433 这类
+	// 形态躲过私网判定形成 SSRF。
+	ip, isIPLiteral := parseDestIP(host)
+	if isIPLiteral && isPrivateOrLocalIP(ip) {
+		return false, "host-not-public"
 	}
 
 	// 跨主机策略：默认允许跨主机（下载场景 CDN 切换常见），但收紧模式下
@@ -132,19 +130,20 @@ func (c *redirectChain) Decide(location string, resolveIP HostResolver) (allow b
 		return false, "cross-host-denied"
 	}
 
-	if resolveIP != nil && !looksLikeIPLiteral(host) {
+	if resolveIP != nil && !isIPLiteral {
 		ips, err := resolveIP(host)
 		if err != nil || len(ips) == 0 {
 			return false, "dns-resolve-failed"
+		}
+		// DNS 重绑定优先判定：同主机名前后解析到的地址集不一致即拒绝，
+		// 即便第二次恰好也是私网（127.0.0.1）也要报成 dns-rebinding。
+		if prevIPs, ok := c.hostIPs[host]; ok && !ipSetEqual(prevIPs, ips) {
+			return false, "dns-rebinding"
 		}
 		for _, ip := range ips {
 			if isPrivateOrLocalIP(ip) {
 				return false, "host-not-public"
 			}
-		}
-		// DNS 重绑定：同主机名前后解析结果集合不一致即拒绝。
-		if prevIPs, ok := c.hostIPs[host]; ok && !ipSetEqual(prevIPs, ips) {
-			return false, "dns-rebinding"
 		}
 		c.hostIPs[host] = ips
 	}
@@ -174,6 +173,12 @@ func resolveLocation(base *url.URL, location string) (*url.URL, error) {
 	}
 	if !strings.Contains(location, "://") && !strings.HasPrefix(location, "//") {
 		u = base.ResolveReference(u)
+		return u, nil
+	}
+	// 协议相对地址（//host/path）本身不带 scheme，必须沿用上一跳协议，
+	// 否则会被当成空 scheme 误判为 non-http-scheme。
+	if strings.HasPrefix(location, "//") && u.Scheme == "" {
+		u.Scheme = base.Scheme
 	}
 	return u, nil
 }
