@@ -53,41 +53,11 @@ func browserURLError(code, detail string) *BrowserURLError {
 	return &BrowserURLError{Code: code, Detail: detail}
 }
 
-// isPrivateOrLocalIP 判定一个 IP 是否属于本机 / 私网 / 链路本地 / 环回 / 未指定等
-// 不应当让浏览器替启动器去访问的地址。
+// isPrivateOrLocalIP 判定一个 IP 是否属于本机 / 私网 / 链路本地 / 环回 / 未指定 /
+// 多播 / 保留等不应当让浏览器替启动器去访问的地址。判定逻辑统一走 ipparse.go 的
+// isNonPublicIP，与出向拨号守卫共用同一张最严表，避免两处手写实现漂移；nil 视为不可信。
 func isPrivateOrLocalIP(ip net.IP) bool {
-	if ip == nil {
-		return true
-	}
-	if ip.IsLoopback() || ip.IsUnspecified() || ip.IsLinkLocalUnicast() ||
-		ip.IsLinkLocalMulticast() || ip.IsMulticast() {
-		return true
-	}
-	// 云厂商链路本地元数据服务 169.254.169.254 已被 IsLinkLocalUnicast 覆盖；
-	// 再显式拦一遍私有网段，兼容个别 IsPrivate 实现差异。
-	if ip4 := ip.To4(); ip4 != nil {
-		switch {
-		case ip4[0] == 10:
-			return true
-		case ip4[0] == 172 && ip4[1] >= 16 && ip4[1] <= 31:
-			return true
-		case ip4[0] == 192 && ip4[1] == 168:
-			return true
-		case ip4[0] == 100 && ip4[1] >= 64 && ip4[1] <= 127:
-			return true // CGNAT 100.64.0.0/10
-		case ip4[0] == 169 && ip4[1] == 254:
-			return true
-		case ip4[0] == 0:
-			return true // 0.0.0.0/8 "本机网络"
-		case ip4[0] >= 224:
-			return true // 组播 / 保留
-		}
-		return false
-	}
-	// IPv6：唯一本地 fc00::/7、未指定 :: 等；环回 / 链路本地 / 组播已在开头覆盖。
-	// net.IP 的 IsLoopback/IsPrivate 等方法会自动解包 IPv4-mapped（::ffff:a.b.c.d），
-	// 无需手工处理映射。
-	return ip.IsPrivate()
+	return isNonPublicIP(ip)
 }
 
 // looksLikeIPLiteral 报告 host 是否是用户直接填写的 IP 字面量（v4/v6/带括号 v6）。
