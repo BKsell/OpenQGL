@@ -378,7 +378,7 @@ func (a *App) GetFabricVersions(mcVersion string) ([]LoaderInfo, error) {
 	}
 
 	var fabricMeta struct {
-		Game     []struct {
+		Game []struct {
 			Version string `json:"version"`
 			Stable  bool   `json:"stable"`
 		} `json:"game"`
@@ -1109,18 +1109,14 @@ func (a *App) ensureForgeMappings(installerPath string, mcDir string) {
 	originalName := clientValue[:atIndex]
 	extension := clientValue[atIndex+1:]
 
-	parts := strings.Split(originalName, ":")
-	if len(parts) < 3 {
-		a.writeLog("MOJMAPS.client Maven 格式错误（跳过 Mappings 检查）")
+	// 坐标与扩展名来自不可信的安装器 JSON，不能再用 Split 后原样拼 filepath.Join，
+	// 否则 ".." 段 / 分隔符 / 带穿越的扩展名会把 mappings 写到 libraries 之外。
+	// 统一走严格白名单推导，并强制结果落在 <mcDir>/libraries 内。
+	targetPath, ok := SafeMojmapsMappingsPath(mcDir, originalName, extension)
+	if !ok {
+		a.writeLog("MOJMAPS.client 坐标或扩展名未通过路径白名单（跳过 Mappings 检查）")
 		return
 	}
-
-	groupPath := strings.Replace(parts[0], ".", "/", -1)
-	artifact := parts[1]
-	versionPart := parts[2]
-
-	targetPath := filepath.Join(mcDir, "libraries", groupPath, artifact, versionPart,
-		fmt.Sprintf("%s-%s-mappings.%s", artifact, versionPart, extension))
 
 	a.writeLog("目标路径: %s", targetPath)
 
