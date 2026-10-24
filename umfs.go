@@ -10,6 +10,7 @@ import (
 	"hash"
 	"io"
 	"math/big"
+	"math/bits"
 	"net"
 	"net/http"
 	"net/url"
@@ -160,7 +161,7 @@ func (e errText) Error() string { return string(e) }
 //   - 跳转策略：只跟 https→https，且不跳内网。
 func safeHTTPClient() *http.Client {
 	return &http.Client{
-		Timeout:   30 * time.Second,
+		Timeout:       30 * time.Second,
 		CheckRedirect: safeCheckRedirect,
 		Transport: &http.Transport{
 			DialContext: safeDialContext,
@@ -184,7 +185,7 @@ func localHTTPClient() *http.Client {
 		Timeout:       30 * time.Second,
 		CheckRedirect: safeCheckRedirect,
 		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12},
+			TLSClientConfig:     &tls.Config{MinVersion: tls.VersionTLS12},
 			MaxIdleConns:        32,
 			MaxIdleConnsPerHost: 4,
 			IdleConnTimeout:     30 * time.Second,
@@ -250,16 +251,31 @@ func NewUMFS(data []byte) *UMFS {
 	return u
 }
 
+// Absorb 与 bool-hybrid-array core.py UltraMersenneFractalSponge.absorb 对齐：
+// 数据不是整段转成一个大整数，而是按 step = n // bitlen(n) 切块，逐块转大整数
+// 入池并更新海绵状态。旧实现把整段当一个大整数吸收，切块粒度与上游不一致，
+// 会让任何长度超过单块的数据得到与 Python 生态不同的摘要。
 func (u *UMFS) Absorb(data []byte) *UMFS {
-	if len(data) == 0 {
+	n := len(data)
+	if n == 0 {
 		return u
 	}
-	u.totalLen += len(data)
-	num := new(big.Int).SetBytes(data)
-	u.dataPool = append(u.dataPool, num)
-	u.r = tenthOrderMapping(new(big.Int).Xor(u.r, num))
-	term := umfsMod(new(big.Int).Mul(umfsPow(num, umfs7), u.r))
-	u.c = new(big.Int).Mod(new(big.Int).Add(new(big.Int).Xor(u.c, u.r), term), umfsM)
+	u.totalLen += n
+	step := n / bits.Len(uint(n))
+	for i := 0; i < n; i += step {
+		j := i + step
+		if j > n {
+			j = n
+		}
+		num := new(big.Int).SetBytes(data[i:j])
+		u.dataPool = append(u.dataPool, num)
+		u.r = tenthOrderMapping(new(big.Int).Xor(u.r, num))
+		// term = (num^7 mod M * r) mod M，这里必须是模 M，不能用按位与近似。
+		term := new(big.Int).Mod(new(big.Int).Mul(umfsPow(num, umfs7), u.r), umfsM)
+		// Python 表达式 self.c = (self.c ^ self.r + term) % M 中，'+' 优先级
+		// 高于 '^'，真实含义是 c ^ (r + term)，而非 (c ^ r) + term。
+		u.c = new(big.Int).Mod(new(big.Int).Xor(u.c, new(big.Int).Add(u.r, term)), umfsM)
+	}
 	return u
 }
 
@@ -283,7 +299,11 @@ func (u *UMFS) foldRecursive(arr []*big.Int) *big.Int {
 	right := u.foldRecursive(arr[mid:])
 	l3 := umfsPow(left, umfs3)
 	r3 := umfsPow(right, umfs3)
-	cross := new(big.Int).Mod(new(big.Int).Add(new(big.Int).Xor(new(big.Int).Mul(left, right), l3), r3), umfsM)
+	// Python：cross = (left*right ^ l3 + r3) % M。'+' 优先级高于 '^'，
+	// 真实含义是 (l*r) ^ (l3+r3)，旧实现误写成 ((l*r)^l3)+r3。
+	cross := new(big.Int).Mod(
+		new(big.Int).Xor(new(big.Int).Mul(left, right), new(big.Int).Add(l3, r3)),
+		umfsM)
 	return tenthOrderMapping(cross)
 }
 
@@ -305,7 +325,11 @@ func (u *UMFS) HexDigest(bitn int) string {
 		u.c = tenthOrderMapping(u.c)
 		r3 := umfsPow(u.r, umfs3)
 		c3 := umfsPow(u.c, umfs3)
-		cross := new(big.Int).Mod(new(big.Int).Add(new(big.Int).Xor(r3, c3), new(big.Int).Mul(u.r, u.c)), umfsM)
+		// Python：cross = (r3 ^ c3 + r*c) % M，'+' 优先级高于 '^'，
+		// 真实含义是 r3 ^ (c3 + r*c)，旧实现误写成 (r3^c3)+(r*c)。
+		cross := new(big.Int).Mod(
+			new(big.Int).Xor(r3, new(big.Int).Add(c3, new(big.Int).Mul(u.r, u.c))),
+			umfsM)
 		oldR := new(big.Int).Set(u.r)
 		u.r = new(big.Int).Mod(cross, umfsM)
 		u.c = new(big.Int).Mod(new(big.Int).Xor(cross, oldR), umfsM)
