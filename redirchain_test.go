@@ -76,7 +76,7 @@ func TestRedirectChainLoop(t *testing.T) {
 	if ok, reason := chain.Decide("https://cdn.example.net/b/", nil); !ok {
 		t.Fatalf("first hop: %s", reason)
 	}
-	if ok, reason := chain.Decide("https://cdn.example.net/a/", nil); !ok || reason != "redirect-loop" {
+	if ok, reason := chain.Decide("https://cdn.example.net/a/", nil); ok || reason != "redirect-loop" {
 		t.Fatalf("expected redirect-loop, got ok=%v reason=%s", ok, reason)
 	}
 }
