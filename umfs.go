@@ -77,13 +77,13 @@ func isPrivateDest(rawURL string) bool {
 	return false
 }
 
-// isBlockedIP 报告 IP 是否属于不该被启动器主动连出的地址段：
-// 回环 / RFC1918 私网 / 链路本地 / 未指定地址（含云元数据 169.254.169.254），
-// 以及 0.0.0.0/8 “本网络”段（多数系统建连会落到本机）。
+// isBlockedIP 报告 IP 是否属于不该被启动器主动连出的地址段。判定表统一收敛到
+// ipparse.go 的 isNonPublicIP，与浏览器打开 / 短链 / 重定向共用同一份最严策略，
+// 覆盖回环、RFC1918 私网、CGNAT、链路本地（含云元数据 169.254.169.254）、未指定、
+// 0.0.0.0/8 “本网络”段，以及此前漏掉的整段 224/4 多播（如 SSDP 239.255.255.250）
+// 与 240/4 保留段（含 255.255.255.255 有限广播）。
 func isBlockedIP(ip net.IP) bool {
-	return ip.IsLoopback() || ip.IsPrivate() ||
-		ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
-		ip.IsUnspecified() || isZeroNetworkIPv4(ip)
+	return isNonPublicIP(ip)
 }
 
 // safeDialContext 在 TCP 建连前再做一次 IP 级拦截。
