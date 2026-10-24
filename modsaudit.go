@@ -147,11 +147,9 @@ func hasControlCharStr(s string) bool {
 
 // isValidUMFSHex 判断账本里的哈希是否 64 位小写十六进制（UMFS 输出 32 字节）。
 func isValidUMFSHex(s string) bool {
-	if len(s) != 64 {
-		return false
-	}
-	_, err := hex.DecodeString(s)
-	return err == nil
+	// UMFS hexdigest 只产出小写十六进制；不能用 hex.DecodeString（它会放行大写
+	// A-F），否则同一内容可写入大小写两种哈希串，绕过账本的规范化去重。
+	return IsLowerHex(s, 64)
 }
 
 // sanitizeModAuditEntry 逐字段净化账本条目；任何字段非法即整体丢弃（返回 false）。
