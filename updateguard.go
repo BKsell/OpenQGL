@@ -28,12 +28,12 @@ import (
 // 自更新渠道自身的版本 / URL / 包结构安全。
 
 const (
-	maxUpdateUrlLen       = 2048        // URL 长度上限
-	maxUpdateAssetNameLen = 256         // 发布资产文件名上限
+	maxUpdateUrlLen       = 2048              // URL 长度上限
+	maxUpdateAssetNameLen = 256               // 发布资产文件名上限
 	maxUpdateZipBytes     = 512 * 1024 * 1024 // 更新包总量上限
-	maxUpdateZipEntries   = 20000       // 更新包条目上限
-	maxUpdateVersionParts = 32          // 版本号拆段上限
-	maxUpdateDescRunes    = 2048        // 更新说明长度上限
+	maxUpdateZipEntries   = 20000             // 更新包条目上限
+	maxUpdateVersionParts = 32                // 版本号拆段上限
+	maxUpdateDescRunes    = 2048              // 更新说明长度上限
 )
 
 // allowedUpdateHosts 是默认允许的更新源域名白名单（不含协议与路径）。
@@ -106,6 +106,7 @@ type UpdateVerdict struct {
 //   - 不允许嵌入用户信息（user:pass@）；
 //   - host 必须命中白名单（精确或子域）；
 //   - 不允许把 IP 文字形式当 host（IP 直连的更新源无法做域名级信任）。
+//
 // 返回 {ok, host, reason}。
 func sanitizeUpdateUrl(raw string, limits UpdateLimits) (bool, string, string) {
 	l := limits.withDefaults()
@@ -144,25 +145,16 @@ func sanitizeUpdateUrl(raw string, limits UpdateLimits) (bool, string, string) {
 	return true, host, ""
 }
 
+// isIPLiteralHost 报告 host 是否是 IP 字面量（IPv6 含冒号即算；IPv4 走宽解析器）。
+// 收敛到 parseDestIP：旧实现只认严格四段十进制，单整数 2130706433、
+// 十六进制 0x7f000001、八进制 0177.0.0.1、短格式 127.1 都会漏过"拒绝裸 IP"这道门，
+// 被误当成域名。更新源 / Forge 镜像 / 服务器列表三处调用方一同受益。
 func isIPLiteralHost(host string) bool {
 	if strings.Contains(host, ":") {
 		return true
 	}
-	parts := strings.Split(host, ".")
-	if len(parts) != 4 {
-		return false
-	}
-	for _, p := range parts {
-		if p == "" || len(p) > 3 {
-			return false
-		}
-		for _, r := range p {
-			if r < '0' || r > '9' {
-				return false
-			}
-		}
-	}
-	return true
+	_, ok := parseDestIP(host)
+	return ok
 }
 
 // hostAllowed 判断 host 是否等于白名单项或为其子域（label 边界匹配）。
