@@ -67,6 +67,21 @@ func TestSanitizeScreenshotNameAllowSubdirs(t *testing.T) {
 	if _, err := SanitizeScreenshotName("../../evil.png", lim); err == nil {
 		t.Error("parent traversal must be rejected even with AllowSubdirs")
 	}
+	// 中间段穿越、绝对路径、空段、当前目录点段都要拒；子目录里的设备名按末段拒。
+	bad := []string{
+		"sub/../../evil.png",
+		"/abs/path.png",
+		`\abs\path.png`,
+		"a//b.png",
+		"sub/./ok.png",
+		"sub/CON.png",
+		`dir\..\evil.png`,
+	}
+	for _, n := range bad {
+		if _, err := SanitizeScreenshotName(n, lim); err == nil {
+			t.Errorf("AllowSubdirs name %q should be rejected", n)
+		}
+	}
 }
 
 func TestIsWinReservedName(t *testing.T) {
