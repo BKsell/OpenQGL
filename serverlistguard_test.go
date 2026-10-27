@@ -71,6 +71,10 @@ func TestServerListSanitizeName(t *testing.T) {
 	if got := SanitizeServerName(long, lim); len([]rune(got)) != 96 {
 		t.Fatalf("length limit failed: %d", len([]rune(got)))
 	}
+	// C1 控制区 (U+0080-U+009F) 也要剥干净，不可见字符不能残留进列表名。
+	if got := SanitizeServerName("a\u0080b\u009fc", lim); got != "abc" {
+		t.Fatalf("C1 control strip failed: %q", got)
+	}
 }
 
 func TestParseServerListText(t *testing.T) {
