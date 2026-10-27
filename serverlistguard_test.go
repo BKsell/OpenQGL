@@ -10,11 +10,11 @@ func TestParseServerAddress(t *testing.T) {
 	lim := lim0.withDefaults()
 
 	cases := []struct {
-		raw   string
-		ok    bool
-		host  string
-		port  int
-		kind  ServerKind
+		raw  string
+		ok   bool
+		host string
+		port int
+		kind ServerKind
 	}{
 		{"play.example.com", true, "play.example.com", 25565, ServerKindHostname},
 		{"mc.hypixel.net:25565", true, "mc.hypixel.net", 25565, ServerKindHostname},
@@ -131,5 +131,29 @@ func TestSummarizeServerEntries(t *testing.T) {
 	s2 := SummarizeServerEntries(nil, []string{"x"})
 	if !strings.Contains(s2, "errors=1") {
 		t.Fatalf("unexpected summary: %q", s2)
+	}
+}
+
+func TestClassifyServerHostObfuscated(t *testing.T) {
+	// inet_aton 短格式 / 进制 / 单整数混淆回环必须被识别为 Loopback，
+	// 而不是因只认严格四段而漏判成普通公网 IP 或域名。
+	cases := []struct {
+		host string
+		kind ServerKind
+	}{
+		{"127.1", ServerKindLoopback},
+		{"2130706433", ServerKindLoopback},
+		{"0x7f.0.1", ServerKindLoopback},
+		{"0177.0.0.1", ServerKindLoopback},
+		{"::1", ServerKindLoopback},
+		{"100.65.0.1", ServerKindPrivate},
+		{"0x0a010203", ServerKindPrivate}, // 10.1.2.3 单整数
+		{"0x08080808", ServerKindIP},      // 8.8.8.8 单整数，公网
+		{"evil.example.com", ServerKindHostname},
+	}
+	for _, c := range cases {
+		if got := classifyServerHost(c.host); got != c.kind {
+			t.Fatalf("classify(%q)=%s want %s", c.host, got, c.kind)
+		}
 	}
 }
