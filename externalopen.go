@@ -60,16 +60,19 @@ func isPrivateOrLocalIP(ip net.IP) bool {
 	return isNonPublicIP(ip)
 }
 
-// looksLikeIPLiteral 报告 host 是否是用户直接填写的 IP 字面量（v4/v6/带括号 v6）。
-func looksLikeIPLiteral(host string) bool {
-	h := host
-	if strings.HasPrefix(h, "[") && strings.HasSuffix(h, "]") {
-		h = h[1 : len(h)-1]
+// ipLiteralFromHost 把 host（可带 IPv6 方括号）归一化为 IP 字面量。除规范写法外，
+// 还识别 inet_aton 短格式 / 进制混淆（127.1、2130706433、0x7f000001、0177.0.0.1）。
+// 旧实现用 net.ParseIP 判断，这些混淆写法会被判成"不是 IP 字面量"，落到后面的域名
+// 校验时仅靠"TLD 长度<2 / 单段无点"巧合挡住——属于 defense-in-depth 缺口：一次域名
+// 规则微调就会让内网元数据地址溜进"交给系统浏览器打开"这一步。统一借 parseDestIP
+// 后，混淆字面量显式落入"裸 IP 一律拒绝"分支，与出向拨号守卫同一张表。
+func ipLiteralFromHost(host string) (net.IP, bool) {
+	h := strings.TrimPrefix(host, "[")
+	h = strings.TrimSuffix(h, "]")
+	if h == "" {
+		return nil, false
 	}
-	if net.ParseIP(h) != nil {
-		return true
-	}
-	return false
+	return parseDestIP(h)
 }
 
 // ValidateBrowserURL 判定 raw 是否为一个可以安全交给系统浏览器打开的 https 公网 URL。
@@ -112,8 +115,7 @@ func ValidateBrowserURL(raw string) (string, error) {
 		return "", browserURLError("browser-url-port", "只允许默认 443 端口")
 	}
 
-	if looksLikeIPLiteral(host) {
-		ip := net.ParseIP(strings.Trim(host, "[]"))
+	if ip, ok := ipLiteralFromHost(host); ok {
 		if isPrivateOrLocalIP(ip) {
 			return "", browserURLError("browser-url-internal-ip", "不允许打开指向本机/内网/链路本地的 IP 链接")
 		}
@@ -136,7 +138,7 @@ func ValidateBrowserURL(raw string) (string, error) {
 				return "", browserURLError("browser-url-tld", "顶级域名长度异常")
 			}
 			for _, c := range label {
-				if !((c >= 'a' && c <= 'z')) {
+				if !(c >= 'a' && c <= 'z') {
 					return "", browserURLError("browser-url-tld-alpha", "顶级域名必须为字母")
 				}
 			}
