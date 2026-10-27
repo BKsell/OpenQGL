@@ -150,3 +150,44 @@ func TestBrowserOpenCommandRejectsBeforeBuild(t *testing.T) {
 		t.Fatal("javascript: 不应构造出打开命令")
 	}
 }
+
+func TestValidateBrowserURLRejectsObfuscatedIPLiteral(t *testing.T) {
+	// inet_aton 短格式 / 单整数 / 进制混淆必须被显式判成 IP 字面量拒绝，
+	// 不能再只靠后面域名校验的"TLD 太短 / 单段无点"巧合兜底。
+	bad := []string{
+		"https://127.1/",      // 短格式 127.0.0.1
+		"https://2130706433/", // 单整数 127.0.0.1
+		"https://0x7f000001/", // 十六进制 127.0.0.1
+		"https://0177.0.0.1/", // 八进制 127.0.0.1
+		"https://149.154.1/",  // 短格式公网，也按裸 IP 拒绝
+		"https://0x0a010203/", // 单整数 10.1.2.3 内网
+		"https://0x0a64401/",  // 0.10.100.1 之类畸形
+	}
+	for _, in := range bad {
+		if _, err := ValidateBrowserURL(in); err == nil {
+			t.Fatalf("混淆 IP 字面量应被拒绝 %q", in)
+		}
+	}
+}
+
+func TestIPLiteralFromHostRecognizesObfuscated(t *testing.T) {
+	cases := []struct {
+		host string
+		want bool
+	}{
+		{"127.0.0.1", true},
+		{"127.1", true},
+		{"2130706433", true},
+		{"0x7f000001", true},
+		{"0177.0.0.1", true},
+		{"[::1]", true},
+		{"::1", true},
+		{"example.com", false},
+		{"", false},
+	}
+	for _, c := range cases {
+		if _, ok := ipLiteralFromHost(c.host); ok != c.want {
+			t.Fatalf("ipLiteralFromHost(%q)=%v want %v", c.host, ok, c.want)
+		}
+	}
+}
