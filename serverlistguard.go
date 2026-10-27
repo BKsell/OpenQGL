@@ -25,11 +25,11 @@ import (
 
 // ServerListLimits 限定服务器地址与名称的输入边界。
 type ServerListLimits struct {
-	MaxHostRunes    int
-	MaxNameRunes    int
-	MaxPort         int
-	MaxLines        int
-	MaxLineRunes    int
+	MaxHostRunes int
+	MaxNameRunes int
+	MaxPort      int
+	MaxLines     int
+	MaxLineRunes int
 }
 
 func (l *ServerListLimits) withDefaults() ServerListLimits {
@@ -144,73 +144,37 @@ func ParseServerAddress(raw string, lim ServerListLimits) (ServerEntry, error) {
 	}
 
 	return ServerEntry{
-		Host: hostPart,
-		Port: port,
-		Kind: classifyServerHost(hostPart),
+		Host:   hostPart,
+		Port:   port,
+		Kind:   classifyServerHost(hostPart),
 		Source: trimmed,
 	}, nil
 }
 
-// classifyServerHost 判断 host 的分类：回环 / RFC1918 私有 / IP / 域名。
+// classifyServerHost 判断 host 的分类：回环 / 私有 / IP / 域名。
+//
+// IP 判定统一走 ipparse.go 的 parseDestIP + isNonPublicIP：既识别规范四段，也识别
+// 2130706433、0x7f000001、017700000001、127.1 等 inet_aton 整数 / 进制 / 短格式混淆，
+// 避免私网服务器被这些写法标成普通公网 IP（历史上本文件的 isLoopbackHost /
+// isPrivateIPv4 只认严格四段、且 IPv6 用 "fc"/"fd" 字符串前缀粗判，口径偏松且重复）。
 func classifyServerHost(host string) ServerKind {
-	if isIPLiteralHost(host) {
-		if isLoopbackHost(host) {
+	if ip, ok := parseDestIP(host); ok {
+		if ip.IsLoopback() {
 			return ServerKindLoopback
 		}
-		if isPrivateIPv4(host) || strings.HasPrefix(host, "fe80:") || strings.HasPrefix(host, "fc") || strings.HasPrefix(host, "fd") {
+		// 非回环的非公网地址（RFC1918、链路本地、CGNAT、0/8、多播 / 保留、
+		// fc00::/7、fe80::/10 等）对服务器列表而言都归入“私有 / 内网目标”。
+		if isNonPublicIP(ip) {
 			return ServerKindPrivate
 		}
 		return ServerKindIP
 	}
+	// parseDestIP 解析不出来时，保留历史“含冒号即按 IP 字面量”的宽松口径，
+	// 不把畸形 IPv6 误标成普通域名。
+	if isIPLiteralHost(host) {
+		return ServerKindIP
+	}
 	return ServerKindHostname
-}
-
-func isLoopbackHost(host string) bool {
-	if host == "::1" || host == "0:0:0:0:0:0:0:1" {
-		return true
-	}
-	parts := strings.Split(host, ".")
-	if len(parts) != 4 {
-		return false
-	}
-	return parts[0] == "127" && isAllDigits(parts[1]) && isAllDigits(parts[2]) && isAllDigits(parts[3])
-}
-
-func isPrivateIPv4(host string) bool {
-	parts := strings.Split(host, ".")
-	if len(parts) != 4 {
-		return false
-	}
-	if !isAllDigits(parts[0]) || !isAllDigits(parts[1]) || !isAllDigits(parts[2]) || !isAllDigits(parts[3]) {
-		return false
-	}
-	a, _ := strconv.Atoi(parts[0])
-	b, _ := strconv.Atoi(parts[1])
-	if a == 10 {
-		return true
-	}
-	if a == 172 && b >= 16 && b <= 31 {
-		return true
-	}
-	if a == 192 && b == 168 {
-		return true
-	}
-	if a == 169 && b == 254 {
-		return true
-	}
-	return false
-}
-
-func isAllDigits(s string) bool {
-	if s == "" {
-		return false
-	}
-	for _, r := range s {
-		if r < '0' || r > '9' {
-			return false
-		}
-	}
-	return true
 }
 
 // SanitizeServerName 净化服务器名称：剥控制字符、限长；空名称回退空串。
