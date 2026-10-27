@@ -66,10 +66,10 @@ func proxyHostOK(host string, lim ProxyLimits) (string, bool) {
 	if strings.ContainsAny(host, "\x00\r\n\t ") {
 		return "host-control-chars", false
 	}
-	if looksLikeIPLiteral(host) {
-		if ip, ok := parseDestIP(host); ok && isPrivateOrLocalIP(ip) {
-			return "host-not-public", false
-		}
+	// IP 字面量（含 inet_aton 混淆写法）归一化后是私网/回环/链路本地则拒绝，
+	// 防止把代理指到本机元数据地址。公网 IP 字面量按域名放行（这里不强制域名形态）。
+	if ip, ok := ipLiteralFromHost(host); ok && isPrivateOrLocalIP(ip) {
+		return "host-not-public", false
 	}
 	return "", true
 }
