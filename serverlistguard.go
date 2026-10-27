@@ -181,14 +181,15 @@ func classifyServerHost(host string) ServerKind {
 func SanitizeServerName(name string, lim ServerListLimits) string {
 	d := lim.withDefaults()
 	clean := name
-	if hasControlCharStr(clean) {
-		clean = strings.Map(func(r rune) rune {
-			if r < 0x20 || r == 0x7f {
-				return -1
-			}
-			return r
-		}, clean)
-	}
+	// 统一走 strings.Map 剥控制字符：不依赖 hasControlCharStr 预闸门（它只扫
+	// 原始字节 ≤0x1F，会漏掉 C1 控制区 U+0080-U+009F 的 UTF-8 编码）。
+	clean = strings.Map(func(r rune) rune {
+		// 删 ASCII 控制区 (0x00-0x1F)、DEL (0x7F) 以及 C1 控制区 (0x80-0x9F)。
+		if r < 0x20 || (r >= 0x7f && r <= 0x9f) {
+			return -1
+		}
+		return r
+	}, clean)
 	clean = strings.TrimSpace(clean)
 	if len([]rune(clean)) > d.MaxNameRunes {
 		clean = string([]rune(clean)[:d.MaxNameRunes])
