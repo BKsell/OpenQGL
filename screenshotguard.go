@@ -24,10 +24,10 @@ import (
 
 // ScreenshotLimits 限定截图文件名与目录的边界。
 type ScreenshotLimits struct {
-	MaxNameRunes   int
-	MaxDirRunes    int
-	MaxTotalRunes  int
-	AllowSubdirs   bool // 是否允许文件名带子目录（默认不允许，只允许单段）
+	MaxNameRunes  int
+	MaxDirRunes   int
+	MaxTotalRunes int
+	AllowSubdirs  bool // 是否允许文件名带子目录（默认不允许，只允许单段）
 }
 
 func (l *ScreenshotLimits) withDefaults() ScreenshotLimits {
@@ -100,16 +100,36 @@ func SanitizeScreenshotName(name string, lim ScreenshotLimits) (string, error) {
 		if strings.Contains(trimmed, "..") {
 			return "", errors.New("screenshot name must not contain ..")
 		}
+	} else {
+		// 允许带子目录（sub/dir/file.png），但逐段拒绝父目录穿越与绝对路径：
+		// 旧实现直接跳过整段检查，"../../escape" 会被 filepath.Join 拼出根外。
+		if strings.HasPrefix(trimmed, "/") || strings.HasPrefix(trimmed, `\`) {
+			return "", errors.New("screenshot name must not be absolute")
+		}
+		norm := strings.ReplaceAll(trimmed, `\`, "/")
+		for _, seg := range strings.Split(norm, "/") {
+			if seg == "" {
+				return "", errors.New("screenshot name has empty path segment")
+			}
+			if seg == "." || seg == ".." {
+				return "", errors.New("screenshot name must not contain dot segments")
+			}
+		}
 	}
 	for _, c := range winForbiddenChars {
 		if strings.ContainsRune(trimmed, c) {
 			return "", errors.New("screenshot name contains forbidden character")
 		}
 	}
-	if isWinReservedName(trimmed) {
+	// 设备名只按最终文件名主干判定（带子目录时不能拿整段路径去比）。
+	nameBase := trimmed
+	if i := strings.LastIndexAny(nameBase, `/\`); i >= 0 {
+		nameBase = nameBase[i+1:]
+	}
+	if isWinReservedName(nameBase) {
 		return "", errors.New("screenshot name is a reserved device name")
 	}
-	if trimmed == "." || trimmed == ".." {
+	if nameBase == "." || nameBase == ".." {
 		return "", errors.New("screenshot name must not be dot path")
 	}
 	return trimmed, nil
