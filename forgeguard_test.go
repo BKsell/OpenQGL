@@ -90,12 +90,12 @@ func TestValidateForgeDownloadURL(t *testing.T) {
 	}
 
 	invalid := []string{
-		"http://files.minecraftforge.net/forge.jar",          // 非 https
-		"https://evil.example.com/forge.jar",                 // 非白名单 host
-		"https://files.minecraftforge.net.evil.com/forge.jar", // 子域伪装（后缀不匹配）
-		"https://192.168.1.1/forge.jar",                       // IP 直连
-		"https://user:pass@files.minecraftforge.net/forge.jar", // userinfo
-		"https://files.minecraftforge.net/" + string(rune(0x01)) + "x.jar", // 控制字符
+		"http://files.minecraftforge.net/forge.jar",                                   // 非 https
+		"https://evil.example.com/forge.jar",                                          // 非白名单 host
+		"https://files.minecraftforge.net.evil.com/forge.jar",                         // 子域伪装（后缀不匹配）
+		"https://192.168.1.1/forge.jar",                                               // IP 直连
+		"https://user:pass@files.minecraftforge.net/forge.jar",                        // userinfo
+		"https://files.minecraftforge.net/" + string(rune(0x01)) + "x.jar",            // 控制字符
 		"https://files.minecraftforge.net/" + strings.Repeat("a", 300) + "/forge.jar", // 超长段
 	}
 	for _, u := range invalid {
@@ -128,6 +128,13 @@ func TestIsIPLiteralHostReuse(t *testing.T) {
 	}
 	if !isIPLiteralHost("2001:db8::1") {
 		t.Fatal("IPv6 not detected")
+	}
+	// inet_aton 混淆写法也必须被识别为 IP 字面量，否则更新源/Forge/服务器列表
+	// 的"拒绝裸 IP"门会把它们误当域名放行。
+	for _, h := range []string{"127.1", "2130706433", "0x7f000001", "0177.0.0.1"} {
+		if !isIPLiteralHost(h) {
+			t.Fatalf("obfuscated IP literal %q not detected", h)
+		}
 	}
 }
 
