@@ -65,21 +65,27 @@ func sanitizeSnippet(raw []byte) string {
 				continue
 			case ']':
 				// OSC：ESC] 后任意内容，直到 BEL 或 ST(ESC \)。
+				// 旧实现遇到终止符后直接 j=n，会把 OSC 之后的正文（如
+				// "...title\aprompt> " 里的 "prompt> "）一并吞掉，诊断摘要被清空。
 				j := i + 2
 				for j < n {
+					term := false
 					switch {
 					case raw[j] == 0x07: // BEL 终止，吃掉 BEL
 						j++
-						j = n
+						term = true
 					case raw[j] == 0x1b: // ESC：可能是 ST 的前导
 						if j+1 < n && raw[j+1] == '\\' {
-							j += 2
+							j += 2 // 吃掉 ST: ESC \
 						} else {
 							j++ // 孤立 ESC，消费到 ESC 为止
 						}
-						j = n
+						term = true
 					default:
 						j++
+					}
+					if term {
+						break
 					}
 				}
 				i = j
