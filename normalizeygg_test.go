@@ -75,3 +75,21 @@ func TestNormalizeYggdrasilURLIdempotent(t *testing.T) {
 		t.Fatalf("规范化非幂等: %q -> %q", first, second)
 	}
 }
+
+func TestNormalizeYggdrasilURLObfuscatedLoopback(t *testing.T) {
+	// 本地调试皮肤站用 inet_aton 短格式 http://127.1 也必须放行（归一化后补后缀）。
+	got, err := normalizeYggdrasilURL("http://127.1:8080/")
+	if err != nil {
+		t.Fatalf("混淆回环 http 调试应放行，却被拒: %v", err)
+	}
+	if want := "http://127.1:8080/api/yggdrasil"; got != want {
+		t.Fatalf("normalize=%q want %q", got, want)
+	}
+}
+
+func TestNormalizeYggdrasilURLObfuscatedPublicRejected(t *testing.T) {
+	// 单整数写成 8.8.8.8 仍是公网，明文 http 必须拒绝，不能因混淆而误判成回环放行。
+	if got, err := normalizeYggdrasilURL("http://0x08080808/"); err == nil {
+		t.Fatalf("混淆公网 http 应被拒绝，却得到 %q", got)
+	}
+}
