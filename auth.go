@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"hash"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -251,7 +250,7 @@ type XSTSAuthResponse struct {
 // MCLoginResponse Minecraft 登录响应
 type MCLoginResponse struct {
 	AccessToken string `json:"access_token"`
-	ExpiresIn  int    `json:"expires_in"`
+	ExpiresIn   int    `json:"expires_in"`
 	TokenType   string `json:"token_type"`
 	Username    string `json:"username"`
 	// 错误字段
@@ -951,9 +950,9 @@ type YggdrasilAuthResponse struct {
 		ID   string `json:"id"`
 		Name string `json:"name"`
 	} `json:"selectedProfile"`
-	Error         string `json:"error"`
-	ErrorMessage  string `json:"errorMessage"`
-	Cause         string `json:"cause"`
+	Error        string `json:"error"`
+	ErrorMessage string `json:"errorMessage"`
+	Cause        string `json:"cause"`
 }
 
 type YggdrasilServerMeta struct {
@@ -970,14 +969,20 @@ type YggdrasilServerInfo struct {
 	Links YggdrasilServerLinks `json:"links"`
 }
 
-// isLoopbackOrPrivateHost 判断 host 是否为回环/私网地址
+// isLoopbackOrPrivateHost 判断 host 是否为回环/私网地址。
+//
+// 地址解析统一借 parseDestIP：除规范四段 / IPv6 外，还识别 127.1、2130706433、
+// 0x7f000001、017700000001 等 inet_aton 短格式 / 进制混淆（历史上这里只调 net.ParseIP，
+// 本地调试皮肤站写成 http://127.1 时会被误当公网而拒绝明文 HTTP）。允许范围刻意不变，
+// 仍是回环 / RFC1918 私网 / 链路本地，不扩大到 CGNAT、0/8、多播等其它保留段。
 func isLoopbackOrPrivateHost(host string) bool {
+	host = strings.TrimSpace(host)
 	host = strings.TrimPrefix(host, "[")
 	host = strings.TrimSuffix(host, "]")
 	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
 		return true
 	}
-	if ip := net.ParseIP(host); ip != nil {
+	if ip, ok := parseDestIP(host); ok {
 		return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast()
 	}
 	return false
@@ -1166,7 +1171,7 @@ func (a *App) RefreshExternalToken(username string) error {
 	payload := map[string]interface{}{
 		"accessToken": authData.AccessToken,
 		"clientToken": authData.ClientToken,
-		"requestUser":  true,
+		"requestUser": true,
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
