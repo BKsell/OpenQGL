@@ -142,3 +142,28 @@ func TestSummarizeProxyVerdict(t *testing.T) {
 		t.Fatalf("unexpected none summary: %s", s3)
 	}
 }
+
+func TestProxyHostOKRejectsObfuscatedPrivate(t *testing.T) {
+	lim := ProxyLimits{MaxHostLen: 253, MaxValueLen: 1024, MaxEntries: 64}
+	blocked := []string{
+		"127.1",           // inet_aton 短格式 = 127.0.0.1
+		"2130706433",      // 单整数 = 127.0.0.1
+		"0x7f000001",      // 十六进制 = 127.0.0.1
+		"0177.0.0.1",      // 八进制 = 127.0.0.1
+		"10.1.2.3",        // RFC1918 私网
+		"169.254.169.254", // 云元数据链路本地
+	}
+	for _, h := range blocked {
+		if reason, ok := proxyHostOK(h, lim); ok {
+			t.Fatalf("混淆私网代理主机 %q 应被拒绝，却放行", h)
+		} else if reason != "host-not-public" {
+			t.Fatalf("混淆私网代理主机 %q 拒绝原因应为 host-not-public，得到 %q", h, reason)
+		}
+	}
+	allowed := []string{"proxy.example.com", "8.8.8.8"}
+	for _, h := range allowed {
+		if reason, ok := proxyHostOK(h, lim); !ok {
+			t.Fatalf("公网代理主机 %q 应放行，却被拒: %q", h, reason)
+		}
+	}
+}
