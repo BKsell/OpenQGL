@@ -30,9 +30,6 @@ func FindModClassConflicts(mods []ModClassEntry) [][]string {
 	}
 	out := make([][]string, 0)
 	for _, names := range buckets {
-		if len(names) < 2 {
-			continue
-		}
 		uniq := make([]string, 0, len(names))
 		seen := make(map[string]bool)
 		for _, n := range names {
@@ -40,6 +37,9 @@ func FindModClassConflicts(mods []ModClassEntry) [][]string {
 				seen[n] = true
 				uniq = append(uniq, n)
 			}
+		}
+		if len(uniq) < 2 {
+			continue
 		}
 		sort.Strings(uniq)
 		out = append(out, uniq)
