@@ -56,6 +56,7 @@ func NormalizeManifestURL(raw string) (string, bool) {
 	}
 	u.Scheme = "https"
 	u.ForceQuery = false
+	u.Fragment = ""
 	u.RawFragment = ""
 	return u.String(), true
 }
