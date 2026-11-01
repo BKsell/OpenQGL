@@ -4,6 +4,8 @@ OpenQGL 是由 **热土工作室** 开发的开源 Minecraft 启动器，基于 
 
 - 开源协议：Apache License 2.0
 
+- 官方主线版本：https://ql.rtstu.com/qgl
+
 ---
 
 ## 目录
