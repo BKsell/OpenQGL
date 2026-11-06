@@ -20,6 +20,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -36,6 +37,41 @@ type zipPlannedEntry struct {
 	file *zip.File
 	rel  string // 已校验、统一使用 '/' 分隔的相对路径
 	dir  bool
+}
+
+// zipSegmentUnsafeReason 判定单个路径段在 Windows 上是否携带特殊语义，返回
+// 空串表示安全。这些形态的共同点是"条目名与实际落盘结果不一致"：
+//   - 冒号：NTFS 备用数据流（"a.jar:payload" 会写进 a.jar 的 ADS，主文件看似没变）；
+//   - `<>"|?*`：Win32 非法字符，CreateFile 报错或被静默映射成别的名字；
+//   - 控制字符 / 双向覆写 / 零宽字符：肉眼与日志里看不到，可做同名伪装；
+//   - 尾随点或空格：Win32 落盘时被系统剥掉，"a.jar." 与 "a.jar" 会撞到同一个文件；
+//   - 保留设备名：CON / NUL / COM1 之类会被当成设备而不是目录里的文件。
+func zipSegmentUnsafeReason(seg string) string {
+	if strings.ContainsRune(seg, ':') {
+		return "alternate-data-stream"
+	}
+	if containsAnyByte(seg, "<>\"|?*") {
+		return "illegal-character"
+	}
+	if containsControlByte(seg) || scanUnsafeRunes(seg) != nameRejectNone {
+		return "invisible-character"
+	}
+	if strings.HasSuffix(seg, ".") || strings.HasSuffix(seg, " ") {
+		return "trailing-dot-or-space"
+	}
+	if isReservedDeviceName(stemOfName(seg)) {
+		return "reserved-device-name"
+	}
+	return ""
+}
+
+// zipDuplicateKey 归一化"落盘后是否同一个文件"的比较键：Windows 文件系统大小写
+// 不敏感，A.jar 与 a.jar 会互相覆盖；其它平台保持原样，避免误伤合法同名文件。
+func zipDuplicateKey(rel string) string {
+	if runtime.GOOS == "windows" {
+		return strings.ToLower(rel)
+	}
+	return rel
 }
 
 // secureZipRelPath 校验 zip 条目名（去掉业务前缀后的相对路径）是否安全。
@@ -73,6 +109,11 @@ func secureZipRelPath(name string) (string, bool) {
 	}
 	if len(segs) == 0 {
 		return "", false
+	}
+	for _, seg := range segs {
+		if zipSegmentUnsafeReason(seg) != "" {
+			return "", false
+		}
 	}
 	return strings.Join(segs, "/"), true
 }
@@ -119,12 +160,12 @@ func planZipEntries(files []*zip.File, prefixes []string, lim zipExtractLimits) 
 			recordSecurityEvent(auditCategoryZip, auditSeverityCritical, auditActionBlocked, "zipextract", err.Error())
 			return nil, 0, err
 		}
-		if _, dup := seen[secureRel]; dup {
+		if _, dup := seen[zipDuplicateKey(secureRel)]; dup {
 			err := fmt.Errorf("zip 中存在重复落盘路径的条目: %s", f.Name)
 			recordSecurityEvent(auditCategoryZip, auditSeverityWarn, auditActionBlocked, "zipextract", err.Error())
 			return nil, 0, err
 		}
-		seen[secureRel] = struct{}{}
+		seen[zipDuplicateKey(secureRel)] = struct{}{}
 
 		isDir := f.FileInfo().IsDir() || strings.HasSuffix(secureRel, "/")
 		if !isDir {
@@ -215,6 +256,29 @@ func writeZipEntrySecure(f *zip.File, destPath string, entryMax int64) (int64, e
 	return n, nil
 }
 
+// zipResolveParentInside 在落盘前把"目标的父目录"解析到真实路径，再确认它仍在
+// 解压根目录的真实路径之内。secureZipRelPath 只保证字面路径不穿越；若目标目录树
+// 里预先存在 junction / 符号链接目录（例如上次解压留下的 overrides/dir 指向盘外），
+// 字面路径合法也会写穿。这里用 filepath.EvalSymlinks 做一次真实归属复核。
+func zipResolveParentInside(root, dest string) error {
+	rootReal, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return fmt.Errorf("解析解压根目录真实路径失败: %v", err)
+	}
+	parent := filepath.Dir(dest)
+	if err := os.MkdirAll(parent, 0700); err != nil {
+		return fmt.Errorf("创建解压目录失败: %v", err)
+	}
+	parentReal, err := filepath.EvalSymlinks(parent)
+	if err != nil {
+		return fmt.Errorf("解析条目父目录真实路径失败: %v", err)
+	}
+	if !PathWithinRoot(parentReal, rootReal) {
+		return fmt.Errorf("条目父目录真实路径越出解压根目录(junction/symlink 逃逸): %s", parentReal)
+	}
+	return nil
+}
+
 // extractPlannedZipEntries 按预检计划顺序落盘，并在真实复制时再次核对总量
 // （元数据可能撒谎）。返回实际写入字节数与文件条目数。
 func extractPlannedZipEntries(plan []zipPlannedEntry, destDir string, lim zipExtractLimits, logf func(string, ...any)) (int64, int, error) {
@@ -231,6 +295,10 @@ func extractPlannedZipEntries(plan []zipPlannedEntry, destDir string, lim zipExt
 		destPath := filepath.Join(destDir, filepath.FromSlash(pe.rel))
 		if !secureDestUnder(destDir, destPath) {
 			err := fmt.Errorf("zip 条目解析后越出目标目录(Zip Slip 防护): %s", pe.file.Name)
+			recordSecurityEvent(auditCategoryZip, auditSeverityCritical, auditActionBlocked, "zipextract", err.Error())
+			return totalWritten, fileCount, err
+		}
+		if err := zipResolveParentInside(destDir, destPath); err != nil {
 			recordSecurityEvent(auditCategoryZip, auditSeverityCritical, auditActionBlocked, "zipextract", err.Error())
 			return totalWritten, fileCount, err
 		}
