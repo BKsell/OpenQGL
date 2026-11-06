@@ -587,6 +587,58 @@ func (a *App) StartServer(name string) error {
 		a.writeLog("服务器配置告警: %s", settingsAudit.Describe())
 	}
 
+	bindingAudit, bindingErr := AuditServerBinding(cfg.ServerDir)
+	if bindingErr != nil {
+		return bindingErr
+	}
+	if bindingAudit.Blocking() {
+		recordSecurityEvent(auditCategoryConfig, auditSeverityCritical, auditActionBlocked,
+			bindingAudit.Describe(), bindingAudit.Path)
+		return fmt.Errorf("服务器网络暴露策略校验失败，拒绝启动: %s", bindingAudit.Describe())
+	}
+	if bindingAudit.HasWarnings() {
+		a.writeLog("服务器网络暴露告警: %s", bindingAudit.Describe())
+	}
+
+	packAudit, packErr := AuditServerResourcePack(cfg.ServerDir)
+	if packErr != nil {
+		return packErr
+	}
+	if packAudit.Blocking() {
+		recordSecurityEvent(auditCategoryConfig, auditSeverityCritical, auditActionBlocked,
+			packAudit.Describe(), packAudit.Path)
+		return fmt.Errorf("服务器资源包策略校验失败，拒绝启动: %s", packAudit.Describe())
+	}
+	if packAudit.HasWarnings() {
+		a.writeLog("服务器资源包告警: %s", packAudit.Describe())
+	}
+
+	logAudit, logErr := AuditServerLogs(cfg.ServerDir)
+	if logErr != nil {
+		return logErr
+	}
+	if logAudit.Blocking() {
+		recordSecurityEvent(auditCategoryLaunch, auditSeverityCritical, auditActionBlocked,
+			logAudit.Describe(), logAudit.Dir)
+		return fmt.Errorf("服务器日志目录校验失败，拒绝启动: %s", logAudit.Describe())
+	}
+	if logAudit.HasWarnings() {
+		a.writeLog("服务器日志告警: %s", logAudit.Describe())
+	}
+
+	rconAudit, rconErr := AuditServerRcon(cfg.ServerDir)
+	if rconErr != nil {
+		return rconErr
+	}
+	if rconAudit.Blocking() {
+		recordSecurityEvent(auditCategoryConfig, auditSeverityCritical, auditActionBlocked,
+			rconAudit.Describe(), rconAudit.Path)
+		return fmt.Errorf("服务器 RCON/Query 暴露面校验失败，拒绝启动: %s", rconAudit.Describe())
+	}
+	if rconAudit.HasWarnings() {
+		a.writeLog("服务器 RCON/Query 告警: %s", rconAudit.Describe())
+	}
+
 	accessAudit, accessErr := AuditServerAccess(cfg.ServerDir)
 	if accessErr != nil {
 		return accessErr
