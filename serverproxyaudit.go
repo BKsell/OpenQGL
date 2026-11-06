@@ -204,6 +204,29 @@ func flattenYAML(data []byte) (map[string]string, []string) {
 	return out, dups
 }
 
+func proxyProperties(data []byte) map[string]string {
+	out := map[string]string{}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, "!") {
+			continue
+		}
+		idx := strings.Index(line, "=")
+		if idx < 0 {
+			idx = strings.Index(line, ":")
+		}
+		if idx <= 0 {
+			continue
+		}
+		key := strings.TrimSpace(line[:idx])
+		if key == "" {
+			continue
+		}
+		out[key] = strings.TrimSpace(line[idx+1:])
+	}
+	return out
+}
+
 func readProxyConfig(path string) ([]byte, string) {
 	info, err := os.Lstat(path)
 	if err != nil {
@@ -297,11 +320,7 @@ func AuditServerProxyTrust(serverDir string) *ServerProxyAudit {
 	propsPath := filepath.Join(serverDir, "server.properties")
 	if data, reason := readProxyConfig(propsPath); reason == "" {
 		audit.Files = append(audit.Files, "server.properties")
-		parsed := parseServerProperties(data)
-		for _, key := range []string{"server-ip", "online-mode", "server-port"} {
-			value, _ := parsed.Get(key)
-			props[key] = value
-		}
+		props = proxyProperties(data)
 	} else if reason != proxyReasonMissing {
 		audit.Findings = append(audit.Findings, ProxyFinding{File: "server.properties", Reason: reason, Detail: "服务器主配置不可用", Blocking: reason == proxyReasonSymlink})
 	}
