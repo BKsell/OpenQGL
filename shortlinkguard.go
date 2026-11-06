@@ -58,9 +58,12 @@ var shortenerHosts = map[string]bool{
 type HostResolver func(host string) ([]net.IP, error)
 
 // knownShortenerHost 判断主机名是否属于已知短链服务。
+// 末尾的点（`bit.ly.` 这种 FQDN 写法）不改变真实主机，先剥掉再查表，否则
+// 攻击者只要在域名后补一个点就能跳过整条短链预检。
 func knownShortenerHost(host string) bool {
 	h := strings.ToLower(strings.TrimSpace(host))
 	h = strings.TrimPrefix(h, "www.")
+	h = strings.TrimRight(h, ".")
 	if h == "" {
 		return false
 	}
@@ -68,12 +71,14 @@ func knownShortenerHost(host string) bool {
 }
 
 // isShortLinkURL 报告 rawURL 是否解析自短链服务（解析失败返回 false）。
+// 用 Hostname() 取主机：u.Host 里带着端口（`bit.ly:443`）与 IPv6 括号，
+// 直接拿它查表会把「短链 + 显式端口」判成普通 URL，从而跳过目标私网判定。
 func isShortLinkURL(rawURL string) bool {
 	u, err := url.Parse(strings.TrimSpace(rawURL))
 	if err != nil || u.Host == "" {
 		return false
 	}
-	return knownShortenerHost(u.Host)
+	return knownShortenerHost(u.Hostname())
 }
 
 // redirectVerdict 是一次展开预检的结论。
@@ -107,7 +112,25 @@ func normalizeScheme(rawURL string) (string, error) {
 		if u.User != nil {
 			return "", fmt.Errorf("URL 不允许携带 userinfo")
 		}
-		return rawURL, nil
+		// 下面三条是「结构完整性」：`https://`、`https://:443/x` 这类空主机串，
+		// `https:opaque` 这种不透明形式，以及 `#fragment` 尾巴，都不会被真正的
+		// HTTP 请求使用，却会让审计日志 / 落盘名看到与真实主机不同的内容。
+		// 预检是出发前唯一一次能明确拒绝的地方，这里一律判死。
+		if u.Opaque != "" {
+			return "", fmt.Errorf("URL 不允许不透明（opaque）形式")
+		}
+		if u.Hostname() == "" {
+			return "", fmt.Errorf("URL 缺少目标主机")
+		}
+		if u.Fragment != "" || u.RawFragment != "" {
+			return "", fmt.Errorf("下载 URL 不允许携带 fragment")
+		}
+		// 百分号编码的主机名在 DNS 层会被再次解码，`%31%32%37.0.0.1` 之类
+		// 写法在部分解析器上会还原成 127.0.0.1，直接拒绝整类编码主机。
+		if strings.Contains(u.Host, "%") && !strings.HasPrefix(u.Host, "[") {
+			return "", fmt.Errorf("URL 主机不允许百分号编码")
+		}
+		return u.String(), nil
 	case "http":
 		return "", fmt.Errorf("短链 / 重定向目标必须是 https，拒绝明文 http")
 	case "file", "javascript", "data", "vbscript":
@@ -147,15 +170,17 @@ func verdictForHost(host string, resolve HostResolver) redirectVerdict {
 }
 
 // guardRedirectTarget 对展开后的目标 URL 做完整预检；rawURL 已通过协议校验。
+// 交给解析器的是 Hostname()：带上端口（`t.cn:443`）的 authority 不是主机名，
+// 直接解析会失败并被当成「不可解析域名」拒绝，把合法目标误杀。
 func guardRedirectTarget(rawURL string, resolve HostResolver) redirectVerdict {
 	u, err := url.Parse(rawURL)
-	if err != nil || u.Host == "" {
+	if err != nil || u.Host == "" || u.Hostname() == "" {
 		return verdictBlock("目标 URL 无法解析主机")
 	}
 	if u.User != nil {
 		return verdictBlock("目标 URL 不允许携带 userinfo")
 	}
-	return verdictForHost(u.Host, resolve)
+	return verdictForHost(u.Hostname(), resolve)
 }
 
 // preflightShortLink 是短链场景的完整预检：
