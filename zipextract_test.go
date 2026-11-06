@@ -8,20 +8,20 @@ import (
 	"archive/zip"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
 
 func TestSecureZipRelPath(t *testing.T) {
 	okCases := map[string]string{
-		"a.txt":                "a.txt",
-		"dir/a.txt":            "dir/a.txt",
-		"dir/./a.txt":          "dir/a.txt",
-		"dir//a.txt":           "dir/a.txt",
-		"dir/sub/../a.txt":     "dir/a.txt",
-		"./a.txt":              "a.txt",
-		"x/y/z/":               "x/y/z/",
-		"深目录/文件-名_1.dll":  "深目录/文件-名_1.dll",
+		"a.txt":          "a.txt",
+		"dir/a.txt":      "dir/a.txt",
+		"dir/./a.txt":    "dir/a.txt",
+		"dir//a.txt":     "dir/a.txt",
+		"./a.txt":        "a.txt",
+		"x/y/z/":         "x/y/z",
+		"深目录/文件-名_1.dll": "深目录/文件-名_1.dll",
 	}
 	for in, want := range okCases {
 		got, ok := secureZipRelPath(in)
@@ -36,6 +36,7 @@ func TestSecureZipRelPath(t *testing.T) {
 		`..\windows`, `a\b.txt`,
 		"C:/Windows/x", "c:x",
 		"a\x00b", "a/../",
+		"dir/sub/../a.txt",
 	}
 	for _, in := range bad {
 		if got, ok := secureZipRelPath(in); ok {
@@ -109,16 +110,16 @@ func TestExtractZipPrefixesHappyPath(t *testing.T) {
 	if len(plan) != 3 {
 		t.Fatalf("计划条目数 = %d，期望 3", len(plan))
 	}
-	if declared != 10 {
-		t.Fatalf("声明总量 = %d，期望 10", declared)
+	if declared != 9 {
+		t.Fatalf("声明总量 = %d，期望 9", declared)
 	}
 
 	n, count, err := extractZipPrefixes(openZipFiles(t, zipPath), dest, []string{"maven/"}, lim, nil)
 	if err != nil {
 		t.Fatalf("解压失败: %v", err)
 	}
-	if count != 3 || n != 10 {
-		t.Fatalf("解压 count=%d bytes=%d，期望 3/10", count, n)
+	if count != 3 || n != 9 {
+		t.Fatalf("解压 count=%d bytes=%d，期望 3/9", count, n)
 	}
 	if data, err := os.ReadFile(filepath.Join(dest, "com", "acme", "a.jar")); err != nil || string(data) != "AAA" {
 		t.Fatalf("a.jar 内容不符: %q %v", data, err)
@@ -269,7 +270,7 @@ func TestWriteZipEntrySecureEnforcesStreamLimit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("目标文件不存在: %v", err)
 	}
-	if info.Mode().Perm() != 0600 {
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0600 {
 		t.Fatalf("解压文件权限 = %o，期望 0600", info.Mode().Perm())
 	}
 }
@@ -298,6 +299,84 @@ func TestWriteZipEntryRejectsPreExistingSymlink(t *testing.T) {
 	}
 	if data, _ := os.ReadFile(target); string(data) != "secret" {
 		t.Fatalf("符号链接目标被写穿，内容变成: %q", data)
+	}
+}
+
+func TestSecureZipRelPathRejectsWindowsSpecialSegments(t *testing.T) {
+	cases := []struct{ in, why string }{
+		{"a.jar:payload", "alternate data stream"},
+		{"dir/a.jar:payload.jar", "alternate data stream in sub dir"},
+		{"dir/a:1.jar", "short ADS form"},
+		{"a<b>.jar", "illegal angle brackets"},
+		{"a|b.jar", "illegal pipe"},
+		{"a?b.jar", "illegal question mark"},
+		{"a*b.jar", "illegal star"},
+		{"CON", "reserved device name"},
+		{"dir/nul.jar", "reserved device name with extension"},
+		{"dir/COM7.txt", "reserved serial device"},
+		{"a.", "trailing dot"},
+		{"dir/a.txt ", "trailing space"},
+		{"dir/\u202eevil.jar", "bidi override"},
+		{"dir/ev\u200bile.jar", "zero width space"},
+		{"dir/a\tb.jar", "tab in name"},
+	}
+	for _, c := range cases {
+		if got, ok := secureZipRelPath(c.in); ok {
+			t.Errorf("secureZipRelPath(%q) 应拒绝（%s），却返回 %q", c.in, c.why, got)
+		}
+	}
+}
+
+func TestPlanRejectsCaseFoldedDuplicateDest(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("大小写折叠冲突只在大小写不敏感文件系统上成立")
+	}
+	dir := t.TempDir()
+	zipPath := filepath.Join(dir, "case.zip")
+	buildTestZip(t, zipPath, []struct {
+		name string
+		data []byte
+		mode os.FileMode
+	}{
+		{"maven/Foo.jar", []byte("1"), 0644},
+		{"maven/foo.jar", []byte("2"), 0644},
+	})
+	lim := zipExtractLimits{EntryMax: 1 << 20, TotalMax: 1 << 20, MaxEntries: 100}
+	if _, _, err := planZipEntries(openZipFiles(t, zipPath), []string{"maven/"}, lim); err == nil {
+		t.Fatalf("仅大小写不同的同路径条目必须被拒绝")
+	}
+}
+
+// TestExtractRejectsSymlinkedParentDir 复现"预置目录链接"逃逸：解压目标里
+// 已存在一个指向盘外的目录链接，字面路径仍在根内，真实父目录却在根外。
+func TestExtractRejectsSymlinkedParentDir(t *testing.T) {
+	base := t.TempDir()
+	outside := filepath.Join(base, "outside")
+	if err := os.MkdirAll(outside, 0700); err != nil {
+		t.Fatalf("准备盘外目录失败: %v", err)
+	}
+	dest := filepath.Join(base, "dest")
+	if err := os.MkdirAll(dest, 0700); err != nil {
+		t.Fatalf("准备解压目录失败: %v", err)
+	}
+	if err := os.Symlink(outside, filepath.Join(dest, "sub")); err != nil {
+		t.Skip("当前环境无权创建目录符号链接，跳过该用例")
+	}
+
+	zipPath := filepath.Join(base, "linkdir.zip")
+	buildTestZip(t, zipPath, []struct {
+		name string
+		data []byte
+		mode os.FileMode
+	}{
+		{"sub/pwn.jar", []byte("pwn"), 0644},
+	})
+	lim := zipExtractLimits{EntryMax: 1 << 20, TotalMax: 1 << 20, MaxEntries: 100}
+	if _, _, err := extractZipPrefixes(openZipFiles(t, zipPath), dest, []string{""}, lim, nil); err == nil {
+		t.Fatalf("父目录为符号链接指向盘外时必须拒绝解压")
+	}
+	if _, err := os.Stat(filepath.Join(outside, "pwn.jar")); !os.IsNotExist(err) {
+		t.Fatalf("链接目标目录被写穿: %v", err)
 	}
 }
 
