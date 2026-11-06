@@ -547,6 +547,18 @@ func (a *App) StartServer(name string) error {
 			if len(datapackAudit.Findings) > 0 {
 				a.writeLog("数据包告警: %s", datapackAudit.Describe())
 			}
+			playerAudit, err := AuditWorldPlayerData(worldAudit.Path)
+			if err != nil {
+				return err
+			}
+			if playerAudit.Blocking() {
+				recordSecurityEvent(auditCategoryLaunch, auditSeverityCritical, auditActionBlocked,
+					playerAudit.Describe(), worldAudit.Path)
+				return fmt.Errorf("玩家数据目录校验失败，拒绝启动: %s", playerAudit.Describe())
+			}
+			if playerAudit.HasWarnings() {
+				a.writeLog("玩家数据告警: %s", playerAudit.Describe())
+			}
 		}
 	}
 
@@ -561,6 +573,32 @@ func (a *App) StartServer(name string) error {
 	}
 	if settingsAudit.HasWarnings() {
 		a.writeLog("服务器配置告警: %s", settingsAudit.Describe())
+	}
+
+	accessAudit, accessErr := AuditServerAccess(cfg.ServerDir)
+	if accessErr != nil {
+		return accessErr
+	}
+	if accessAudit.Blocking() {
+		recordSecurityEvent(auditCategoryPermission, auditSeverityCritical, auditActionBlocked,
+			accessAudit.Describe(), cfg.ServerDir)
+		return fmt.Errorf("服务器权限文件校验失败，拒绝启动: %s", accessAudit.Describe())
+	}
+	if accessAudit.HasWarnings() {
+		a.writeLog("服务器权限告警: %s", accessAudit.Describe())
+	}
+
+	pluginAudit, pluginErr := AuditServerPlugins(cfg.ServerDir)
+	if pluginErr != nil {
+		return pluginErr
+	}
+	if pluginAudit.Blocking() {
+		recordSecurityEvent(auditCategoryPermission, auditSeverityCritical, auditActionBlocked,
+			pluginAudit.Describe(), pluginAudit.Dir)
+		return fmt.Errorf("插件目录校验失败，拒绝启动: %s", pluginAudit.Describe())
+	}
+	if pluginAudit.HasWarnings() {
+		a.writeLog("插件告警: %s", pluginAudit.Describe())
 	}
 
 	javaEntry, err := a.SelectJavaForVersion(cfg.Version)
