@@ -39,6 +39,8 @@ const (
 	dqRejectItemTooLarge      = "item-too-large"            // 单条声明大小超过 512GiB
 	dqRejectBudgetOverflow    = "size-overflow"             // 聚合字节数溢出 int64
 	dqRejectAggregateBudget   = "aggregate-budget-exceeded" // 队列聚合超过 1TiB
+	dqRejectBadURL            = "bad-url"                  // URL 未通过协议/主机/编码校验
+	dqRejectBadName           = "bad-name"                 // 名称含分隔符/穿越段/保留设备名
 )
 
 // allowedDownloadItemTypes 是 StartDownloadList 真正能分发处理的全部类型。
@@ -65,11 +67,17 @@ func auditDownloadItemForEnqueue(list []DownloadItem, item DownloadItem) string 
 	if item.CustomName == "" {
 		return dqRejectEmptyName
 	}
+	if why := auditDownloadQueueName(item.CustomName); why != dqNameRejectNone {
+		return dqRejectBadName
+	}
 	if len(item.ID) > maxDownloadItemIDLen {
 		return dqRejectIDLen
 	}
 	if len(item.URL) > maxDownloadItemURLLen {
 		return dqRejectURLLen
+	}
+	if why := auditDownloadQueueURL(item.URL); why != dqURLRejectNone {
+		return dqRejectBadURL
 	}
 	// r35：聚合字节预算——条数 / 单文件上限挡不住“合法大小 × 海量条目”的聚合放大。
 	// 以队列现有声明大小之和 + 新条目声明大小判预算；size<=0 表示未知，按 0 计不影响
@@ -101,6 +109,10 @@ func describeQueueReject(why string) string {
 		return "下载任务 ID 超过长度上限"
 	case dqRejectURLLen:
 		return "下载地址超过长度上限"
+	case dqRejectBadName:
+		return "下载任务名称未通过安全校验（分隔符 / 穿越段 / 保留设备名 / 结尾点）"
+	case dqRejectBadURL:
+		return "下载地址未通过安全校验（协议 / 用户信息 / 控制字符 / IP 直连 / 端口）"
 	case dqRejectDup:
 		return "已存在同名下载任务"
 	case dqRejectSizeNegative:
