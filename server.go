@@ -588,6 +588,19 @@ func (a *App) StartServer(name string) error {
 		a.writeLog("服务器权限告警: %s", accessAudit.Describe())
 	}
 
+	operatorAudit, operatorErr := AuditServerOperators(cfg.ServerDir)
+	if operatorErr != nil {
+		return operatorErr
+	}
+	if operatorAudit.Blocking() {
+		recordSecurityEvent(auditCategoryPermission, auditSeverityCritical, auditActionBlocked,
+			operatorAudit.Describe(), cfg.ServerDir)
+		return fmt.Errorf("服务器权限名单校验失败，拒绝启动: %s", operatorAudit.Describe())
+	}
+	if operatorAudit.HasWarnings() {
+		a.writeLog("服务器权限名单告警: %s", operatorAudit.Describe())
+	}
+
 	pluginAudit, pluginErr := AuditServerPlugins(cfg.ServerDir)
 	if pluginErr != nil {
 		return pluginErr
@@ -599,6 +612,39 @@ func (a *App) StartServer(name string) error {
 	}
 	if pluginAudit.HasWarnings() {
 		a.writeLog("插件告警: %s", pluginAudit.Describe())
+	}
+
+	remoteAudit, remoteErr := AuditServerRemoteAdmin(cfg.ServerDir)
+	if remoteErr != nil {
+		return remoteErr
+	}
+	if remoteAudit.Blocking() {
+		recordSecurityEvent(auditCategoryConfig, auditSeverityCritical, auditActionBlocked,
+			remoteAudit.Describe(), remoteAudit.Path)
+		return fmt.Errorf("服务器远程管理配置校验失败，拒绝启动: %s", remoteAudit.Describe())
+	}
+	if remoteAudit.HasWarnings() {
+		a.writeLog("服务器远程管理告警: %s", remoteAudit.Describe())
+	}
+
+	surfaceAudit, surfaceErr := AuditServerSurface(cfg.ServerDir)
+	if surfaceErr != nil {
+		return surfaceErr
+	}
+	if surfaceAudit.Blocking() {
+		recordSecurityEvent(auditCategoryLaunch, auditSeverityCritical, auditActionBlocked,
+			surfaceAudit.Describe(), cfg.ServerDir)
+		return fmt.Errorf("服务器目录根层校验失败，拒绝启动: %s", surfaceAudit.Describe())
+	}
+	if surfaceAudit.HasWarnings() {
+		a.writeLog("服务器目录根层告警: %s", surfaceAudit.Describe())
+	}
+
+	baselineAudit, baselineErr := AuditServerConfigBaseline(cfg.ServerDir, "")
+	if baselineErr != nil {
+		a.writeLog("服务器配置基线不可用: %v", baselineErr)
+	} else if baselineAudit.HasWarnings() {
+		a.writeLog("服务器配置基线变化: %s", baselineAudit.Describe())
 	}
 
 	javaEntry, err := a.SelectJavaForVersion(cfg.Version)
