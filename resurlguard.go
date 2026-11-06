@@ -25,14 +25,57 @@ type ResDecision struct {
 	SizeHintBytes int64
 }
 
+func resPackHostOnly(raw string) (string, bool) {
+	h := strings.ToLower(strings.TrimSpace(raw))
+	if h == "" {
+		return "", false
+	}
+	if strings.ContainsAny(h, " \t\r\n\"'<>`%/@?#\\") {
+		return "", false
+	}
+	h = strings.Trim(h, "[]")
+	h = strings.TrimRight(h, ".")
+	if h == "" || strings.Contains(h, "..") {
+		return "", false
+	}
+	if isIPLiteralHost(h) {
+		return "", false
+	}
+	if h == "localhost" || strings.HasSuffix(h, ".localhost") {
+		return "", false
+	}
+	if !strings.Contains(h, ".") {
+		return "", false
+	}
+	last := h[strings.LastIndex(h, ".")+1:]
+	digitsOnly := len(last) > 0
+	for i := 0; i < len(last); i++ {
+		c := last[i]
+		if c < '0' || c > '9' {
+			digitsOnly = false
+			break
+		}
+	}
+	if digitsOnly {
+		return "", false
+	}
+	return h, true
+}
+
 // classifyResPackURL 判定服务器下发的资源包 URL。
 func classifyResPackURL(raw string) ResDecision {
 	if strings.TrimSpace(raw) == "" {
 		return ResDecision{Allow: false, Why: "empty url"}
 	}
+	if strings.ContainsAny(raw, "\r\n\t") {
+		return ResDecision{Allow: false, Why: "control char in url"}
+	}
 	u, err := url.Parse(raw)
 	if err != nil {
 		return ResDecision{Allow: false, Why: "parse error"}
+	}
+	if u.Opaque != "" {
+		return ResDecision{Allow: false, Why: "opaque url rejected", Host: u.Hostname()}
 	}
 	if strings.ToLower(u.Scheme) != "https" {
 		return ResDecision{Allow: false, Why: "scheme must be https", Host: u.Hostname()}
@@ -40,12 +83,9 @@ func classifyResPackURL(raw string) ResDecision {
 	if u.User != nil {
 		return ResDecision{Allow: false, Why: "userinfo not allowed", Host: u.Hostname()}
 	}
-	host := strings.ToLower(u.Hostname())
-	if host == "" {
-		return ResDecision{Allow: false, Why: "empty host"}
-	}
-	if isIPLiteralHost(host) {
-		return ResDecision{Allow: false, Why: "ip literal rejected", Host: host}
+	host, ok := resPackHostOnly(u.Hostname())
+	if !ok {
+		return ResDecision{Allow: false, Why: "host not an fqdn", Host: u.Hostname()}
 	}
 	return ResDecision{Allow: true, Why: "https clean host", Host: host}
 }
