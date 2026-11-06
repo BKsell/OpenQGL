@@ -36,9 +36,36 @@ func rewriteURLPrefixes(raw string, rules []urlPrefixRule) string {
 		if rule.from == "" {
 			continue
 		}
+		if !strings.HasPrefix(out, rule.from) {
+			continue
+		}
+		if mirrorRuleEndsAtHost(rule.from) && !mirrorPrefixEndsAtHostBoundary(out[len(rule.from):]) {
+			continue
+		}
 		out = strings.Replace(out, rule.from, rule.to, 1)
 	}
 	return out
+}
+
+func mirrorRuleEndsAtHost(from string) bool {
+	idx := strings.Index(from, "://")
+	if idx < 0 {
+		return false
+	}
+	rest := from[idx+3:]
+	return !strings.ContainsAny(rest, "/?#")
+}
+
+func mirrorPrefixEndsAtHostBoundary(rest string) bool {
+	if rest == "" {
+		return true
+	}
+	switch rest[0] {
+	case '/', '?', '#', ':':
+		return true
+	default:
+		return false
+	}
 }
 
 // bmclLauncherPrefixRules 供版本清单 / 版本 JSON / 库与资产索引 URL 换源：
