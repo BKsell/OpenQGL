@@ -1947,6 +1947,9 @@ func (a *App) AddLoaderToDownloadList(loaderName string, mcVersion string, loade
 	if why := auditDownloadItemForEnqueue(a.downloadList, pending); why != dqRejectNone {
 		return fmt.Errorf("%s", describeQueueReject(why))
 	}
+	if why := auditDownloadItemFields(pending, a.GetMinecraftDir()); why != dfRejectNone {
+		return fmt.Errorf("%s", describeDownloadFieldReject(why))
+	}
 
 	a.downloadList = append(a.downloadList, pending)
 
