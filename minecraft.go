@@ -558,6 +558,9 @@ func (a *App) AddToDownloadList(versionID string, versionURL string, customName 
 	if why := auditDownloadItemForEnqueue(a.downloadList, pending); why != dqRejectNone {
 		return fmt.Errorf("%s", describeQueueReject(why))
 	}
+	if why := auditDownloadItemFields(pending, a.GetMinecraftDir()); why != dfRejectNone {
+		return fmt.Errorf("%s", describeDownloadFieldReject(why))
+	}
 	a.downloadList = append(a.downloadList, pending)
 	runtime.EventsEmit(a.ctx, "downloadListUpdated", a.downloadList)
 	return nil
@@ -615,6 +618,9 @@ func (a *App) AddToDownloadListWithLoader(versionID string, versionURL string, c
 	if why := auditDownloadItemForEnqueue(a.downloadList, pending); why != dqRejectNone {
 		return fmt.Errorf("%s", describeQueueReject(why))
 	}
+	if why := auditDownloadItemFields(pending, a.GetMinecraftDir()); why != dfRejectNone {
+		return fmt.Errorf("%s", describeDownloadFieldReject(why))
+	}
 	a.downloadList = append(a.downloadList, pending)
 	runtime.EventsEmit(a.ctx, "downloadListUpdated", a.downloadList)
 	return nil
@@ -644,6 +650,9 @@ func (a *App) AddJavaToDownloadList(majorVer int) error {
 	}
 	if why := auditDownloadItemForEnqueue(a.downloadList, pending); why != dqRejectNone {
 		return fmt.Errorf("%s", describeQueueReject(why))
+	}
+	if why := auditDownloadItemFields(pending, a.GetMinecraftDir()); why != dfRejectNone {
+		return fmt.Errorf("%s", describeDownloadFieldReject(why))
 	}
 	a.downloadList = append(a.downloadList, pending)
 	runtime.EventsEmit(a.ctx, "downloadListUpdated", a.downloadList)
@@ -801,16 +810,11 @@ func (a *App) CancelDownloadList() error {
 }
 
 func (a *App) downloadJavaItem(majorVer int, url string) error {
-	javaList := a.GetJavaDownloadList()
-	var target *JavaDownloadInfo
-	for i := range javaList {
-		if javaList[i].MajorVer == majorVer {
-			target = &javaList[i]
-			break
-		}
-	}
-	if target == nil {
-		return fmt.Errorf("未找到 Java %d 的下载信息", majorVer)
+	target, why := auditJavaDownloadRequest(majorVer, url, a.GetJavaDownloadList())
+	if why != jdRejectNone {
+		recordSecurityEvent(auditCategoryInstaller, auditSeverityCritical, auditActionBlocked,
+			"minecraft", "Java 下载请求被拒绝: "+describeJavaDownloadReject(why))
+		return fmt.Errorf("Java 下载请求被拒绝: %s", describeJavaDownloadReject(why))
 	}
 	if target.IsWebPage {
 		// 交给系统浏览器前先过结构性校验：只允许 https 公网域名，拒绝危险 scheme、
@@ -870,9 +874,9 @@ func (a *App) downloadJavaItem(majorVer int, url string) error {
 			a.emitProgress("downloading", target.FileName, received, total)
 		},
 	}
-	if _, err := streamVerifiedDownload(ctx, url, destPath, opts); err != nil {
+	if _, err := streamVerifiedDownload(ctx, target.URL, destPath, opts); err != nil {
 		if errors.Is(err, errSecureDownloadTooLarge) {
-			return fmt.Errorf("下载失败 %s: %w", url, errDownloadTooLarge)
+			return fmt.Errorf("下载失败 %s: %w", target.URL, errDownloadTooLarge)
 		}
 		return fmt.Errorf("下载失败: %v", err)
 	}
