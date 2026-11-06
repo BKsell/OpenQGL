@@ -283,3 +283,31 @@ func TestSafeJoinRejectsParentAndVolume(t *testing.T) {
 		t.Error("以两个点开头的合法子目录被误拒")
 	}
 }
+
+// TestSanitizeFilenameUnicodeSpaces 覆盖不可见空白：U+00A0 / U+2007 / U+3000
+// 这类字符在资源管理器里与普通空格等价，却不会被 " ." 的 Trim 处理。
+func TestSanitizeFilenameUnicodeSpaces(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"x\u00a0.jar", "x_.jar"},
+		{"x\u3000.exe", "x_.exe"},
+		{"x\u2007.pdf", "x_.pdf"},
+		{"x\u202f.jar", "x_.jar"},
+		{"x\u2009.jar", "x_.jar"},
+		{"sodium\u00a0mod.jar", "sodium_mod.jar"},
+	}
+	for _, c := range cases {
+		got := SanitizeFilename(c.in)
+		if got != c.want {
+			t.Errorf("SanitizeFilename(%q) = %q, want %q", c.in, got, c.want)
+		}
+		if strings.ContainsAny(got, "\u00a0\u3000\u2007\u202f\u2009") {
+			t.Errorf("SanitizeFilename 残留不可见空白: %q", got)
+		}
+	}
+	// 普通空格与下划线不受影响（不能把合法名字改坏）。
+	for _, n := range []string{"my mod.jar", "my_mod.jar", "版本 1.20.jar"} {
+		if got := SanitizeFilename(n); got != n {
+			t.Errorf("SanitizeFilename(%q) = %q, want unchanged", n, got)
+		}
+	}
+}
