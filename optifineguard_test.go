@@ -85,6 +85,25 @@ func TestClassifyOptifineUrl(t *testing.T) {
 	}
 }
 
+func TestValidateOptifineUrlAuthority(t *testing.T) {
+	lim := OptiFineLimits{}
+	if _, err := ValidateOptifineUrl("https://optifine.net:443/adloads/x.jar", lim); err != nil {
+		t.Fatalf("显式 443 端口应放行: %v", err)
+	}
+	if _, err := ValidateOptifineUrl("https://optifine.net./x.jar", lim); err != nil {
+		t.Fatalf("主机末尾点应归一后放行: %v", err)
+	}
+	if _, err := ValidateOptifineUrl("https://user@optifine.net/x.jar", lim); err == nil {
+		t.Fatal("带 userinfo 的地址应被拒")
+	}
+	if _, err := ValidateOptifineUrl("https://optifine.net@evil.com/x.jar", lim); err == nil {
+		t.Fatal("userinfo 混淆到外部主机的地址应被拒")
+	}
+	if _, err := ValidateOptifineUrl("https://optifine.net:8443/x.jar", lim); err != nil {
+		t.Fatalf("白名单主机非默认端口按主机判定放行: %v", err)
+	}
+}
+
 func TestSummarizeOptifineError(t *testing.T) {
 	if s := SummarizeOptifineError(nil); s != "optifine check ok" {
 		t.Errorf("unexpected ok summary: %s", s)
