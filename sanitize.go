@@ -2,9 +2,12 @@ package main
 
 import (
 	"io/fs"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // 本文件集中放置跨模块复用的输入/路径校验工具。
@@ -25,7 +28,7 @@ var safeImageExts = map[string]bool{
 
 // safeArchiveExts 允许用户导入的压缩包类型（modpack / resourcepack）。
 var safeArchiveExts = map[string]bool{
-	".zip": true,
+	".zip":    true,
 	".mrpack": true, // Modrinth modpack
 }
 
@@ -75,10 +78,12 @@ func PathWithin(root string, p string) (string, bool) {
 		}
 		return ".", true
 	}
-	if strings.HasPrefix(rel, "..") || filepath.IsAbs(rel) {
+	// 词法在 root 内，再确认解析所有符号链接后仍在 root 内。
+	// 旧实现用 strings.HasPrefix(rel, "..")，会把 root 内合法的 "..keep" 条目
+	// 误判成越界；改由 lexicallyWithin 精确比较 ".." 与 ".."+分隔符。
+	if !lexicallyWithin(rootAbs, abs) {
 		return "", false
 	}
-	// 词法在 root 内，再确认解析所有符号链接后仍在 root 内。
 	if !resolvedInside(rootAbs, abs) {
 		return "", false
 	}
@@ -154,12 +159,36 @@ func IsSymlink(p string) bool {
 // SafeJoin 在 root 下拼一个相对子路径，任何一步越界都返回 false。
 // 用于 renderer 传 "versions/1.20/mods" 这种相对路径时，确保它真的在 root 里。
 func SafeJoin(root string, rel string) (string, bool) {
-	clean := filepath.Clean("/" + rel) // 先做成绝对路径再 Clean，吞掉 ../
-	clean = strings.TrimPrefix(clean, "/")
-	if clean == "." || clean == "" {
+	if root == "" || rel == "" {
 		return "", false
 	}
-	full := filepath.Join(root, clean)
+	// 绝对路径 / 盘符 / UNC：filepath.Join 会把它们当成“已绝对”直接吞掉 root。
+	// Windows 下 "/abs/x" 不算 IsAbs（只是“当前盘根”），但它表达的是绝对意图，
+	// 静默改成 root\abs\x 会让调用方写错位置，这里一并拒绝。
+	if filepath.IsAbs(rel) || filepath.VolumeName(rel) != "" ||
+		strings.HasPrefix(rel, "/") || strings.HasPrefix(rel, `\`) {
+		return "", false
+	}
+	// 旧实现先拼成 "/"+rel 再 Clean，在 Windows 上 Clean("/") 返回反斜杠根，
+	// TrimPrefix 剥不掉，导致 ""/"."/".." 被拼成 root 本身并放行；同时 "../x"
+	// 被归一化成 "x" 静默落到 root 内另一个文件，调用方以为写的是别处。
+	// 这里改成逐段白名单式拼接：任何 ".." 段直接拒绝，不做“归一化吞掉”。
+	segs := strings.Split(strings.ReplaceAll(rel, `\`, "/"), "/")
+	parts := make([]string, 0, len(segs)+1)
+	parts = append(parts, root)
+	for _, seg := range segs {
+		if seg == "" || seg == "." {
+			continue
+		}
+		if seg == ".." {
+			return "", false
+		}
+		parts = append(parts, seg)
+	}
+	if len(parts) == 1 {
+		return "", false
+	}
+	full := filepath.Join(parts...)
 	if _, ok := PathWithin(root, full); !ok {
 		return "", false
 	}
@@ -179,10 +208,32 @@ func SanitizeFilename(name string) string {
 	// 去掉首尾空格和点（Windows 不允许文件名以点结尾）
 	name = strings.TrimLeft(name, " .")
 	name = strings.TrimRight(name, " .")
-	if len(name) > 128 {
-		name = name[:128]
+	name = truncateFilenameBytes(name, 128)
+	// 截断可能重新落在点/空格上，再剥一次，保证审计名与磁盘名一致。
+	name = strings.TrimRight(name, " .")
+	if name == "" {
+		return name
+	}
+	// Windows 保留设备名（CON / PRN / AUX / NUL / COM1..9 / LPT1..9）带扩展名也会
+	// 落到设备上（CON.txt 仍写进控制台），加下划线前缀让它变成普通文件。
+	// 原实现只替换非法字符，保留名会原样放行，写入会失败或丢数据。
+	if isReservedDeviceName(stemOfName(name)) {
+		name = "_" + name
 	}
 	return name
+}
+
+// truncateFilenameBytes 把文件名截到 max 字节，并回退到合法 UTF-8 边界。
+// 直接切字节会把多字节字符劈成半个，Windows 落盘会直接拒绝该名字。
+func truncateFilenameBytes(name string, max int) string {
+	if max <= 0 || len(name) <= max {
+		return name
+	}
+	cut := name[:max]
+	for len(cut) > 0 && !utf8.ValidString(cut) {
+		cut = cut[:len(cut)-1]
+	}
+	return cut
 }
 
 // ValidateModName 校验 mod / 版本 ID 是否合法：
@@ -203,12 +254,52 @@ func ValidateModName(name string) bool {
 }
 
 // ValidateURL 只允许 http/https，且长度 <= 2048（Go url.Parse 不会替你挡超长串）。
+// 旧实现只比对前缀字符串，`https://`（无主机）、`https://user:pw@host/x`（userinfo
+// 夹带凭据）、`https://example.com/a b.jpg`（空格）、含 NUL 的串都会判为合法，
+// 调用方（user.go 的壁纸 Location 校验）随后直接拿去发请求。这里改成真正解析：
+// 协议白名单 + 必须有主机 + 拒绝 userinfo + 拒绝空白/控制字节 + 端口范围校验。
 func ValidateURL(raw string) bool {
 	if raw == "" || len(raw) > 2048 {
 		return false
 	}
-	lower := strings.ToLower(raw)
-	return strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://")
+	if hasASCIIWhitespaceOrControl(raw) {
+		return false
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return false
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "http", "https":
+	default:
+		return false
+	}
+	// Opaque（如 `http:foo`）没有 host 语义；Host/Hostname 为空同样拒绝。
+	if u.Opaque != "" || u.Host == "" || u.Hostname() == "" {
+		return false
+	}
+	if u.User != nil {
+		return false
+	}
+	if port := u.Port(); port != "" {
+		n, convErr := strconv.Atoi(port)
+		if convErr != nil || n <= 0 || n > 65535 {
+			return false
+		}
+	}
+	return true
+}
+
+// hasASCIIWhitespaceOrControl 报告串里是否有空格 / 制表 / C0 控制字节 / DEL。
+// 这些字节进不了合法 URL，但 url.Parse 对空格是宽容的，必须显式拦下。
+func hasASCIIWhitespaceOrControl(s string) bool {
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c == ' ' || c == '\t' || c < 0x20 || c == 0x7f {
+			return true
+		}
+	}
+	return false
 }
 
 // MaxFileSize 返回文件大小是否在安全上限内。
