@@ -13,6 +13,7 @@ package main
 //   - 输出净化后的计划供下游执行。
 
 import (
+	"net"
 	"net/url"
 	"path/filepath"
 	"strings"
@@ -45,41 +46,103 @@ func defaultQueueLimits() QueueLimits {
 }
 
 type queueItem struct {
-	URL    string
-	Dest   string // 相对路径
-	Hash   string
-	Size   int64
+	URL  string
+	Dest string // 相对路径
+	Hash string
+	Size int64
 }
 
 type queueVerdict struct {
-	OK      bool
-	Reason  string
-	Clean   []queueItem
-	Total   int64
+	OK     bool
+	Reason string
+	Clean  []queueItem
+	Total  int64
 }
 
 // hostAllowedQ 检查 host（含端口）是否在允许集合内。
+// 旧实现用 LastIndex(host, ":") 剥端口：IPv6 字面量 `[::1]:443` 被切成
+// 主机 "[::1" + 端口 "443" 之后仍拼不回去，裸 IPv6 `2001:db8::1` 更会被当成
+// 端口 "1"；反过来无端口的主机名又直接跳过端口白名单，8443 之类的放行端口
+// 等于从未生效。这里改成结构化拆分（IPv6 方括号 / 单冒号 / 裸 IPv6 分别处理），
+// 端口缺省按 https 443 计。
 func hostAllowedQ(host string, lim QueueLimits) bool {
-	h := strings.ToLower(host)
-	// 剥离端口
-	if i := strings.LastIndex(h, ":"); i >= 0 {
-		port := h[i+1:]
-		if _, ok := lim.AllowedPorts[port]; !ok {
-			return false
-		}
-		h = h[:i]
+	name, port, ok := splitQueueAuthority(host)
+	if !ok {
+		return false
+	}
+	name = strings.ToLower(strings.TrimSuffix(name, "."))
+	if name == "" {
+		return false
+	}
+	if port == "" {
+		port = "443"
+	} else if !isDigits(port) {
+		return false
+	}
+	if len(lim.AllowedPorts) > 0 && !lim.AllowedPorts[port] {
+		return false
 	}
 	for _, allowed := range lim.AllowedHosts {
-		a := strings.ToLower(allowed)
-		if h == a || strings.HasSuffix(h, "."+a) {
+		a := strings.ToLower(strings.TrimSuffix(allowed, "."))
+		if a == "" {
+			continue
+		}
+		if name == a || strings.HasSuffix(name, "."+a) {
 			return true
 		}
 	}
 	return false
 }
 
+// splitQueueAuthority 把 authority 拆成「主机 + 端口」。
+// 返回值 ok=false 表示形态非法（空主机、多冒号又不是 IPv6、方括号不闭合、
+// 混进路径/查询/凭据分隔符），调用方应直接拒绝而不是猜一个主机出来。
+func splitQueueAuthority(host string) (string, string, bool) {
+	h := strings.TrimSpace(host)
+	if h == "" {
+		return "", "", false
+	}
+	if strings.ContainsAny(h, " \t\r\n/") || strings.ContainsAny(h, "/@?#\\") {
+		return "", "", false
+	}
+	if strings.HasPrefix(h, "[") {
+		end := strings.Index(h, "]")
+		if end < 0 {
+			return "", "", false
+		}
+		name := h[:end+1]
+		rest := h[end+1:]
+		if rest == "" {
+			return name, "", true
+		}
+		if !strings.HasPrefix(rest, ":") {
+			return "", "", false
+		}
+		return name, rest[1:], true
+	}
+	if strings.Count(h, ":") == 0 {
+		return h, "", true
+	}
+	if net.ParseIP(h) != nil {
+		return h, "", true
+	}
+	if strings.Count(h, ":") == 1 {
+		i := strings.Index(h, ":")
+		name := h[:i]
+		port := h[i+1:]
+		if name == "" || port == "" {
+			return "", "", false
+		}
+		return name, port, true
+	}
+	return "", "", false
+}
+
 // validateQueueURL 校验单条下载 URL。
 func validateQueueURL(raw string, lim QueueLimits) string {
+	if raw == "" {
+		return "url-parse-fail"
+	}
 	if len(raw) > 4096 {
 		return "url-too-long"
 	}
@@ -93,8 +156,17 @@ func validateQueueURL(raw string, lim QueueLimits) string {
 	if u.User != nil {
 		return "url-userinfo"
 	}
-	if u.Host == "" {
+	if u.Opaque != "" {
+		return "url-opaque"
+	}
+	if u.Host == "" || u.Hostname() == "" {
 		return "url-no-host"
+	}
+	// 百分号编码主机（`%31%32%37.0.0.1`）在部分解析器上会还原成内网 IP，
+	// 白名单比对的是编码后的字符串，等于把真正的目标藏起来；IPv6 作用域
+	// 写法 `[fe80::1%25eth0]` 同样落在这里，一律拒绝。
+	if strings.Contains(u.Host, "%") {
+		return "url-host-encoded"
 	}
 	if !hostAllowedQ(u.Host, lim) {
 		return "url-host:" + strings.ToLower(u.Host)
