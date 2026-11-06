@@ -279,6 +279,13 @@ func (a *App) CreateServer(name, version string, port, maxMem, minMem int, onlin
 		dir = filepath.Join(serverDir, name)
 	}
 
+	if info, statErr := os.Lstat(dir); statErr == nil && info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("服务器目录不能是符号链接")
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "QGL", "config.json")); statErr == nil {
+		return fmt.Errorf("目录 %s 已存在服务器配置，拒绝覆盖", dir)
+	}
+
 	if err := os.MkdirAll(dir, allowedDirPerm); err != nil {
 		return fmt.Errorf("创建服务器目录失败: %v", err)
 	}
@@ -308,7 +315,8 @@ func (a *App) CreateServer(name, version string, port, maxMem, minMem int, onlin
 		return fmt.Errorf("下载服务器文件失败: %v", err)
 	}
 
-	if err := os.WriteFile(filepath.Join(dir, "eula.txt"), []byte("# By changing the setting below to TRUE you are indicating your agreement to our EULA (https://aka.ms/MinecraftEULA).\neula=true\n"), allowedFilePerm); err != nil {
+	eulaData := []byte("# By changing the setting below to TRUE you are indicating your agreement to our EULA (https://aka.ms/MinecraftEULA).\neula=true\n")
+	if err := secureWriteFile(filepath.Join(dir, "eula.txt"), eulaData, allowedFilePerm); err != nil {
 		return fmt.Errorf("创建 eula.txt 失败: %v", err)
 	}
 
