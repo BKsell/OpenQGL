@@ -513,6 +513,61 @@ func (a *App) StartServer(name string) error {
 		return fmt.Errorf("服务器启动目标校验失败，拒绝启动: %s", launchAudit.FirstCriticalCode())
 	}
 
+	// 世界目录审计：server.properties 里的 level-name 由用户可写，若含 ".."/分隔符/
+	// 绝对前缀，服务端会在 ServerDir 之外创建或复用世界目录；世界目录本身是符号链接时
+	// 同样会把写入引到任意位置。启动前把名字与解析后的真实路径一起收敛。
+	worldName, worldNameSet, worldNameErr := readWorldLevelName(cfg.ServerDir)
+	if worldNameErr != nil {
+		return worldNameErr
+	}
+	if worldNameSet {
+		worldAudit, err := AuditWorldPath(cfg.ServerDir, worldName)
+		if err != nil {
+			return err
+		}
+		if worldAudit.Blocking() {
+			recordSecurityEvent(auditCategoryLaunch, auditSeverityCritical, auditActionBlocked,
+				describeWorldPathAudit(worldAudit), cfg.ServerDir)
+			return fmt.Errorf("世界目录校验失败，拒绝启动: %s", describeWorldPathAudit(worldAudit))
+		}
+		if len(worldAudit.Warnings) > 0 {
+			a.writeLog("世界目录告警: %s", strings.Join(worldAudit.Warnings, "；"))
+		}
+	}
+
+	if worldNameSet {
+		worldAudit, _ := AuditWorldPath(cfg.ServerDir, worldName)
+		if worldAudit.Present && !worldAudit.Symlink {
+			datapackAudit, err := AuditWorldDatapacks(worldAudit.Path)
+			if err != nil {
+				return err
+			}
+			if datapackAudit.Blocking() {
+				recordSecurityEvent(auditCategoryLaunch, auditSeverityCritical, auditActionBlocked,
+					datapackAudit.Describe(), worldAudit.Path)
+				return fmt.Errorf("数据包目录校验失败，拒绝启动: %s", datapackAudit.Describe())
+			}
+			if len(datapackAudit.Findings) > 0 {
+				a.writeLog("数据包告警: %s", datapackAudit.Describe())
+			}
+		}
+	}
+
+	// 配置风险审计：开放 RCON 且无密码等于把远程控制台暴露给全网，必须阻断；
+	// 离线模式 / 关闭聊天签名 / 明文资源包只告警，避免误伤用户既有服务器。
+	settingsAudit, settingsErr := AuditServerSettingsFile(cfg.ServerDir)
+	if settingsErr != nil {
+		return settingsErr
+	}
+	if settingsAudit.Blocking() {
+		recordSecurityEvent(auditCategoryConfig, auditSeverityCritical, auditActionBlocked,
+			settingsAudit.Describe(), cfg.ServerDir)
+		return fmt.Errorf("服务器配置校验失败，拒绝启动: %s", settingsAudit.Describe())
+	}
+	if settingsAudit.HasWarnings() {
+		a.writeLog("服务器配置告警: %s", settingsAudit.Describe())
+	}
+
 	javaEntry, err := a.SelectJavaForVersion(cfg.Version)
 	if err != nil {
 		return fmt.Errorf("选择 Java 失败: %v", err)
