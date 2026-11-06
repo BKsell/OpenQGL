@@ -237,3 +237,45 @@ func TestIsNonPublicIPUnified(t *testing.T) {
 		t.Fatal("nil IP 应按不可信处理")
 	}
 }
+
+func TestIsNonPublicIPTransitionPrefix(t *testing.T) {
+	blocked := []string{
+		"64:ff9b::a00:1",
+		"64:ff9b::7f00:1",
+		"64:ff9b::c0a8:101",
+		"2002:7f00:1::",
+		"2002:a00:1::",
+		"2002:c0a8:101::",
+		"2002:a9fe:a9fe::",
+		"::127.0.0.1",
+		"::10.0.0.1",
+		"2001:0:0:0:0:0:80ff:fffe",
+		"2001:0:0:0:0:0:5601:5601",
+	}
+	for _, s := range blocked {
+		ip, ok := parseDestIP(s)
+		if !ok {
+			t.Fatalf("过渡前缀地址应被识别为 IP 字面量: %s", s)
+		}
+		if !isNonPublicIP(ip) {
+			t.Fatalf("过渡前缀内嵌内网地址 %s 应被拦截", s)
+		}
+	}
+	allowed := []string{
+		"64:ff9b::808:808",
+		"2002:808:808::",
+		"64:ff9b::101:101",
+		"2606:4700::1111",
+		"::8.8.8.8",
+		"2001:0::f7f7:f7f7",
+	}
+	for _, s := range allowed {
+		ip, ok := parseDestIP(s)
+		if !ok {
+			t.Fatalf("地址应被识别为 IP 字面量: %s", s)
+		}
+		if isNonPublicIP(ip) {
+			t.Fatalf("过渡前缀内嵌公网地址 %s 不应被拦截", s)
+		}
+	}
+}
