@@ -559,6 +559,18 @@ func (a *App) StartServer(name string) error {
 			if playerAudit.HasWarnings() {
 				a.writeLog("玩家数据告警: %s", playerAudit.Describe())
 			}
+			regionAudit, regionErr := AuditWorldRegions(worldAudit.Path)
+			if regionErr != nil {
+				return regionErr
+			}
+			if regionAudit.Blocking() {
+				recordSecurityEvent(auditCategoryLaunch, auditSeverityCritical, auditActionBlocked,
+					regionAudit.Describe(), worldAudit.Path)
+				return fmt.Errorf("世界区域文件校验失败，拒绝启动: %s", regionAudit.Describe())
+			}
+			if regionAudit.HasWarnings() {
+				a.writeLog("世界区域文件告警: %s", regionAudit.Describe())
+			}
 		}
 	}
 
@@ -601,6 +613,19 @@ func (a *App) StartServer(name string) error {
 		a.writeLog("服务器权限名单告警: %s", operatorAudit.Describe())
 	}
 
+	playerCacheAudit, playerCacheErr := AuditPlayerCache(cfg.ServerDir)
+	if playerCacheErr != nil {
+		return playerCacheErr
+	}
+	if playerCacheAudit.Blocking() {
+		recordSecurityEvent(auditCategoryPermission, auditSeverityCritical, auditActionBlocked,
+			playerCacheAudit.Describe(), playerCacheAudit.Path)
+		return fmt.Errorf("玩家缓存校验失败，拒绝启动: %s", playerCacheAudit.Describe())
+	}
+	if playerCacheAudit.HasWarnings() {
+		a.writeLog("玩家缓存告警: %s", playerCacheAudit.Describe())
+	}
+
 	pluginAudit, pluginErr := AuditServerPlugins(cfg.ServerDir)
 	if pluginErr != nil {
 		return pluginErr
@@ -614,6 +639,19 @@ func (a *App) StartServer(name string) error {
 		a.writeLog("插件告警: %s", pluginAudit.Describe())
 	}
 
+	modManifestAudit, modManifestErr := AuditServerModManifest(filepath.Join(cfg.ServerDir, "mods"))
+	if modManifestErr != nil {
+		return modManifestErr
+	}
+	if modManifestAudit.Blocking() {
+		recordSecurityEvent(auditCategoryJarScan, auditSeverityCritical, auditActionBlocked,
+			modManifestAudit.Describe(), modManifestAudit.Dir)
+		return fmt.Errorf("模组清单校验失败，拒绝启动: %s", modManifestAudit.Describe())
+	}
+	if modManifestAudit.HasWarnings() {
+		a.writeLog("模组清单告警: %s", modManifestAudit.Describe())
+	}
+
 	remoteAudit, remoteErr := AuditServerRemoteAdmin(cfg.ServerDir)
 	if remoteErr != nil {
 		return remoteErr
@@ -625,6 +663,19 @@ func (a *App) StartServer(name string) error {
 	}
 	if remoteAudit.HasWarnings() {
 		a.writeLog("服务器远程管理告警: %s", remoteAudit.Describe())
+	}
+
+	portAudit, portErr := AuditServerPortExposure(cfg.ServerDir)
+	if portErr != nil {
+		return portErr
+	}
+	if portAudit.Blocking() {
+		recordSecurityEvent(auditCategoryConfig, auditSeverityCritical, auditActionBlocked,
+			portAudit.Describe(), portAudit.Path)
+		return fmt.Errorf("端口暴露校验失败，拒绝启动: %s", portAudit.Describe())
+	}
+	if portAudit.HasWarnings() {
+		a.writeLog("端口暴露告警: %s", portAudit.Describe())
 	}
 
 	surfaceAudit, surfaceErr := AuditServerSurface(cfg.ServerDir)
