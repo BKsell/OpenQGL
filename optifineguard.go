@@ -14,6 +14,7 @@ package main
 
 import (
 	"errors"
+	"net/url"
 	"strings"
 )
 
@@ -47,24 +48,28 @@ var optifineHosts = []string{
 }
 
 // ValidateOptifineUrl 校验下载 URL：https + 白名单主机 + 无控制字符/无 query 注入。
-func ValidateOptifineUrl(url string, lim OptiFineLimits) (string, error) {
+func ValidateOptifineUrl(raw string, lim OptiFineLimits) (string, error) {
 	d := lim.withDefaults()
-	if len([]rune(url)) > d.MaxUrlRunes {
+	if len([]rune(raw)) > d.MaxUrlRunes {
 		return "", errors.New("optifine url too long")
 	}
-	if hasControlCharStr(url) {
+	if hasControlCharStr(raw) {
 		return "", errors.New("optifine url contains control characters")
 	}
-	if !strings.HasPrefix(url, "https://") {
+	u, err := url.Parse(raw)
+	if err != nil {
 		return "", errors.New("optifine url must be https")
 	}
-	rest := url[len("https://"):]
-	slash := strings.IndexByte(rest, '/')
-	host := rest
-	if slash >= 0 {
-		host = rest[:slash]
+	if u.Scheme != "https" {
+		return "", errors.New("optifine url must be https")
 	}
-	hl := strings.ToLower(host)
+	if u.User != nil {
+		return "", errors.New("optifine url must not contain userinfo")
+	}
+	hl := strings.ToLower(strings.TrimSuffix(u.Hostname(), "."))
+	if hl == "" {
+		return "", errors.New("optifine url host not allowed")
+	}
 	matched := false
 	for _, allowed := range optifineHosts {
 		if hl == allowed || strings.HasSuffix(hl, "."+allowed) {
@@ -75,7 +80,7 @@ func ValidateOptifineUrl(url string, lim OptiFineLimits) (string, error) {
 	if !matched {
 		return "", errors.New("optifine url host not allowed")
 	}
-	return url, nil
+	return raw, nil
 }
 
 // ValidateOptifineFileName 校验安装包文件名：单段、限长、无控制字符、
@@ -106,14 +111,15 @@ func ValidateOptifineFileName(name string, lim OptiFineLimits) (string, error) {
 }
 
 // ClassifyOptifineUrl 返回一个简短的分类描述，供日志/事件使用。
-func ClassifyOptifineUrl(url string) string {
-	if url == "" {
+func ClassifyOptifineUrl(raw string) string {
+	if raw == "" {
 		return "optifine-url-empty"
 	}
-	if !strings.HasPrefix(url, "https://") {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "https" {
 		return "optifine-url-non-https"
 	}
-	if !strings.Contains(url, "/") {
+	if u.Path == "" || u.Path == "/" {
 		return "optifine-url-no-path"
 	}
 	return "optifine-url-ok"
