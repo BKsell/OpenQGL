@@ -639,6 +639,46 @@ func (a *App) StartServer(name string) error {
 		a.writeLog("服务器 RCON/Query 告警: %s", rconAudit.Describe())
 	}
 
+	startupAudit := AuditServerStartupScripts(cfg.ServerDir)
+	if startupAudit.Blocking() {
+		recordSecurityEvent(auditCategoryLaunch, auditSeverityCritical, auditActionBlocked,
+			startupAudit.Describe(), cfg.ServerDir)
+		return fmt.Errorf("服务器启动脚本校验失败，拒绝启动: %s", startupAudit.Describe())
+	}
+	if startupAudit.HasWarnings() {
+		a.writeLog("服务器启动脚本告警: %s", startupAudit.Describe())
+	}
+
+	proxyAudit := AuditServerProxyTrust(cfg.ServerDir)
+	if proxyAudit.Blocking() {
+		recordSecurityEvent(auditCategoryConfig, auditSeverityCritical, auditActionBlocked,
+			proxyAudit.Describe(), cfg.ServerDir)
+		return fmt.Errorf("服务器代理信任配置校验失败，拒绝启动: %s", proxyAudit.Describe())
+	}
+	if proxyAudit.HasWarnings() {
+		a.writeLog("服务器代理信任告警: %s", proxyAudit.Describe())
+	}
+
+	fsPermAudit := AuditServerFSPermissions(cfg.ServerDir)
+	if fsPermAudit.Blocking() {
+		recordSecurityEvent(auditCategoryPermission, auditSeverityCritical, auditActionBlocked,
+			fsPermAudit.Describe(), cfg.ServerDir)
+		return fmt.Errorf("服务器目录权限校验失败，拒绝启动: %s", fsPermAudit.Describe())
+	}
+	if fsPermAudit.HasWarnings() {
+		a.writeLog("服务器目录权限告警: %s", fsPermAudit.Describe())
+	}
+
+	strayAudit := AuditServerStraySecrets(cfg.ServerDir)
+	if strayAudit.Blocking() {
+		recordSecurityEvent(auditCategoryPrivateWrite, auditSeverityCritical, auditActionBlocked,
+			strayAudit.Describe(), cfg.ServerDir)
+		return fmt.Errorf("服务器目录凭据校验失败，拒绝启动: %s", strayAudit.Describe())
+	}
+	if strayAudit.HasWarnings() {
+		a.writeLog("服务器目录凭据告警: %s", strayAudit.Describe())
+	}
+
 	accessAudit, accessErr := AuditServerAccess(cfg.ServerDir)
 	if accessErr != nil {
 		return accessErr
