@@ -38,6 +38,10 @@ const (
 	CDReasonDotOrSpace      = "cd-filename-dot-or-space-only"
 	CDReasonLeadingDotSpace = "cd-filename-leading-dot-space"
 	CDReasonNullByte        = "cd-filename-null-byte"
+	CDReasonAlternateStream = "cd-filename-alternate-data-stream"
+	CDReasonForbiddenChar   = "cd-filename-forbidden-character"
+	CDReasonInvisibleRune   = "cd-filename-invisible-rune"
+	CDReasonDuplicateParam  = "cd-duplicate-filename-parameter"
 )
 
 const cdMaxHeaderLen = 8192
@@ -67,6 +71,7 @@ func ParseContentDisposition(header string) (*CDResult, error) {
 		return nil, cdErr(CDReasonMalformed)
 	}
 	res := &CDResult{Disposition: strings.ToLower(disp), Params: map[string]string{}}
+	seenFilenameParam := map[string]bool{}
 
 	for {
 		p.skipOWS()
@@ -94,9 +99,18 @@ func ParseContentDisposition(header string) (*CDResult, error) {
 		}
 		lk := strings.ToLower(key)
 		switch lk {
-		case "filename":
-			res.Filename = val
-		case "filename*":
+		case "filename", "filename*":
+			// 同一个参数名重复出现属于参数混淆：后一个值会覆盖前一个，服务端与
+			// 中间缓存可能各取其一，最终落盘名与校验名可能不是同一个。filename
+			// 与 filename* 并存是 RFC 允许的降级写法，不算重复。
+			if seenFilenameParam[lk] {
+				return nil, cdErr(CDReasonDuplicateParam)
+			}
+			seenFilenameParam[lk] = true
+			if lk == "filename" {
+				res.Filename = val
+				continue
+			}
 			decoded, err := decodeFilenameStar(val)
 			if err != nil {
 				return nil, err
@@ -228,6 +242,12 @@ func (p *cdParser) readQuoted() (string, bool) {
 		if c == '\r' || c == '\n' {
 			return "", false
 		}
+		// RFC 7230 quoted-string 只允许 HTAB 这唯一一个控制字符（text 里不含
+		// CR/LF，也不允许 NUL 与其它 C0）；旧实现只拒 CR/LF，其余 0x00-0x1F
+		// 会原样进入文件名。
+		if (c < 0x20 && c != '\t') || c == 0x7F {
+			return "", false
+		}
 		b.WriteByte(c)
 	}
 	return "", false // 未闭合
@@ -318,6 +338,20 @@ func ValidateDownloadFilename(name string) error {
 	if len(name) >= 2 && name[1] == ':' {
 		return cdErr(CDReasonDriveOrUNC)
 	}
+	// 其余位置的冒号在 NTFS 上是备用数据流写法（"invoice.pdf:hidden.exe" 会写进
+	// invoice.pdf 的隐藏流，主文件名不变，用户在资源管理器里看不出异常）。
+	if strings.ContainsRune(name, ':') {
+		return cdErr(CDReasonAlternateStream)
+	}
+	// Win32 文件名非法字符：这些名字落盘会失败或被系统改名，导致"校验过的名字"
+	// 与"真正写下去的名字"不一致。
+	if strings.ContainsAny(name, `<>"|?*`) {
+		return cdErr(CDReasonForbiddenChar)
+	}
+	// 双向覆写 / 零宽 / 非字符码点：界面上不可见或可反转显示顺序，用来伪装扩展名。
+	if scanUnsafeRunes(name) != nameRejectNone {
+		return cdErr(CDReasonInvisibleRune)
+	}
 	trimmed := strings.TrimSpace(name)
 	if trimmed == "" || strings.Trim(trimmed, ".") == "" {
 		return cdErr(CDReasonDotOrSpace)
@@ -400,6 +434,14 @@ func DescribeCDReason(code string) string {
 		return "文件名带前导/尾随点或空白"
 	case CDReasonNullByte:
 		return "文件名包含 NUL 字节"
+	case CDReasonAlternateStream:
+		return "文件名包含 NTFS 备用数据流写法（冒号）"
+	case CDReasonForbiddenChar:
+		return "文件名包含 Windows 非法字符"
+	case CDReasonInvisibleRune:
+		return "文件名包含不可见/双向覆写字符"
+	case CDReasonDuplicateParam:
+		return "Content-Disposition 重复给出 filename 参数"
 	default:
 		return fmt.Sprintf("未知 Content-Disposition 原因码: %s", code)
 	}
