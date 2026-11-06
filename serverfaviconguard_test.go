@@ -60,3 +60,60 @@ func TestFaviconURL_PrivateHost(t *testing.T) {
 		t.Fatal("private must be rejected")
 	}
 }
+
+func TestFavicon_OversizedPayloadRejectedBeforeDecode(t *testing.T) {
+	huge := strings.Repeat("A", maxServerFaviconEncoded+8)
+	if _, err := ValidateServerFavicon("data:image/png;base64," + huge); err == nil {
+		t.Fatal("oversized payload must be rejected without decoding")
+	}
+}
+
+func TestFavicon_ReturnsCanonicalBase64(t *testing.T) {
+	png := "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+	out, err := ValidateServerFavicon("data:image/png;base64,  " + png + "  ")
+	if err != nil {
+		t.Fatalf("padded payload should decode: %v", err)
+	}
+	if out != png {
+		t.Fatalf("payload must be re-encoded canonically")
+	}
+}
+
+func TestFaviconURL_HostOnly(t *testing.T) {
+	if h, ok := faviconHostOnly("  CDN.Example.COM.  "); !ok || h != "cdn.example.com" {
+		t.Fatalf("normalisation failed: %q %v", h, ok)
+	}
+	for _, h := range []string{"", "localhost", "a", "1.2.3.4", "::1", "x.y.123", "a..b", "a b", "a%b.c", "a/b.c", "user@host.example"} {
+		if _, ok := faviconHostOnly(h); ok {
+			t.Fatalf("%q must be rejected", h)
+		}
+	}
+}
+
+func TestFaviconURL_StructuralChecks(t *testing.T) {
+	cases := []string{
+		"https://user:pass@cdn.example.com/i.png",
+		"https://cdn.example.com@evil.example/i.png",
+		"https:\\\\127.0.0.1\\i.png",
+		"https://localhost/i.png",
+		"https://localhost./i.png",
+		"https://192.168.0.1/i.png",
+		"https://[::1]/i.png",
+		"https://2130706433/i.png",
+		"https://intranet/i.png",
+	}
+	for _, u := range cases {
+		if err := ValidateServerFaviconURL(u); err == nil {
+			t.Fatalf("%s must be rejected", u)
+		}
+	}
+	for _, u := range []string{
+		"https://cdn.example.com/i.png",
+		"https://CDN.Example.COM./i.png",
+		"https://cdn.example.com:8443/i.png",
+	} {
+		if err := ValidateServerFaviconURL(u); err != nil {
+			t.Fatalf("%s should pass: %v", u, err)
+		}
+	}
+}
