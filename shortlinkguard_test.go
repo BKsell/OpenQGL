@@ -187,3 +187,131 @@ func TestPreflightDownloadURL(t *testing.T) {
 		t.Fatal("short link to private should be rejected at download entry")
 	}
 }
+
+// TestKnownShortenerHostTrailingDot 覆盖 FQDN 尾点写法：`bit.ly.` 与 `bit.ly`
+// 指向同一台主机，旧实现查表不命中，整条短链通道就被跳过。
+func TestKnownShortenerHostTrailingDot(t *testing.T) {
+	for _, h := range []string{"bit.ly.", "www.t.cn.", "TINYURL.COM..", " bit.ly. "} {
+		if !knownShortenerHost(h) {
+			t.Fatalf("knownShortenerHost(%q) = false, want true", h)
+		}
+	}
+	for _, h := range []string{".", "..", "bit.ly.evil.com.", "evilbit.ly."} {
+		if knownShortenerHost(h) {
+			t.Fatalf("knownShortenerHost(%q) = true, want false", h)
+		}
+	}
+}
+
+// TestIsShortLinkURLHostNormalisation 覆盖「短链 + 显式端口 / 尾点」的识别：
+// 旧实现拿 u.Host（含端口）去比较，`bit.ly:443` 与 `bit.ly.` 都不在表里。
+func TestIsShortLinkURLHostNormalisation(t *testing.T) {
+	yes := []string{
+		"https://bit.ly:443/abc",
+		"https://bit.ly./abc",
+		"https://www.t.cn:8443/x",
+		"  https://T.CN/a  ",
+	}
+	for _, raw := range yes {
+		if !isShortLinkURL(raw) {
+			t.Fatalf("isShortLinkURL(%q) = false, want true", raw)
+		}
+	}
+	no := []string{
+		"https://bit.ly.evil.com:443/x",
+		"https://bitly.com/x",
+		"https://example.com:443/bit.ly",
+		"",
+	}
+	for _, raw := range no {
+		if isShortLinkURL(raw) {
+			t.Fatalf("isShortLinkURL(%q) = true, want false", raw)
+		}
+	}
+}
+
+// TestNormalizeSchemeRejectsStructure 覆盖「结构签证」：空主机、空 authority 带
+// 端口、不透明形式、fragment、百分号编码主机都必须在预检阶段判死。
+func TestNormalizeSchemeRejectsStructure(t *testing.T) {
+	bad := []string{
+		"https://",
+		"https://:443/x",
+		"https:opaque",
+		"https://example.com/a.zip#frag",
+		"https://%31%32%37.0.0.1/a.zip",
+		"https://user@example.com/x",
+	}
+	for _, raw := range bad {
+		if _, err := normalizeScheme(raw); err == nil {
+			t.Fatalf("normalizeScheme(%q) accepted, want rejection", raw)
+		}
+	}
+	// 正常 https 仍然放行，且返回的是规范形式（无 fragment / 无 userinfo）。
+	out, err := normalizeScheme("  https://example.com/a.zip  ")
+	if err != nil {
+		t.Fatalf("plain https rejected: %v", err)
+	}
+	if out != "https://example.com/a.zip" {
+		t.Fatalf("normalizeScheme output = %q", out)
+	}
+}
+
+// TestPreflightDownloadURLRejectsHostless 是下载入口的回归：`https://` 与
+// `https://:443/x` 曾经原样放行，调用方会把它当合法地址继续落库。
+func TestPreflightDownloadURLRejectsHostless(t *testing.T) {
+	for _, raw := range []string{"https://", "https://:443/x", "https:///x"} {
+		if _, err := preflightDownloadURL(raw, nil); err == nil {
+			t.Fatalf("hostless URL %q accepted at download entry", raw)
+		}
+	}
+	// fragment 不参与真实请求，保留它只会让审计日志看到与请求不同的地址。
+	if _, err := preflightDownloadURL("https://example.com/a.zip#frag", nil); err == nil {
+		t.Fatal("fragment URL accepted at download entry")
+	}
+}
+
+// TestShortLinkPortBypassClosed 是本轮的核心回归：短链域加 `:443` 后缀后，
+// 旧实现不再把它识别为短链，于是整段私网判定被跳过。
+func TestShortLinkPortBypassClosed(t *testing.T) {
+	priv := fakeResolver(map[string][]net.IP{
+		"bit.ly": {ip("169.254.169.254")},
+		"t.cn":   {ip("127.0.0.1")},
+	})
+	for _, raw := range []string{
+		"https://bit.ly:443/abc",
+		"https://bit.ly./abc",
+		"https://bit.ly:8443/abc",
+	} {
+		if _, err := preflightDownloadURL(raw, priv); err == nil {
+			t.Fatalf("private short link %q accepted", raw)
+		}
+	}
+	// 短链域解析到公网时仍然放行（端口不影响目标判定）。
+	pub := fakeResolver(map[string][]net.IP{"bit.ly": {ip("8.8.8.8")}})
+	norm, err := preflightDownloadURL("https://bit.ly:443/abc", pub)
+	if err != nil {
+		t.Fatalf("public short link with port rejected: %v", err)
+	}
+	if norm != "https://bit.ly:443/abc" {
+		t.Fatalf("normalised short link = %q", norm)
+	}
+}
+
+// TestGuardRedirectTargetPort 覆盖「目标域名带端口」：旧实现把 `host:port`
+// 整串交给 resolver，解析必然失败，合法跳转被误杀。
+func TestGuardRedirectTargetPort(t *testing.T) {
+	resolve := fakeResolver(map[string][]net.IP{"public.example": {ip("8.8.8.8")}})
+	if v := guardRedirectTarget("https://public.example:443/final", resolve); v.Blocked {
+		t.Fatalf("public target with port blocked: %s", v.Reason)
+	}
+	if v := guardRedirectTarget("https://public.example/x", resolve); v.Blocked {
+		t.Fatalf("public target blocked: %s", v.Reason)
+	}
+	priv := fakeResolver(map[string][]net.IP{"public.example": {ip("10.0.0.1")}})
+	if v := guardRedirectTarget("https://public.example:443/final", priv); !v.Blocked {
+		t.Fatal("private target with port not blocked")
+	}
+	if v := guardRedirectTarget("https:///x", resolve); !v.Blocked {
+		t.Fatal("hostless target not blocked")
+	}
+}
