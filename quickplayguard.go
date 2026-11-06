@@ -19,6 +19,77 @@ type QuickPlayTarget struct {
 	Arg  string
 }
 
+func isSafeQuickPlayPort(port string) bool {
+	if len(port) == 0 || len(port) > 5 {
+		return false
+	}
+	if port[0] == '0' && len(port) > 1 {
+		return false
+	}
+	n := 0
+	for i := 0; i < len(port); i++ {
+		c := port[i]
+		if c < '0' || c > '9' {
+			return false
+		}
+		n = n*10 + int(c-'0')
+	}
+	return n >= 1 && n <= 65535
+}
+
+func isSafeQuickPlayHost(host string) bool {
+	if host == "" || len(host) > 253 {
+		return false
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return true
+	}
+	labelLen := 0
+	labelFirst := byte(0)
+	labelLast := byte(0)
+	for i := 0; i < len(host); i++ {
+		c := host[i]
+		if c == '.' {
+			if labelLen == 0 || labelLen > 63 || labelFirst == '-' || labelLast == '-' {
+				return false
+			}
+			labelLen = 0
+			labelFirst = 0
+			labelLast = 0
+			continue
+		}
+		ok := (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_'
+		if !ok {
+			return false
+		}
+		if labelLen == 0 {
+			labelFirst = c
+		}
+		labelLast = c
+		labelLen++
+	}
+	return labelLen > 0 && labelLen <= 63 && labelFirst != '-' && labelLast != '-'
+}
+
+func isSafeRealmsID(id string) bool {
+	if len(id) == 0 || len(id) > 64 {
+		return false
+	}
+	c := id[0]
+	firstOK := (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
+	if !firstOK {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		c := id[i]
+		ok := (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_'
+		if !ok {
+			return false
+		}
+	}
+	return true
+}
+
 // ValidateQuickPlayArg 按模式校验 Quick Play 参数。
 func ValidateQuickPlayArg(mode, arg string) error {
 	a := strings.TrimSpace(arg)
@@ -35,24 +106,23 @@ func ValidateQuickPlayArg(mode, arg string) error {
 			return fmt.Errorf("unsafe world name: %q", a)
 		}
 	case "multiplayer":
-		host, port, err := net.SplitHostPort(a)
-		if err != nil {
-			// 允许只给主机，默认 25565。
-			host = a
+		host, port, ok := splitQueueAuthority(a)
+		if !ok {
+			return fmt.Errorf("bad mp authority: %q", a)
+		}
+		// 允许只给主机，默认 25565。
+		if port == "" {
 			port = "25565"
 		}
 		host = strings.Trim(host, "[]")
-		if host == "" || strings.Contains(host, "..") {
+		if !isSafeQuickPlayHost(host) {
 			return fmt.Errorf("bad mp host: %q", a)
 		}
-		if port != "" {
-			p, err := net.LookupPort("tcp", port)
-			if err != nil || p < 1 || p > 65535 {
-				return fmt.Errorf("bad port: %q", port)
-			}
+		if !isSafeQuickPlayPort(port) {
+			return fmt.Errorf("bad port: %q", port)
 		}
 	case "realms":
-		if strings.ContainsAny(a, "/\\?&") {
+		if !isSafeRealmsID(a) {
 			return fmt.Errorf("bad realms id: %q", a)
 		}
 	default:
