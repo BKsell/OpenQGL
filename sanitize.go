@@ -205,6 +205,17 @@ func SanitizeFilename(name string) string {
 	for _, c := range []string{`<`, `>`, `:`, `"`, `/`, `\`, `|`, `?`, `*`} {
 		name = strings.ReplaceAll(name, c, "_")
 	}
+	// 不可见空白（U+00A0 不换行空格、U+2000–U+200A 各种窄空格、U+202F、
+	// U+205F、U+3000 表意空格、U+1680 欧甘空格）在资源管理器里和普通空格几乎
+	// 无法区分，下面的 TrimLeft/TrimRight(" .") 又不会处理它们：名字尾部留一个
+	// U+00A0 时磁盘上实际是 `x .jar`，审计日志里看到的却是 `x .jar`，可用来做
+	// 扩展名视觉混淆。统一换成下划线，保证审计名与实际落盘名逐字节一致。
+	name = strings.Map(func(r rune) rune {
+		if r == '\u00A0' || r == '\u1680' || r == '\u202F' || r == '\u205F' || r == '\u3000' || (r >= '\u2000' && r <= '\u200A') {
+			return '_'
+		}
+		return r
+	}, name)
 	// 去掉首尾空格和点（Windows 不允许文件名以点结尾）
 	name = strings.TrimLeft(name, " .")
 	name = strings.TrimRight(name, " .")
