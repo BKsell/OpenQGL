@@ -376,6 +376,9 @@ func (a *App) downloadServerJar(version string, targetDir string) error {
 
 	// 临时文件放在目标同目录，保证最后的 rename 是同卷原子操作；O_EXCL 避免跟随符号链接。
 	tempPath := jarPath + ".tmp"
+	if _, err := prepareTempPath(tempPath, time.Now(), staleTempMaxAge); err != nil {
+		return fmt.Errorf("清理上次下载的临时文件失败: %v", err)
+	}
 	file, err := os.OpenFile(tempPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC|os.O_EXCL, 0600)
 	if err != nil {
 		return fmt.Errorf("创建临时文件失败: %v", err)
@@ -523,6 +526,25 @@ func (a *App) StartServer(name string) error {
 	}
 
 	jarName := cfg.Version + "-server.jar"
+	jarPath := filepath.Join(cfg.ServerDir, jarName)
+	jarAudit, jarAuditErr := AuditServerJar(jarPath, func(path string) (bool, bool) {
+		meta, ok := loadCachedFileMeta(path)
+		if !ok {
+			return false, false
+		}
+		return a.verifyCachedFile(path, meta.SHA1), true
+	})
+	if jarAuditErr != nil {
+		return fmt.Errorf("服务端 JAR 完整性检查失败: %v", jarAuditErr)
+	}
+	if jarAudit.Blocking() {
+		recordSecurityEvent(auditCategoryLaunch, auditSeverityCritical, auditActionBlocked,
+			describeServerJarAudit(jarAudit), jarPath)
+		return fmt.Errorf("服务端 JAR 完整性校验失败，拒绝启动: %s", describeServerJarAudit(jarAudit))
+	}
+	if len(jarAudit.Warnings) > 0 {
+		a.writeLog("服务端 JAR 校验告警: %s", describeServerJarAudit(jarAudit))
+	}
 	maxMem := fmt.Sprintf("%dM", cfg.MaxMemory)
 	minMem := fmt.Sprintf("%dM", cfg.MinMemory)
 	// 专用服务端会把玩家名 / 聊天经 log4j 记入控制台，旧版服务端 jar 同样受 Log4Shell
