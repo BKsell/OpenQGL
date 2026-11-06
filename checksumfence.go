@@ -7,7 +7,10 @@ package main
 // 本地 UMFS；只有“本地自算、本地对账”的用途才用 UMFS。这里把这个选择集中成
 // 一个函数，避免各下载点各写一句 if 又漂移。
 
-import "strings"
+import (
+	"net"
+	"strings"
+)
 
 // ChecksumSource 标记校验值来自哪里。
 type ChecksumSource int
@@ -31,16 +34,68 @@ const (
 )
 
 // sourceFromHost 根据 host 判断校验值来源类别。
-func sourceFromHost(host string) ChecksumSource {
+func checksumHostOnly(host string) (string, bool) {
 	h := strings.ToLower(strings.TrimSpace(host))
+	if h == "" {
+		return "", false
+	}
+	if strings.ContainsAny(h, " \t\r\n\"'<>`") {
+		return "", false
+	}
+	if strings.ContainsAny(h, "@?#/\\") {
+		return "", false
+	}
+	if strings.HasPrefix(h, "[") {
+		end := strings.Index(h, "]")
+		if end < 0 {
+			return "", false
+		}
+		h = h[1:end]
+	} else if strings.Count(h, ":") == 1 {
+		i := strings.Index(h, ":")
+		h = h[:i]
+	}
+	h = strings.TrimRight(h, ".")
+	if h == "" || strings.Contains(h, "..") {
+		return "", false
+	}
+	return h, true
+}
+
+func checksumHostHasDomain(h, domain string) bool {
+	if h == domain {
+		return true
+	}
+	return strings.HasSuffix(h, "."+domain)
+}
+
+func isLoopbackChecksumHost(h string) bool {
+	if h == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(h)
+	if ip == nil {
+		return false
+	}
+	return ip.IsLoopback()
+}
+
+func sourceFromHost(host string) ChecksumSource {
+	h, ok := checksumHostOnly(host)
+	if !ok {
+		if strings.TrimSpace(host) == "" {
+			return ChecksumLocalUMFS
+		}
+		return ChecksumUnknown
+	}
 	switch {
-	case strings.Contains(h, "mojang.com") || strings.Contains(h, "minecraft.net"):
+	case checksumHostHasDomain(h, "mojang.com") || checksumHostHasDomain(h, "minecraft.net"):
 		return ChecksumMojang
-	case strings.Contains(h, "authlib"):
+	case h == "authlib" || checksumHostHasDomain(h, "authlib.org"):
 		return ChecksumAuthlib
-	case strings.Contains(h, "modrinth.com"):
+	case checksumHostHasDomain(h, "modrinth.com"):
 		return ChecksumModrinth
-	case h == "" || strings.HasPrefix(h, "127.") || strings.HasPrefix(h, "::1"):
+	case isLoopbackChecksumHost(h):
 		return ChecksumLocalUMFS
 	}
 	return ChecksumUnknown
