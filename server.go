@@ -819,6 +819,31 @@ func (a *App) StartServer(name string) error {
 		a.writeLog("服务器磁盘占用告警: %s", budgetAudit.Describe())
 	}
 
+	playerPrivacyAudit := AuditServerPlayerPrivacy(cfg.ServerDir)
+	if playerPrivacyAudit.Blocking() {
+		a.writeLog("security", "玩家身份数据审计阻断启动: "+playerPrivacyAudit.Describe())
+		return fmt.Errorf("玩家身份数据未通过安全校验: %s", playerPrivacyAudit.Describe())
+	}
+	forkConfigAudit := AuditServerForkConfig(cfg.ServerDir)
+	if forkConfigAudit.Blocking() {
+		a.writeLog("security", "分支配置审计阻断启动: "+forkConfigAudit.Describe())
+		return fmt.Errorf("分支配置未通过安全校验: %s", forkConfigAudit.Describe())
+	}
+	yamlHazardAudit := AuditServerYamlHazards(cfg.ServerDir)
+	if yamlHazardAudit.Blocking() {
+		a.writeLog("security", "YAML 构造审计阻断启动: "+yamlHazardAudit.Describe())
+		return fmt.Errorf("YAML 配置未通过安全校验: %s", yamlHazardAudit.Describe())
+	}
+	permissionConfigAudit := AuditServerPermissionConfig(cfg.ServerDir)
+	if permissionConfigAudit.Blocking() {
+		a.writeLog("security", "权限配置审计阻断启动: "+permissionConfigAudit.Describe())
+		return fmt.Errorf("权限配置未通过安全校验: %s", permissionConfigAudit.Describe())
+	}
+	startupSecretAudit := AuditServerStartupSecrets(cfg.ServerDir)
+	if startupSecretAudit.Blocking() {
+		a.writeLog("security", "启动脚本凭据审计阻断启动: "+startupSecretAudit.Describe())
+		return fmt.Errorf("启动脚本凭据未通过安全校验: %s", startupSecretAudit.Describe())
+	}
 	pluginConfigAudit := AuditServerPluginConfig(cfg.ServerDir)
 	if pluginConfigAudit.Blocking() {
 		recordSecurityEvent(auditCategoryPermission, auditSeverityCritical, auditActionBlocked,
