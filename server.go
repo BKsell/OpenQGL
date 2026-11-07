@@ -719,6 +719,56 @@ func (a *App) StartServer(name string) error {
 		a.writeLog("服务器数据包告警: %s", dataPackAudit.Describe())
 	}
 
+	accessControlAudit := AuditServerAccessControl(cfg.ServerDir)
+	if accessControlAudit.Blocking() {
+		recordSecurityEvent(auditCategoryPermission, auditSeverityCritical, auditActionBlocked,
+			accessControlAudit.Describe(), cfg.ServerDir)
+		return fmt.Errorf("服务器访问控制校验失败，拒绝启动: %s", accessControlAudit.Describe())
+	}
+	if accessControlAudit.HasWarnings() {
+		a.writeLog("服务器访问控制告警: %s", accessControlAudit.Describe())
+	}
+
+	pluginJarAudit := AuditServerPluginJars(cfg.ServerDir)
+	if pluginJarAudit.Blocking() {
+		recordSecurityEvent(auditCategoryJarScan, auditSeverityCritical, auditActionBlocked,
+			pluginJarAudit.Describe(), cfg.ServerDir)
+		return fmt.Errorf("服务器插件 jar 校验失败，拒绝启动: %s", pluginJarAudit.Describe())
+	}
+	if pluginJarAudit.HasWarnings() {
+		a.writeLog("服务器插件 jar 告警: %s", pluginJarAudit.Describe())
+	}
+
+	crashReportAudit := AuditCrashReports(cfg.ServerDir)
+	if crashReportAudit.Blocking() {
+		recordSecurityEvent(auditCategoryPrivateWrite, auditSeverityCritical, auditActionBlocked,
+			crashReportAudit.Describe(), cfg.ServerDir)
+		return fmt.Errorf("服务器崩溃报告校验失败，拒绝启动: %s", crashReportAudit.Describe())
+	}
+	if crashReportAudit.HasWarnings() {
+		a.writeLog("服务器崩溃报告告警: %s", crashReportAudit.Describe())
+	}
+
+	tlsAudit := AuditServerTLS(cfg.ServerDir)
+	if tlsAudit.Blocking() {
+		recordSecurityEvent(auditCategoryPrivateWrite, auditSeverityCritical, auditActionBlocked,
+			tlsAudit.Describe(), cfg.ServerDir)
+		return fmt.Errorf("服务器 TLS 校验失败，拒绝启动: %s", tlsAudit.Describe())
+	}
+	if tlsAudit.HasWarnings() {
+		a.writeLog("服务器 TLS 告警: %s", tlsAudit.Describe())
+	}
+
+	worldRegionAudit := AuditServerWorldRegions(cfg.ServerDir)
+	if worldRegionAudit.Blocking() {
+		recordSecurityEvent(auditCategoryPrivateWrite, auditSeverityCritical, auditActionBlocked,
+			worldRegionAudit.Describe(), cfg.ServerDir)
+		return fmt.Errorf("服务器世界存档校验失败，拒绝启动: %s", worldRegionAudit.Describe())
+	}
+	if worldRegionAudit.HasWarnings() {
+		a.writeLog("服务器世界存档告警: %s", worldRegionAudit.Describe())
+	}
+
 	pluginConfigAudit := AuditServerPluginConfig(cfg.ServerDir)
 	if pluginConfigAudit.Blocking() {
 		recordSecurityEvent(auditCategoryPermission, auditSeverityCritical, auditActionBlocked,
