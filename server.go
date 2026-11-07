@@ -679,6 +679,46 @@ func (a *App) StartServer(name string) error {
 		a.writeLog("服务器目录凭据告警: %s", strayAudit.Describe())
 	}
 
+	jmxAudit := AuditServerJMX(cfg.ServerDir)
+	if jmxAudit.Blocking() {
+		recordSecurityEvent(auditCategoryConfig, auditSeverityCritical, auditActionBlocked,
+			jmxAudit.Describe(), cfg.ServerDir)
+		return fmt.Errorf("服务器 JMX 暴露面校验失败，拒绝启动: %s", jmxAudit.Describe())
+	}
+	if jmxAudit.HasWarnings() {
+		a.writeLog("服务器 JMX 暴露面告警: %s", jmxAudit.Describe())
+	}
+
+	jarCpAudit := AuditServerJarClassPath(cfg.ServerDir)
+	if jarCpAudit.Blocking() {
+		recordSecurityEvent(auditCategoryJarScan, auditSeverityCritical, auditActionBlocked,
+			jarCpAudit.Describe(), cfg.ServerDir)
+		return fmt.Errorf("服务器 jar Class-Path 校验失败，拒绝启动: %s", jarCpAudit.Describe())
+	}
+	if jarCpAudit.HasWarnings() {
+		a.writeLog("服务器 jar Class-Path 告警: %s", jarCpAudit.Describe())
+	}
+
+	envAudit := AuditServerEnvironmentHijack(cfg.ServerDir)
+	if envAudit.Blocking() {
+		recordSecurityEvent(auditCategoryJVMEnv, auditSeverityCritical, auditActionBlocked,
+			envAudit.Describe(), cfg.ServerDir)
+		return fmt.Errorf("服务器环境变量校验失败，拒绝启动: %s", envAudit.Describe())
+	}
+	if envAudit.HasWarnings() {
+		a.writeLog("服务器环境变量告警: %s", envAudit.Describe())
+	}
+
+	pluginPermAudit := AuditServerPluginPermissions(cfg.ServerDir)
+	if pluginPermAudit.Blocking() {
+		recordSecurityEvent(auditCategoryPermission, auditSeverityCritical, auditActionBlocked,
+			pluginPermAudit.Describe(), cfg.ServerDir)
+		return fmt.Errorf("服务器插件权限校验失败，拒绝启动: %s", pluginPermAudit.Describe())
+	}
+	if pluginPermAudit.HasWarnings() {
+		a.writeLog("服务器插件权限告警: %s", pluginPermAudit.Describe())
+	}
+
 	accessAudit, accessErr := AuditServerAccess(cfg.ServerDir)
 	if accessErr != nil {
 		return accessErr
