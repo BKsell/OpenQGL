@@ -844,6 +844,36 @@ func (a *App) StartServer(name string) error {
 		a.writeLog("security", "启动脚本凭据审计阻断启动: "+startupSecretAudit.Describe())
 		return fmt.Errorf("启动脚本凭据未通过安全校验: %s", startupSecretAudit.Describe())
 	}
+	commandAliasAudit := AuditServerCommandAliases(cfg.ServerDir)
+	if commandAliasAudit.Blocking() {
+		a.writeLog("security", "命令别名审计阻断启动: "+commandAliasAudit.Describe())
+		return fmt.Errorf("命令别名未通过安全校验: %s", commandAliasAudit.Describe())
+	}
+	helpOverrideAudit := AuditServerHelpOverride(cfg.ServerDir)
+	if helpOverrideAudit.Blocking() {
+		a.writeLog("security", "帮助覆盖审计阻断启动: "+helpOverrideAudit.Describe())
+		return fmt.Errorf("帮助覆盖未通过安全校验: %s", helpOverrideAudit.Describe())
+	}
+	statsAudit := AuditServerStats(cfg.ServerDir)
+	if statsAudit.Blocking() {
+		a.writeLog("security", "玩家统计审计阻断启动: "+statsAudit.Describe())
+		return fmt.Errorf("玩家统计未通过安全校验: %s", statsAudit.Describe())
+	}
+	advancementAudit := AuditServerAdvancements(cfg.ServerDir)
+	if advancementAudit.Blocking() {
+		a.writeLog("security", "进度数据审计阻断启动: "+advancementAudit.Describe())
+		return fmt.Errorf("进度数据未通过安全校验: %s", advancementAudit.Describe())
+	}
+	dataPackFilterAudit := AuditServerDataPackFilters(cfg.ServerDir)
+	if dataPackFilterAudit.Blocking() {
+		a.writeLog("security", "数据包过滤审计阻断启动: "+dataPackFilterAudit.Describe())
+		return fmt.Errorf("数据包过滤未通过安全校验: %s", dataPackFilterAudit.Describe())
+	}
+	log4jAudit := AuditServerLog4jShell(cfg.ServerDir)
+	if log4jAudit.Blocking() {
+		a.writeLog("security", "log4j 组件审计阻断启动: "+log4jAudit.Describe())
+		return fmt.Errorf("log4j 组件未通过安全校验: %s", log4jAudit.Describe())
+	}
 	pluginConfigAudit := AuditServerPluginConfig(cfg.ServerDir)
 	if pluginConfigAudit.Blocking() {
 		recordSecurityEvent(auditCategoryPermission, auditSeverityCritical, auditActionBlocked,
