@@ -964,6 +964,36 @@ func (a *App) StartServer(name string) error {
 		a.writeLog("security", "实验开关审计阻断启动: "+unsafeToggleAudit.Describe())
 		return fmt.Errorf("服务器实验性开关未通过安全校验: %s", unsafeToggleAudit.Describe())
 	}
+	blueMapAudit := AuditServerBlueMap(cfg.ServerDir)
+	if blueMapAudit.Blocking() {
+		a.writeLog("security", "网页地图审计阻断启动: "+blueMapAudit.Describe())
+		return fmt.Errorf("网页地图审计未通过安全校验: %s", blueMapAudit.Describe())
+	}
+	userCacheAudit := AuditServerUserCache(cfg.ServerDir)
+	if userCacheAudit.Blocking() {
+		a.writeLog("security", "玩家缓存审计阻断启动: "+userCacheAudit.Describe())
+		return fmt.Errorf("玩家缓存审计未通过安全校验: %s", userCacheAudit.Describe())
+	}
+	bannedIPsAudit := AuditServerBannedIPs(cfg.ServerDir)
+	if bannedIPsAudit.Blocking() {
+		a.writeLog("security", "IP 封禁清单审计阻断启动: "+bannedIPsAudit.Describe())
+		return fmt.Errorf("IP 封禁清单审计未通过安全校验: %s", bannedIPsAudit.Describe())
+	}
+	bukkitConfigAudit := AuditServerBukkitConfig(cfg.ServerDir)
+	if bukkitConfigAudit.Blocking() {
+		a.writeLog("security", "Bukkit 配置审计阻断启动: "+bukkitConfigAudit.Describe())
+		return fmt.Errorf("Bukkit 配置审计未通过安全校验: %s", bukkitConfigAudit.Describe())
+	}
+	worldNameAudit := AuditServerWorldName(cfg.ServerDir)
+	if worldNameAudit.Blocking() {
+		a.writeLog("security", "世界目录审计阻断启动: "+worldNameAudit.Describe())
+		return fmt.Errorf("世界目录审计未通过安全校验: %s", worldNameAudit.Describe())
+	}
+	worldSeedAudit := AuditServerWorldSeed(cfg.ServerDir)
+	if worldSeedAudit.Blocking() {
+		a.writeLog("security", "世界种子审计阻断启动: "+worldSeedAudit.Describe())
+		return fmt.Errorf("世界种子审计未通过安全校验: %s", worldSeedAudit.Describe())
+	}
 	pluginConfigAudit := AuditServerPluginConfig(cfg.ServerDir)
 	if pluginConfigAudit.Blocking() {
 		recordSecurityEvent(auditCategoryPermission, auditSeverityCritical, auditActionBlocked,
