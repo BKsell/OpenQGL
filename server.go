@@ -769,6 +769,56 @@ func (a *App) StartServer(name string) error {
 		a.writeLog("服务器世界存档告警: %s", worldRegionAudit.Describe())
 	}
 
+	portBindingAudit := AuditServerPorts(cfg.ServerDir)
+	if portBindingAudit.Blocking() {
+		recordSecurityEvent(auditCategoryConfig, auditSeverityCritical, auditActionBlocked,
+			portBindingAudit.Describe(), cfg.ServerDir)
+		return fmt.Errorf("服务器端口绑定校验失败，拒绝启动: %s", portBindingAudit.Describe())
+	}
+	if portBindingAudit.HasWarnings() {
+		a.writeLog("服务器端口绑定告警: %s", portBindingAudit.Describe())
+	}
+
+	logConfigAudit := AuditServerLogConfig(cfg.ServerDir)
+	if logConfigAudit.Blocking() {
+		recordSecurityEvent(auditCategoryConfig, auditSeverityCritical, auditActionBlocked,
+			logConfigAudit.Describe(), cfg.ServerDir)
+		return fmt.Errorf("服务器日志配置校验失败，拒绝启动: %s", logConfigAudit.Describe())
+	}
+	if logConfigAudit.HasWarnings() {
+		a.writeLog("服务器日志配置告警: %s", logConfigAudit.Describe())
+	}
+
+	tickConfigAudit := AuditServerTickConfig(cfg.ServerDir)
+	if tickConfigAudit.Blocking() {
+		recordSecurityEvent(auditCategoryConfig, auditSeverityCritical, auditActionBlocked,
+			tickConfigAudit.Describe(), cfg.ServerDir)
+		return fmt.Errorf("服务器 tick 参数校验失败，拒绝启动: %s", tickConfigAudit.Describe())
+	}
+	if tickConfigAudit.HasWarnings() {
+		a.writeLog("服务器 tick 参数告警: %s", tickConfigAudit.Describe())
+	}
+
+	jvmAgentAudit := AuditServerJVMAgents(cfg.ServerDir)
+	if jvmAgentAudit.Blocking() {
+		recordSecurityEvent(auditCategoryJVMEnv, auditSeverityCritical, auditActionBlocked,
+			jvmAgentAudit.Describe(), cfg.ServerDir)
+		return fmt.Errorf("服务器 JVM agent 校验失败，拒绝启动: %s", jvmAgentAudit.Describe())
+	}
+	if jvmAgentAudit.HasWarnings() {
+		a.writeLog("服务器 JVM agent 告警: %s", jvmAgentAudit.Describe())
+	}
+
+	budgetAudit := AuditServerBudget(cfg.ServerDir)
+	if budgetAudit.Blocking() {
+		recordSecurityEvent(auditCategoryPrivateWrite, auditSeverityCritical, auditActionBlocked,
+			budgetAudit.Describe(), cfg.ServerDir)
+		return fmt.Errorf("服务器磁盘占用校验失败，拒绝启动: %s", budgetAudit.Describe())
+	}
+	if budgetAudit.HasWarnings() {
+		a.writeLog("服务器磁盘占用告警: %s", budgetAudit.Describe())
+	}
+
 	pluginConfigAudit := AuditServerPluginConfig(cfg.ServerDir)
 	if pluginConfigAudit.Blocking() {
 		recordSecurityEvent(auditCategoryPermission, auditSeverityCritical, auditActionBlocked,
