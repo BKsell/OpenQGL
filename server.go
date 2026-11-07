@@ -719,6 +719,46 @@ func (a *App) StartServer(name string) error {
 		a.writeLog("服务器数据包告警: %s", dataPackAudit.Describe())
 	}
 
+	pluginConfigAudit := AuditServerPluginConfig(cfg.ServerDir)
+	if pluginConfigAudit.Blocking() {
+		recordSecurityEvent(auditCategoryPermission, auditSeverityCritical, auditActionBlocked,
+			pluginConfigAudit.Describe(), cfg.ServerDir)
+		return fmt.Errorf("服务器插件配置校验失败，拒绝启动: %s", pluginConfigAudit.Describe())
+	}
+	if pluginConfigAudit.HasWarnings() {
+		a.writeLog("服务器插件配置告警: %s", pluginConfigAudit.Describe())
+	}
+
+	backupAudit := AuditServerBackups(cfg.ServerDir)
+	if backupAudit.Blocking() {
+		recordSecurityEvent(auditCategoryPrivateWrite, auditSeverityCritical, auditActionBlocked,
+			backupAudit.Describe(), cfg.ServerDir)
+		return fmt.Errorf("服务器备份校验失败，拒绝启动: %s", backupAudit.Describe())
+	}
+	if backupAudit.HasWarnings() {
+		a.writeLog("服务器备份告警: %s", backupAudit.Describe())
+	}
+
+	libraryAudit := AuditServerLibraries(cfg.ServerDir)
+	if libraryAudit.Blocking() {
+		recordSecurityEvent(auditCategoryJarScan, auditSeverityCritical, auditActionBlocked,
+			libraryAudit.Describe(), cfg.ServerDir)
+		return fmt.Errorf("服务器依赖库校验失败，拒绝启动: %s", libraryAudit.Describe())
+	}
+	if libraryAudit.HasWarnings() {
+		a.writeLog("服务器依赖库告警: %s", libraryAudit.Describe())
+	}
+
+	sessionLockAudit := AuditServerSessionLocks(cfg.ServerDir)
+	if sessionLockAudit.Blocking() {
+		recordSecurityEvent(auditCategoryReclaim, auditSeverityCritical, auditActionBlocked,
+			sessionLockAudit.Describe(), cfg.ServerDir)
+		return fmt.Errorf("服务器世界占用校验失败，拒绝启动: %s", sessionLockAudit.Describe())
+	}
+	if sessionLockAudit.HasWarnings() {
+		a.writeLog("服务器世界占用告警: %s", sessionLockAudit.Describe())
+	}
+
 	jmxAudit := AuditServerJMX(cfg.ServerDir)
 	if jmxAudit.Blocking() {
 		recordSecurityEvent(auditCategoryConfig, auditSeverityCritical, auditActionBlocked,
