@@ -934,6 +934,36 @@ func (a *App) StartServer(name string) error {
 		a.writeLog("security", "移动容量审计阻断启动: "+movementGuardAudit.Describe())
 		return fmt.Errorf("移动容量配置未通过安全校验: %s", movementGuardAudit.Describe())
 	}
+	proxyAuthAudit := AuditServerProxyAuth(cfg.ServerDir)
+	if proxyAuthAudit.Blocking() {
+		a.writeLog("security", "代理鉴权审计阻断启动: "+proxyAuthAudit.Describe())
+		return fmt.Errorf("服务器代理鉴权配置未通过安全校验: %s", proxyAuthAudit.Describe())
+	}
+	antiXrayAudit := AuditServerAntiXray(cfg.ServerDir)
+	if antiXrayAudit.Blocking() {
+		a.writeLog("security", "反矿透审计阻断启动: "+antiXrayAudit.Describe())
+		return fmt.Errorf("服务器反矿透配置未通过安全校验: %s", antiXrayAudit.Describe())
+	}
+	watchdogAudit := AuditServerWatchdog(cfg.ServerDir)
+	if watchdogAudit.Blocking() {
+		a.writeLog("security", "看门狗审计阻断启动: "+watchdogAudit.Describe())
+		return fmt.Errorf("服务器看门狗与重启配置未通过安全校验: %s", watchdogAudit.Describe())
+	}
+	pregenAudit := AuditServerPregen(cfg.ServerDir)
+	if pregenAudit.Blocking() {
+		a.writeLog("security", "区块预生成审计阻断启动: "+pregenAudit.Describe())
+		return fmt.Errorf("服务器区块预生成配置未通过安全校验: %s", pregenAudit.Describe())
+	}
+	dynmapAudit := AuditServerDynmap(cfg.ServerDir)
+	if dynmapAudit.Blocking() {
+		a.writeLog("security", "网页地图审计阻断启动: "+dynmapAudit.Describe())
+		return fmt.Errorf("服务器网页地图配置未通过安全校验: %s", dynmapAudit.Describe())
+	}
+	unsafeToggleAudit := AuditServerUnsafeToggles(cfg.ServerDir)
+	if unsafeToggleAudit.Blocking() {
+		a.writeLog("security", "实验开关审计阻断启动: "+unsafeToggleAudit.Describe())
+		return fmt.Errorf("服务器实验性开关未通过安全校验: %s", unsafeToggleAudit.Describe())
+	}
 	pluginConfigAudit := AuditServerPluginConfig(cfg.ServerDir)
 	if pluginConfigAudit.Blocking() {
 		recordSecurityEvent(auditCategoryPermission, auditSeverityCritical, auditActionBlocked,
