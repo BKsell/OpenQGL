@@ -904,6 +904,36 @@ func (a *App) StartServer(name string) error {
 		a.writeLog("security", "插件归档审计阻断启动: "+pluginJarEntryAudit.Describe())
 		return fmt.Errorf("插件归档未通过安全校验: %s", pluginJarEntryAudit.Describe())
 	}
+	commandBlockAudit := AuditServerCommandBlocks(cfg.ServerDir)
+	if commandBlockAudit.Blocking() {
+		a.writeLog("security", "命令方块审计阻断启动: "+commandBlockAudit.Describe())
+		return fmt.Errorf("命令方块配置未通过安全校验: %s", commandBlockAudit.Describe())
+	}
+	pluginUpdateAudit := AuditServerPluginUpdates(cfg.ServerDir)
+	if pluginUpdateAudit.Blocking() {
+		a.writeLog("security", "插件更新审计阻断启动: "+pluginUpdateAudit.Describe())
+		return fmt.Errorf("插件更新配置未通过安全校验: %s", pluginUpdateAudit.Describe())
+	}
+	pluginMetricsAudit := AuditServerPluginMetrics(cfg.ServerDir)
+	if pluginMetricsAudit.Blocking() {
+		a.writeLog("security", "插件遥测审计阻断启动: "+pluginMetricsAudit.Describe())
+		return fmt.Errorf("插件遥测配置未通过安全校验: %s", pluginMetricsAudit.Describe())
+	}
+	queryBindingAudit := AuditServerQueryBinding(cfg.ServerDir)
+	if queryBindingAudit.Blocking() {
+		a.writeLog("security", "查询绑定审计阻断启动: "+queryBindingAudit.Describe())
+		return fmt.Errorf("查询绑定配置未通过安全校验: %s", queryBindingAudit.Describe())
+	}
+	entityCrammingAudit := AuditServerEntityCramming(cfg.ServerDir)
+	if entityCrammingAudit.Blocking() {
+		a.writeLog("security", "实体堆积审计阻断启动: "+entityCrammingAudit.Describe())
+		return fmt.Errorf("实体堆积配置未通过安全校验: %s", entityCrammingAudit.Describe())
+	}
+	movementGuardAudit := AuditServerMovementGuards(cfg.ServerDir)
+	if movementGuardAudit.Blocking() {
+		a.writeLog("security", "移动容量审计阻断启动: "+movementGuardAudit.Describe())
+		return fmt.Errorf("移动容量配置未通过安全校验: %s", movementGuardAudit.Describe())
+	}
 	pluginConfigAudit := AuditServerPluginConfig(cfg.ServerDir)
 	if pluginConfigAudit.Blocking() {
 		recordSecurityEvent(auditCategoryPermission, auditSeverityCritical, auditActionBlocked,
