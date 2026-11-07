@@ -994,6 +994,46 @@ func (a *App) StartServer(name string) error {
 		a.writeLog("security", "世界种子审计阻断启动: "+worldSeedAudit.Describe())
 		return fmt.Errorf("世界种子审计未通过安全校验: %s", worldSeedAudit.Describe())
 	}
+	opsJsonAudit := AuditServerOpsJson(cfg.ServerDir)
+	if opsJsonAudit.Blocking() {
+		a.writeLog("security", "操作员清单审计阻断启动: "+opsJsonAudit.Describe())
+		return fmt.Errorf("服务器操作员清单未通过安全校验: %s", opsJsonAudit.Describe())
+	}
+	whitelistFileAudit := AuditServerWhitelistFile(cfg.ServerDir)
+	if whitelistFileAudit.Blocking() {
+		a.writeLog("security", "白名单文件审计阻断启动: "+whitelistFileAudit.Describe())
+		return fmt.Errorf("服务器白名单文件未通过安全校验: %s", whitelistFileAudit.Describe())
+	}
+	commandsYmlAudit := AuditServerCommandsYml(cfg.ServerDir)
+	if commandsYmlAudit.Blocking() {
+		a.writeLog("security", "命令别名审计阻断启动: "+commandsYmlAudit.Describe())
+		return fmt.Errorf("服务器命令别名配置未通过安全校验: %s", commandsYmlAudit.Describe())
+	}
+	helpYmlAudit := AuditServerHelpYml(cfg.ServerDir)
+	if helpYmlAudit.Blocking() {
+		a.writeLog("security", "帮助配置审计阻断启动: "+helpYmlAudit.Describe())
+		return fmt.Errorf("服务器帮助配置未通过安全校验: %s", helpYmlAudit.Describe())
+	}
+	spigotAudit := AuditServerSpigotConfig(cfg.ServerDir)
+	if spigotAudit.Blocking() {
+		a.writeLog("security", "Spigot 配置审计阻断启动: "+spigotAudit.Describe())
+		return fmt.Errorf("服务器 Spigot 配置未通过安全校验: %s", spigotAudit.Describe())
+	}
+	paperAudit := AuditServerPaperConfig(cfg.ServerDir)
+	if paperAudit.Blocking() {
+		a.writeLog("security", "Paper 全局配置审计阻断启动: "+paperAudit.Describe())
+		return fmt.Errorf("服务器 Paper 全局配置未通过安全校验: %s", paperAudit.Describe())
+	}
+	eulaAudit := AuditServerEula(cfg.ServerDir)
+	if eulaAudit.Blocking() {
+		a.writeLog("security", "EULA 协议审计阻断启动: "+eulaAudit.Describe())
+		return fmt.Errorf("服务器 EULA 协议未通过安全校验: %s", eulaAudit.Describe())
+	}
+	iconFileAudit := AuditServerIconFile(cfg.ServerDir)
+	if iconFileAudit.Blocking() {
+		a.writeLog("security", "服务器图标审计阻断启动: "+iconFileAudit.Describe())
+		return fmt.Errorf("服务器图标未通过安全校验: %s", iconFileAudit.Describe())
+	}
 	pluginConfigAudit := AuditServerPluginConfig(cfg.ServerDir)
 	if pluginConfigAudit.Blocking() {
 		recordSecurityEvent(auditCategoryPermission, auditSeverityCritical, auditActionBlocked,
