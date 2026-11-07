@@ -874,6 +874,36 @@ func (a *App) StartServer(name string) error {
 		a.writeLog("security", "log4j 组件审计阻断启动: "+log4jAudit.Describe())
 		return fmt.Errorf("log4j 组件未通过安全校验: %s", log4jAudit.Describe())
 	}
+	proxyForwardAudit := AuditServerProxyForwarding(cfg.ServerDir)
+	if proxyForwardAudit.Blocking() {
+		a.writeLog("security", "代理转发审计阻断启动: "+proxyForwardAudit.Describe())
+		return fmt.Errorf("代理转发配置未通过安全校验: %s", proxyForwardAudit.Describe())
+	}
+	connectionFloodAudit := AuditServerConnectionFlood(cfg.ServerDir)
+	if connectionFloodAudit.Blocking() {
+		a.writeLog("security", "连接洪泛审计阻断启动: "+connectionFloodAudit.Describe())
+		return fmt.Errorf("连接节流配置未通过安全校验: %s", connectionFloodAudit.Describe())
+	}
+	packetLimiterAudit := AuditServerPacketLimiter(cfg.ServerDir)
+	if packetLimiterAudit.Blocking() {
+		a.writeLog("security", "数据包限速审计阻断启动: "+packetLimiterAudit.Describe())
+		return fmt.Errorf("数据包限速配置未通过安全校验: %s", packetLimiterAudit.Describe())
+	}
+	propertiesBudgetAudit := AuditServerPropertiesBudget(cfg.ServerDir)
+	if propertiesBudgetAudit.Blocking() {
+		a.writeLog("security", "服务端属性预算审计阻断启动: "+propertiesBudgetAudit.Describe())
+		return fmt.Errorf("服务端属性未通过安全校验: %s", propertiesBudgetAudit.Describe())
+	}
+	modJarAudit := AuditModJarManifests(cfg.ServerDir)
+	if modJarAudit.Blocking() {
+		a.writeLog("security", "模组清单审计阻断启动: "+modJarAudit.Describe())
+		return fmt.Errorf("模组清单未通过安全校验: %s", modJarAudit.Describe())
+	}
+	pluginJarEntryAudit := AuditPluginJarEntries(cfg.ServerDir)
+	if pluginJarEntryAudit.Blocking() {
+		a.writeLog("security", "插件归档审计阻断启动: "+pluginJarEntryAudit.Describe())
+		return fmt.Errorf("插件归档未通过安全校验: %s", pluginJarEntryAudit.Describe())
+	}
 	pluginConfigAudit := AuditServerPluginConfig(cfg.ServerDir)
 	if pluginConfigAudit.Blocking() {
 		recordSecurityEvent(auditCategoryPermission, auditSeverityCritical, auditActionBlocked,
