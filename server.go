@@ -679,6 +679,46 @@ func (a *App) StartServer(name string) error {
 		a.writeLog("服务器目录凭据告警: %s", strayAudit.Describe())
 	}
 
+	whitelistAudit := AuditServerWhitelist(cfg.ServerDir)
+	if whitelistAudit.Blocking() {
+		recordSecurityEvent(auditCategoryPermission, auditSeverityCritical, auditActionBlocked,
+			whitelistAudit.Describe(), cfg.ServerDir)
+		return fmt.Errorf("服务器白名单校验失败，拒绝启动: %s", whitelistAudit.Describe())
+	}
+	if whitelistAudit.HasWarnings() {
+		a.writeLog("服务器白名单告警: %s", whitelistAudit.Describe())
+	}
+
+	banAudit := AuditServerBanList(cfg.ServerDir)
+	if banAudit.Blocking() {
+		recordSecurityEvent(auditCategoryConfig, auditSeverityCritical, auditActionBlocked,
+			banAudit.Describe(), cfg.ServerDir)
+		return fmt.Errorf("服务器封禁名单校验失败，拒绝启动: %s", banAudit.Describe())
+	}
+	if banAudit.HasWarnings() {
+		a.writeLog("服务器封禁名单告警: %s", banAudit.Describe())
+	}
+
+	iconAudit := AuditServerIcon(cfg.ServerDir)
+	if iconAudit.Blocking() {
+		recordSecurityEvent(auditCategoryConfig, auditSeverityCritical, auditActionBlocked,
+			iconAudit.Describe(), cfg.ServerDir)
+		return fmt.Errorf("服务器图标校验失败，拒绝启动: %s", iconAudit.Describe())
+	}
+	if iconAudit.HasWarnings() {
+		a.writeLog("服务器图标告警: %s", iconAudit.Describe())
+	}
+
+	dataPackAudit := AuditServerDataPacks(cfg.ServerDir)
+	if dataPackAudit.Blocking() {
+		recordSecurityEvent(auditCategoryZip, auditSeverityCritical, auditActionBlocked,
+			dataPackAudit.Describe(), cfg.ServerDir)
+		return fmt.Errorf("服务器数据包校验失败，拒绝启动: %s", dataPackAudit.Describe())
+	}
+	if dataPackAudit.HasWarnings() {
+		a.writeLog("服务器数据包告警: %s", dataPackAudit.Describe())
+	}
+
 	jmxAudit := AuditServerJMX(cfg.ServerDir)
 	if jmxAudit.Blocking() {
 		recordSecurityEvent(auditCategoryConfig, auditSeverityCritical, auditActionBlocked,
